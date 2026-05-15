@@ -21,7 +21,7 @@ HasDiff().then((hasDiff) => {
 function loadCurrentDiff() {
     const loadingEl = document.getElementById('loading');
     const diffEl = document.getElementById('diff-content');
-    
+
     if (loadingEl) loadingEl.style.display = 'block';
     if (diffEl) diffEl.style.display = 'none';
 
@@ -41,20 +41,20 @@ function loadCurrentDiff() {
                 } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
                     className += ' diff-header';
                 }
-                
+
                 // Escape HTML to prevent injection
                 const escapedLine = line
                     .replace(/&/g, '&amp;')
                     .replace(/</g, '&lt;')
                     .replace(/>/g, '&gt;');
-                
+
                 return `<div class="${className}">${escapedLine || ' '}</div>`;
             });
-            
+
             diffEl.innerHTML = htmlLines.join('');
             diffEl.style.display = 'block';
         }
-        
+
         // Update button states and counter
         updateNavigationState();
     }).catch((err) => {
@@ -70,15 +70,15 @@ function updateNavigationState() {
         const counterEl = document.getElementById('diff-counter');
         const prevBtn = document.getElementById('prev-btn') as HTMLButtonElement;
         const nextBtn = document.getElementById('next-btn') as HTMLButtonElement;
-        
+
         if (counterEl) {
             counterEl.textContent = `Diff ${currentIndex + 1} of ${totalDiffs}`;
         }
-        
+
         if (prevBtn) {
             prevBtn.disabled = currentIndex === 0;
         }
-        
+
         if (nextBtn) {
             nextBtn.disabled = currentIndex === totalDiffs - 1;
         }
@@ -106,7 +106,7 @@ function displayDiffViewer() {
     const prevBtn = document.getElementById('prev-btn');
     const nextBtn = document.getElementById('next-btn');
     const closeBtn = document.getElementById('close-btn');
-    
+
     if (prevBtn) {
         prevBtn.addEventListener('click', () => {
             PreviousDiff().then(() => {
@@ -114,7 +114,7 @@ function displayDiffViewer() {
             });
         });
     }
-    
+
     if (nextBtn) {
         nextBtn.addEventListener('click', () => {
             NextDiff().then(() => {
@@ -122,7 +122,7 @@ function displayDiffViewer() {
             });
         });
     }
-    
+
     if (closeBtn) {
         closeBtn.addEventListener('click', () => {
             CloseWindow();
