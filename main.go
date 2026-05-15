@@ -190,8 +190,7 @@ var enrollCmd = &cobra.Command{
 		// Normalise the stored path to ~/… form for portability.
 		tildeFile := filePath
 		if !strings.HasPrefix(filePath, "~/") {
-			home, _ := os.UserHomeDir()
-			if strings.HasPrefix(expanded, home) {
+			if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(expanded, home) {
 				tildeFile = "~" + expanded[len(home):]
 			}
 		}
@@ -208,7 +207,10 @@ var enrollCmd = &cobra.Command{
 			return fmt.Errorf("saving config: %w", err)
 		}
 		statePath := config.DefaultStatePath()
-		state, _ := config.LoadState(statePath)
+		state, err := config.LoadState(statePath)
+		if err != nil {
+			return fmt.Errorf("loading state: %w", err)
+		}
 		state.LastCommit = sha
 		if err := config.SaveState(statePath, state); err != nil {
 			return fmt.Errorf("saving state: %w", err)

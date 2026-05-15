@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // HashFile computes the SHA-256 hash of a file and returns "sha256:<hex>".
@@ -39,6 +40,9 @@ func repoPathForHome(homePath, repoDir, home string) (string, error) {
 	rel, err := filepath.Rel(home, homePath)
 	if err != nil {
 		return "", fmt.Errorf("computing relative path: %w", err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("path %s is outside the home directory", homePath)
 	}
 	return filepath.Join(repoDir, rel), nil
 }

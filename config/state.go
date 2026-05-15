@@ -36,18 +36,25 @@ func LoadState(path string) (*State, error) {
 	return &s, nil
 }
 
-// SaveState writes s to path, creating parent directories as needed.
+// SaveState writes s to path atomically (via a temp file + rename), creating
+// parent directories as needed.
 func SaveState(path string, s *State) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
 	if err := toml.NewEncoder(f).Encode(s); err != nil {
 		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
 }

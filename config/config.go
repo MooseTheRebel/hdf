@@ -50,18 +50,25 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Save writes cfg to path, creating parent directories as needed.
+// Save writes cfg to path atomically (via a temp file + rename), creating
+// parent directories as needed.
 func Save(path string, cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
 	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
 		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
 }

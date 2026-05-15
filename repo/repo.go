@@ -3,15 +3,50 @@ package repo
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5"
 	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gogitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 )
 
 var errStop = errors.New("stop")
+
+// authForURL returns an appropriate go-git auth method for rawURL, or nil for
+// public / unauthenticated access.
+//
+// SSH URLs ("git@…" or "ssh://…"): uses the running SSH agent.
+// HTTPS URLs: uses HDF_GIT_TOKEN environment variable if set.
+func authForURL(rawURL string) transport.AuthMethod {
+	if strings.HasPrefix(rawURL, "git@") || strings.HasPrefix(rawURL, "ssh://") {
+		if auth, err := gogitssh.NewSSHAgentAuth("git"); err == nil {
+			return auth
+		}
+	}
+	if token := os.Getenv("HDF_GIT_TOKEN"); token != "" {
+		return &githttp.BasicAuth{Username: "hdf", Password: token}
+	}
+	return nil
+}
+
+// remoteURL returns the fetch URL of the "origin" remote, or "" if unavailable.
+func (r *Repo) remoteURL() string {
+	cfg, err := r.r.Config()
+	if err != nil {
+		return ""
+	}
+	remote, ok := cfg.Remotes["origin"]
+	if !ok || len(remote.URLs) == 0 {
+		return ""
+	}
+	return remote.URLs[0]
+}
 
 // Repo wraps a go-git repository with hdf-specific operations.
 type Repo struct {
@@ -43,7 +78,10 @@ func Open(path string) (*Repo, error) {
 
 // Clone clones the repository at url into path.
 func Clone(url, path string) (*Repo, error) {
-	r, err := git.PlainClone(path, false, &git.CloneOptions{URL: url})
+	r, err := git.PlainClone(path, false, &git.CloneOptions{
+		URL:  url,
+		Auth: authForURL(url),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +182,7 @@ func (r *Repo) CommitCount() (int, error) {
 
 // Fetch fetches updates from the remote. Returns nil if already up to date.
 func (r *Repo) Fetch() error {
-	err := r.r.Fetch(&git.FetchOptions{})
+	err := r.r.Fetch(&git.FetchOptions{Auth: authForURL(r.remoteURL())})
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
 	}
@@ -154,6 +192,7 @@ func (r *Repo) Fetch() error {
 // Push pushes the named branch to the remote.
 func (r *Repo) Push(branch string) error {
 	return r.r.Push(&git.PushOptions{
+		Auth: authForURL(r.remoteURL()),
 		RefSpecs: []gitconfig.RefSpec{
 			gitconfig.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)),
 		},

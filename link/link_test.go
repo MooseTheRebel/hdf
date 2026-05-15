@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const fakeHome = "/home/testuser"
+
 func TestHashFile(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "test.txt")
@@ -40,7 +42,6 @@ func TestHashFile(t *testing.T) {
 }
 
 func TestRepoPathForHome(t *testing.T) {
-	fakeHome := "/home/testuser"
 	repoDir := t.TempDir()
 
 	cases := []struct {
@@ -64,8 +65,16 @@ func TestRepoPathForHome(t *testing.T) {
 	}
 }
 
+func TestRepoPathForOutsideHome(t *testing.T) {
+	repoDir := t.TempDir()
+
+	_, err := repoPathForHome("/etc/passwd", repoDir, fakeHome)
+	if err == nil {
+		t.Error("expected error for path outside home directory, got nil")
+	}
+}
+
 func TestRepoPathForNoCollision(t *testing.T) {
-	fakeHome := "/home/testuser"
 	repoDir := t.TempDir()
 
 	path1 := filepath.Join(fakeHome, ".config", "fish", "config.fish")
