@@ -11,7 +11,7 @@ func TestHashFile(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "test.txt")
 
-	if err := os.WriteFile(f, []byte("hello"), 0644); err != nil {
+	if err := os.WriteFile(f, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -30,7 +30,9 @@ func TestHashFile(t *testing.T) {
 	}
 
 	// Different content → different hash.
-	os.WriteFile(f, []byte("world"), 0644)
+	if err := os.WriteFile(f, []byte("world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	hash3, _ := HashFile(f)
 	if hash == hash3 {
 		t.Error("different content should produce different hash")
@@ -88,7 +90,7 @@ func TestEnroll(t *testing.T) {
 	repoDir := t.TempDir()
 
 	homeFile := filepath.Join(homeDir, ".testrc")
-	if err := os.WriteFile(homeFile, []byte("test content"), 0644); err != nil {
+	if err := os.WriteFile(homeFile, []byte("test content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,11 +137,11 @@ func TestEnrollMirrorsSubdirectory(t *testing.T) {
 	repoDir := t.TempDir()
 
 	subDir := filepath.Join(homeDir, ".config", "fish")
-	if err := os.MkdirAll(subDir, 0755); err != nil {
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	homeFile := filepath.Join(subDir, "config.fish")
-	if err := os.WriteFile(homeFile, []byte("set -x PATH"), 0644); err != nil {
+	if err := os.WriteFile(homeFile, []byte("set -x PATH"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +169,7 @@ func TestCopyFilePreservesMode(t *testing.T) {
 	dst := filepath.Join(dir, "id_rsa.copy")
 
 	// Write with SSH-key-like restricted permissions.
-	if err := os.WriteFile(src, []byte("secret"), 0600); err != nil {
+	if err := os.WriteFile(src, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -179,7 +181,7 @@ func TestCopyFilePreservesMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if info.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %04o, want 0600", info.Mode().Perm())
 	}
 }
@@ -189,7 +191,7 @@ func TestLink(t *testing.T) {
 	repoDir := t.TempDir()
 
 	repoFile := filepath.Join(repoDir, ".vimrc")
-	if err := os.WriteFile(repoFile, []byte("set nu"), 0644); err != nil {
+	if err := os.WriteFile(repoFile, []byte("set nu"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

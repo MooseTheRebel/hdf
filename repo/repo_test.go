@@ -18,7 +18,7 @@ func TestCommitHistory(t *testing.T) {
 	var shas []string
 
 	for i, letter := range letters {
-		if err := os.WriteFile(filepath.Join(dir, "testfile.txt"), []byte(letter), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "testfile.txt"), []byte(letter), 0o644); err != nil {
 			t.Fatalf("WriteFile commit %d: %v", i+1, err)
 		}
 		sha, err := r.CommitFile("testfile.txt", fmt.Sprintf("commit %d", i+1))
@@ -67,7 +67,7 @@ func TestBranchCreation(t *testing.T) {
 	}
 
 	// Need at least one commit before branching
-	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.CommitFile("init.txt", "initial commit"); err != nil {
@@ -95,7 +95,9 @@ func TestHasNewCommitsOnMain(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("a"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	sha1, _ := r.CommitFile("f.txt", "first")
 
 	// Tracked at sha1; no new commits yet
@@ -108,7 +110,9 @@ func TestHasNewCommitsOnMain(t *testing.T) {
 	}
 
 	// Add a second commit
-	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("b"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	_, _ = r.CommitFile("f.txt", "second")
 
 	// Now main is ahead of our tracked sha1
@@ -129,7 +133,9 @@ func TestHasUnpushedCommits(t *testing.T) {
 	}
 
 	// Initial commit on main
-	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("init"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("init"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := r.CommitFile("f.txt", "initial"); err != nil {
 		t.Fatalf("initial commit: %v", err)
 	}
@@ -150,7 +156,9 @@ func TestHasUnpushedCommits(t *testing.T) {
 	}
 
 	// Commit something on hostname branch
-	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("change"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("change"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := r.CommitFile("f.txt", "hostname change"); err != nil {
 		t.Fatalf("hostname commit: %v", err)
 	}

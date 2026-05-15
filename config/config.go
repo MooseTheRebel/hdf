@@ -10,17 +10,20 @@ import (
 
 const defaultConfigPath = "~/.config/hdf/config.toml"
 
+// Config holds the user-editable hdf configuration stored in config.toml.
 type Config struct {
 	GitURL   string        `toml:"git_url"`
 	RepoPath string        `toml:"repo_path"`
 	Files    []ManagedFile `toml:"files"`
 }
 
+// ManagedFile records a dot file under hdf management and its last-known hash.
 type ManagedFile struct {
 	Path string `toml:"path"`
 	Hash string `toml:"hash"`
 }
 
+// DefaultPath returns the default path to the hdf config file.
 func DefaultPath() string {
 	return ExpandPath(defaultConfigPath)
 }
@@ -38,6 +41,7 @@ func ExpandPath(path string) string {
 	return path
 }
 
+// Load reads and parses the config file at path.
 func Load(path string) (*Config, error) {
 	var cfg Config
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
@@ -46,14 +50,18 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Save writes cfg to path, creating parent directories as needed.
 func Save(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(cfg)
+	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }

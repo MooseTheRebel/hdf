@@ -4,6 +4,10 @@ import (
 	"bufio"
 	"embed"
 	"fmt"
+	"hdf/config"
+	"hdf/daemon"
+	"hdf/link"
+	"hdf/repo"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,11 +17,6 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-
-	"hdf/config"
-	"hdf/daemon"
-	"hdf/link"
-	"hdf/repo"
 )
 
 //go:embed all:frontend/dist
@@ -75,7 +74,7 @@ var initCmd = &cobra.Command{
 
 		isLocal := strings.HasPrefix(gitURL, "/") || strings.HasPrefix(gitURL, "~/") || strings.HasPrefix(gitURL, ".")
 		if isLocal {
-			if err := os.MkdirAll(expanded, 0755); err != nil {
+			if err := os.MkdirAll(expanded, 0o755); err != nil {
 				return fmt.Errorf("creating repo directory: %w", err)
 			}
 			var err error
@@ -96,7 +95,7 @@ var initCmd = &cobra.Command{
 				return err
 			}
 			repoPath = filepath.Join(home, ".local", "share", "hdf", "repo")
-			if err := os.MkdirAll(repoPath, 0755); err != nil {
+			if err := os.MkdirAll(repoPath, 0o755); err != nil {
 				return fmt.Errorf("creating local repo directory: %w", err)
 			}
 			r, err = repo.Clone(gitURL, repoPath)
@@ -110,10 +109,10 @@ var initCmd = &cobra.Command{
 		headSHA, err := r.HeadSHA()
 		if err != nil {
 			keepFile := filepath.Join(repoPath, ".hdf", ".gitkeep")
-			if err := os.MkdirAll(filepath.Dir(keepFile), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(keepFile), 0o755); err != nil {
 				return err
 			}
-			if err := os.WriteFile(keepFile, []byte(""), 0644); err != nil {
+			if err := os.WriteFile(keepFile, []byte(""), 0o644); err != nil {
 				return err
 			}
 			headSHA, err = r.CommitFile(".hdf/.gitkeep", "hdf: initial commit")
@@ -328,7 +327,6 @@ func launchGUI(diffURLs []string) {
 			app,
 		},
 	})
-
 	if err != nil {
 		log.Fatal(err)
 	}

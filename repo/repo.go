@@ -13,11 +13,13 @@ import (
 
 var errStop = errors.New("stop")
 
+// Repo wraps a go-git repository with hdf-specific operations.
 type Repo struct {
 	r    *git.Repository
 	path string
 }
 
+// Init creates a new git repository at path with "main" as the default branch.
 func Init(path string) (*Repo, error) {
 	r, err := git.PlainInitWithOptions(path, &git.PlainInitOptions{
 		InitOptions: git.InitOptions{
@@ -30,6 +32,7 @@ func Init(path string) (*Repo, error) {
 	return &Repo{r: r, path: path}, nil
 }
 
+// Open opens an existing git repository at path.
 func Open(path string) (*Repo, error) {
 	r, err := git.PlainOpen(path)
 	if err != nil {
@@ -38,6 +41,7 @@ func Open(path string) (*Repo, error) {
 	return &Repo{r: r, path: path}, nil
 }
 
+// Clone clones the repository at url into path.
 func Clone(url, path string) (*Repo, error) {
 	r, err := git.PlainClone(path, false, &git.CloneOptions{URL: url})
 	if err != nil {
@@ -46,10 +50,12 @@ func Clone(url, path string) (*Repo, error) {
 	return &Repo{r: r, path: path}, nil
 }
 
+// Path returns the local filesystem path of the repository.
 func (r *Repo) Path() string {
 	return r.path
 }
 
+// CreateAndCheckoutBranch creates a new branch and checks it out.
 func (r *Repo) CreateAndCheckoutBranch(name string) error {
 	w, err := r.r.Worktree()
 	if err != nil {
@@ -61,6 +67,7 @@ func (r *Repo) CreateAndCheckoutBranch(name string) error {
 	})
 }
 
+// CurrentBranch returns the short name of the currently checked-out branch.
 func (r *Repo) CurrentBranch() (string, error) {
 	head, err := r.r.Head()
 	if err != nil {
@@ -106,6 +113,7 @@ func gitAuthor() *object.Signature {
 	}
 }
 
+// HeadSHA returns the SHA of the current HEAD commit.
 func (r *Repo) HeadSHA() (string, error) {
 	head, err := r.r.Head()
 	if err != nil {
@@ -114,6 +122,7 @@ func (r *Repo) HeadSHA() (string, error) {
 	return head.Hash().String(), nil
 }
 
+// CommitCount returns the total number of commits reachable from HEAD.
 func (r *Repo) CommitCount() (int, error) {
 	head, err := r.r.Head()
 	if err != nil {
@@ -133,6 +142,7 @@ func (r *Repo) CommitCount() (int, error) {
 	return count, nil
 }
 
+// Fetch fetches updates from the remote. Returns nil if already up to date.
 func (r *Repo) Fetch() error {
 	err := r.r.Fetch(&git.FetchOptions{})
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -141,6 +151,7 @@ func (r *Repo) Fetch() error {
 	return err
 }
 
+// Push pushes the named branch to the remote.
 func (r *Repo) Push(branch string) error {
 	return r.r.Push(&git.PushOptions{
 		RefSpecs: []gitconfig.RefSpec{

@@ -2,17 +2,17 @@ package daemon
 
 import (
 	"fmt"
-	"os"
-	"time"
-
 	"hdf/config"
 	"hdf/link"
 	"hdf/notify"
 	"hdf/repo"
+	"os"
+	"time"
 )
 
 const syncInterval = 30 * time.Minute
 
+// Run starts the hdf sync daemon, which syncs on a fixed interval indefinitely.
 func Run(cfgPath string) error {
 	fmt.Fprintf(os.Stderr, "hdf daemon started (sync every %s)\n", syncInterval)
 	statePath := config.DefaultStatePath()
