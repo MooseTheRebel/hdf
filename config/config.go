@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -12,11 +11,9 @@ import (
 const defaultConfigPath = "~/.config/hdf/config.toml"
 
 type Config struct {
-	GitURL     string        `toml:"git_url"`
-	RepoPath   string        `toml:"repo_path"`
-	LastSync   time.Time     `toml:"last_sync"`
-	LastCommit string        `toml:"last_commit"`
-	Files      []ManagedFile `toml:"files"`
+	GitURL   string        `toml:"git_url"`
+	RepoPath string        `toml:"repo_path"`
+	Files    []ManagedFile `toml:"files"`
 }
 
 type ManagedFile struct {
@@ -29,9 +26,13 @@ func DefaultPath() string {
 }
 
 // ExpandPath replaces a leading ~ with the user's home directory.
+// Returns path unchanged if the home directory cannot be determined.
 func ExpandPath(path string) string {
 	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
 		return filepath.Join(home, path[2:])
 	}
 	return path

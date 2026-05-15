@@ -58,7 +58,10 @@ var initCmd = &cobra.Command{
 		reader := bufio.NewReader(os.Stdin)
 
 		fmt.Print("Enter git URL or local path for your dot file repository: ")
-		gitURL, _ := reader.ReadString('\n')
+		gitURL, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("reading input: %w", err)
+		}
 		gitURL = strings.TrimSpace(gitURL)
 		if gitURL == "" {
 			return fmt.Errorf("git URL cannot be empty")
@@ -127,12 +130,15 @@ var initCmd = &cobra.Command{
 		}
 
 		cfg := &config.Config{
-			GitURL:     gitURL,
-			RepoPath:   repoPath,
-			LastCommit: headSHA,
+			GitURL:   gitURL,
+			RepoPath: repoPath,
 		}
 		if err := config.Save(cfgPath, cfg); err != nil {
 			return fmt.Errorf("saving config: %w", err)
+		}
+		state := &config.State{LastCommit: headSHA}
+		if err := config.SaveState(config.DefaultStatePath(), state); err != nil {
+			return fmt.Errorf("saving state: %w", err)
 		}
 		fmt.Printf("Config saved to %s\n", cfgPath)
 		fmt.Println("\nhdf initialized. Use 'hdf enroll <path>' to start managing dot files.")
@@ -169,13 +175,20 @@ var enrollCmd = &cobra.Command{
 			return fmt.Errorf("opening repo: %w", err)
 		}
 
-		relName := filepath.Base(expanded)
+		repoFilePath, err := link.RepoPathFor(expanded, cfg.RepoPath)
+		if err != nil {
+			return fmt.Errorf("computing repo path: %w", err)
+		}
+		relName, err := filepath.Rel(cfg.RepoPath, repoFilePath)
+		if err != nil {
+			return fmt.Errorf("computing relative path: %w", err)
+		}
 		sha, err := r.CommitFile(relName, fmt.Sprintf("hdf: enroll %s", filePath))
 		if err != nil {
 			return fmt.Errorf("committing: %w", err)
 		}
 
-		// Update config with the new file entry.
+		// Normalise the stored path to ~/… form for portability.
 		tildeFile := filePath
 		if !strings.HasPrefix(filePath, "~/") {
 			home, _ := os.UserHomeDir()
@@ -192,9 +205,14 @@ var enrollCmd = &cobra.Command{
 		cfg.Files = append(cfg.Files, config.ManagedFile{Path: tildeFile, Hash: hash})
 
 	save:
-		cfg.LastCommit = sha
 		if err := config.Save(cfgPath, cfg); err != nil {
 			return fmt.Errorf("saving config: %w", err)
+		}
+		statePath := config.DefaultStatePath()
+		state, _ := config.LoadState(statePath)
+		state.LastCommit = sha
+		if err := config.SaveState(statePath, state); err != nil {
+			return fmt.Errorf("saving state: %w", err)
 		}
 		fmt.Printf("Enrolled %s (commit %s)\n", filePath, sha[:8])
 		return nil
@@ -212,7 +230,11 @@ var linkCmd = &cobra.Command{
 		}
 		for _, f := range cfg.Files {
 			expanded := config.ExpandPath(f.Path)
-			repoFile := filepath.Join(cfg.RepoPath, filepath.Base(expanded))
+			repoFile, err := link.RepoPathFor(expanded, cfg.RepoPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
+				continue
+			}
 			if err := link.Link(expanded, repoFile); err != nil {
 				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
 				continue
@@ -238,12 +260,13 @@ var statusCmd = &cobra.Command{
 			return fmt.Errorf("opening repo: %w", err)
 		}
 		branch, _ := r.CurrentBranch()
+		state, _ := config.LoadState(config.DefaultStatePath())
 
 		fmt.Printf("Git URL:     %s\n", cfg.GitURL)
 		fmt.Printf("Repo path:   %s\n", cfg.RepoPath)
 		fmt.Printf("Branch:      %s\n", branch)
-		fmt.Printf("Last commit: %s\n", cfg.LastCommit)
-		fmt.Printf("Last sync:   %s\n", cfg.LastSync.Format("2006-01-02 15:04:05"))
+		fmt.Printf("Last commit: %s\n", state.LastCommit)
+		fmt.Printf("Last sync:   %s\n", state.LastSync.Format("2006-01-02 15:04:05"))
 		fmt.Printf("\nManaged files (%d):\n", len(cfg.Files))
 
 		for _, f := range cfg.Files {

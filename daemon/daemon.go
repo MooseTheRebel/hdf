@@ -15,8 +15,9 @@ const syncInterval = 30 * time.Minute
 
 func Run(cfgPath string) error {
 	fmt.Fprintf(os.Stderr, "hdf daemon started (sync every %s)\n", syncInterval)
+	statePath := config.DefaultStatePath()
 	for {
-		if err := Sync(cfgPath); err != nil {
+		if err := Sync(cfgPath, statePath); err != nil {
 			fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
 		}
 		time.Sleep(syncInterval)
@@ -24,10 +25,15 @@ func Run(cfgPath string) error {
 }
 
 // Sync performs one sync cycle. Exported for testing.
-func Sync(cfgPath string) error {
+func Sync(cfgPath, statePath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		return fmt.Errorf("loading state: %w", err)
 	}
 
 	r, err := repo.Open(cfg.RepoPath)
@@ -41,8 +47,8 @@ func Sync(cfgPath string) error {
 	}
 
 	// 2. Check if main has advanced past our tracked commit.
-	if cfg.LastCommit != "" {
-		behind, err := r.HasNewCommitsOnMain(cfg.LastCommit)
+	if state.LastCommit != "" {
+		behind, err := r.HasNewCommitsOnMain(state.LastCommit)
 		if err == nil && behind {
 			_ = notify.Send("hdf", "New commits on main — merge into your branch")
 		}
@@ -68,7 +74,7 @@ func Sync(cfgPath string) error {
 		_ = notify.Send("hdf", "Unpushed changes — push your branch and merge into main")
 	}
 
-	// 5. Update last sync timestamp.
-	cfg.LastSync = time.Now()
-	return config.Save(cfgPath, cfg)
+	// 5. Persist only the lightweight state (not the full user config).
+	state.LastSync = time.Now()
+	return config.SaveState(statePath, state)
 }

@@ -80,16 +80,30 @@ func (r *Repo) CommitFile(filename, message string) (string, error) {
 		return "", err
 	}
 	hash, err := w.Commit(message, &git.CommitOptions{
-		Author: &object.Signature{
-			Name:  "hdf",
-			Email: "hdf@localhost",
-			When:  time.Now(),
-		},
+		Author: gitAuthor(),
 	})
 	if err != nil {
 		return "", err
 	}
 	return hash.String(), nil
+}
+
+// gitAuthor loads the user identity from the global git config.
+// Falls back to a generic "hdf" identity if the config is unavailable.
+func gitAuthor() *object.Signature {
+	cfg, err := gitconfig.LoadConfig(gitconfig.GlobalScope)
+	if err == nil && cfg.User.Name != "" {
+		return &object.Signature{
+			Name:  cfg.User.Name,
+			Email: cfg.User.Email,
+			When:  time.Now(),
+		}
+	}
+	return &object.Signature{
+		Name:  "hdf",
+		Email: "hdf@localhost",
+		When:  time.Now(),
+	}
 }
 
 func (r *Repo) HeadSHA() (string, error) {
