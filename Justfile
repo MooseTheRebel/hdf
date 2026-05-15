@@ -36,6 +36,26 @@ test:
 config:
     {{bin}} config
 
+# Initialize hdf (wizard: prompts for git URL)
+init: _check
+    {{bin}} init
+
+# Enroll a dot file under hdf management
+enroll file: _check
+    {{bin}} enroll "{{file}}"
+
+# Re-create all managed symlinks
+link: _check
+    {{bin}} link
+
+# Show managed files and sync state
+status: _check
+    {{bin}} status
+
+# Start the hdf sync daemon (foreground)
+daemon: _check
+    {{bin}} daemon
+
 # Demo commands
 demo: _check
     #!/usr/bin/env bash

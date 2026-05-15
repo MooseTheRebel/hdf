@@ -27,6 +27,42 @@ HDF_CLI="./build/bin/hdf.app/Contents/MacOS/hdf"
 HDF_CLI="./build/bin/hdf"
 ```
 
+### init
+Initialize hdf. Prompts for a git URL or local path, sets up the repository, and creates a per-machine branch named after your hostname.
+
+```bash
+"$HDF_CLI" init
+```
+
+### enroll
+Enroll a dot file. Copies it into the hdf repo, replaces the original with a symlink, and commits.
+
+```bash
+"$HDF_CLI" enroll ~/.bashrc
+"$HDF_CLI" enroll ~/.vimrc
+```
+
+### link
+Re-create all managed symlinks (safe to re-run after cloning on a new machine).
+
+```bash
+"$HDF_CLI" link
+```
+
+### status
+Show managed files, their sync state, and the current branch.
+
+```bash
+"$HDF_CLI" status
+```
+
+### daemon
+Start the background sync daemon. Runs every 30 minutes and sends OS notifications when commits, pushes, or merges are needed.
+
+```bash
+"$HDF_CLI" daemon
+```
+
 ### diff
 Opens a window to display a diff from a URL.
 
@@ -36,7 +72,7 @@ Opens a window to display a diff from a URL.
 ```
 
 ### config
-Manage application configuration (CLI only).
+Show the current hdf configuration file.
 
 ```bash
 "$HDF_CLI" config
