@@ -2,7 +2,7 @@
 
 ## About
 
-A hybrid Wails application that functions as both a CLI tool and a desktop application. The primary use case is 
+A hybrid Wails application that functions as both a CLI tool and a desktop application. The primary use case is
 managing a user's `$HOME` directory (dot files).
 
 
