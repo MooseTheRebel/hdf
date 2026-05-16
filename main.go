@@ -8,7 +8,7 @@ import (
 	"hdf/daemon"
 	"hdf/link"
 	"hdf/repo"
-	"log"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,95 +54,147 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize hdf and set up your dot file repository",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		reader := bufio.NewReader(os.Stdin)
+		return runInit(cmd.InOrStdin(), config.DefaultPath(), config.DefaultStatePath(), "")
+	},
+}
 
-		fmt.Print("Enter git URL or local path for your dot file repository: ")
-		gitURL, err := reader.ReadString('\n')
+// runInit runs the interactive init wizard.
+// cloneDir overrides the destination for remote clones (empty → ~/.local/share/hdf/repo).
+func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
+	reader := bufio.NewReader(stdin)
+
+	fmt.Println("How do you want to store your dot files?")
+	fmt.Println("  1) Local directory  (create or open a git repo on this machine)")
+	fmt.Println("  2) Remote repository  (clone from GitHub, GitLab, etc.)")
+	fmt.Print("\nChoice [1]: ")
+	choiceStr, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("reading input: %w", err)
+	}
+	choice := strings.TrimSpace(choiceStr)
+	if choice == "" {
+		choice = "1"
+		fmt.Println("  No selection made — defaulting to option 1: Local directory.")
+	}
+
+	var r *repo.Repo
+	var repoPath, gitURL string
+
+	switch choice {
+	case "1":
+		const defaultLocalPath = "~/.local/share/hdf/repo"
+		fmt.Printf("Local repo path [%s]: ", defaultLocalPath)
+		pathInput, err := reader.ReadString('\n')
 		if err != nil {
 			return fmt.Errorf("reading input: %w", err)
 		}
-		gitURL = strings.TrimSpace(gitURL)
-		if gitURL == "" {
-			return fmt.Errorf("git URL cannot be empty")
+		input := strings.TrimSpace(pathInput)
+		if input == "" {
+			input = defaultLocalPath
+		}
+		gitURL = input
+		expanded := config.ExpandPath(input)
+
+		// Relative paths are ambiguous: resolve to absolute and ask the user
+		// to confirm before creating anything on disk.
+		if !filepath.IsAbs(expanded) {
+			abs, err := filepath.Abs(expanded)
+			if err != nil {
+				return fmt.Errorf("resolving path: %w", err)
+			}
+			expanded = abs
+			fmt.Printf("  → Resolved to: %s\n", expanded)
+			fmt.Print("  Confirm? [y/N]: ")
+			confirmStr, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("reading confirmation: %w", err)
+			}
+			if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
+				return fmt.Errorf("aborted")
+			}
 		}
 
-		cfgPath := config.DefaultPath()
-		expanded := config.ExpandPath(gitURL)
-
-		var r *repo.Repo
-		var repoPath string
-
-		isLocal := strings.HasPrefix(gitURL, "/") || strings.HasPrefix(gitURL, "~/") || strings.HasPrefix(gitURL, ".")
-		if isLocal {
-			if err := os.MkdirAll(expanded, 0o755); err != nil {
-				return fmt.Errorf("creating repo directory: %w", err)
-			}
-			var err error
-			r, err = repo.Open(expanded)
+		repoPath = expanded
+		if err := os.MkdirAll(expanded, 0o755); err != nil {
+			return fmt.Errorf("creating repo directory: %w", err)
+		}
+		r, err = repo.Open(expanded)
+		if err != nil {
+			r, err = repo.Init(expanded)
 			if err != nil {
-				r, err = repo.Init(expanded)
-				if err != nil {
-					return fmt.Errorf("initializing repo: %w", err)
-				}
-				fmt.Printf("Initialized new git repository at %s\n", expanded)
-			} else {
-				fmt.Printf("Opened existing repository at %s\n", expanded)
+				return fmt.Errorf("initializing repo: %w", err)
 			}
-			repoPath = expanded
+			fmt.Printf("Initialized new git repository at %s\n", expanded)
 		} else {
+			fmt.Printf("Opened existing repository at %s\n", expanded)
+		}
+	case "2":
+		fmt.Print("Remote git URL: ")
+		urlInput, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("reading input: %w", err)
+		}
+		gitURL = strings.TrimSpace(urlInput)
+		if gitURL == "" {
+			return fmt.Errorf("remote git URL cannot be empty")
+		}
+		repoPath = cloneDir
+		if repoPath == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				return err
 			}
 			repoPath = filepath.Join(home, ".local", "share", "hdf", "repo")
-			if err := os.MkdirAll(repoPath, 0o755); err != nil {
-				return fmt.Errorf("creating local repo directory: %w", err)
-			}
-			r, err = repo.Clone(gitURL, repoPath)
-			if err != nil {
-				return fmt.Errorf("cloning repo: %w", err)
-			}
-			fmt.Printf("Cloned repository to %s\n", repoPath)
 		}
-
-		// Ensure there is at least one commit so branching works.
-		headSHA, err := r.HeadSHA()
+		if err := os.MkdirAll(repoPath, 0o755); err != nil {
+			return fmt.Errorf("creating local repo directory: %w", err)
+		}
+		r, err = repo.Clone(gitURL, repoPath)
 		if err != nil {
-			keepFile := filepath.Join(repoPath, ".hdf", ".gitkeep")
-			if err := os.MkdirAll(filepath.Dir(keepFile), 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(keepFile, []byte(""), 0o644); err != nil {
-				return err
-			}
-			headSHA, err = r.CommitFile(".hdf/.gitkeep", "hdf: initial commit")
-			if err != nil {
-				return fmt.Errorf("creating initial commit: %w", err)
-			}
+			return fmt.Errorf("cloning repo: %w", err)
 		}
+		fmt.Printf("Cloned repository to %s\n", repoPath)
+	default:
+		return fmt.Errorf("invalid choice %q: enter 1 or 2", choice)
+	}
 
-		hostname, _ := os.Hostname()
-		if err := r.CreateAndCheckoutBranch(hostname); err != nil {
-			fmt.Printf("Branch %q already exists, continuing.\n", hostname)
-		} else {
-			fmt.Printf("Created and checked out branch: %s\n", hostname)
+	// Ensure there is at least one commit so branching works.
+	headSHA, err := r.HeadSHA()
+	if err != nil {
+		keepFile := filepath.Join(repoPath, ".hdf", ".gitkeep")
+		if err := os.MkdirAll(filepath.Dir(keepFile), 0o755); err != nil {
+			return err
 		}
+		if err := os.WriteFile(keepFile, []byte(""), 0o644); err != nil {
+			return err
+		}
+		headSHA, err = r.CommitFile(".hdf/.gitkeep", "hdf: initial commit")
+		if err != nil {
+			return fmt.Errorf("creating initial commit: %w", err)
+		}
+	}
 
-		cfg := &config.Config{
-			GitURL:   gitURL,
-			RepoPath: repoPath,
-		}
-		if err := config.Save(cfgPath, cfg); err != nil {
-			return fmt.Errorf("saving config: %w", err)
-		}
-		state := &config.State{LastCommit: headSHA}
-		if err := config.SaveState(config.DefaultStatePath(), state); err != nil {
-			return fmt.Errorf("saving state: %w", err)
-		}
-		fmt.Printf("Config saved to %s\n", cfgPath)
-		fmt.Println("\nhdf initialized. Use 'hdf enroll <path>' to start managing dot files.")
-		return nil
-	},
+	hostname, _ := os.Hostname()
+	if err := r.CreateAndCheckoutBranch(hostname); err != nil {
+		fmt.Printf("Branch %q already exists, continuing.\n", hostname)
+	} else {
+		fmt.Printf("Created and checked out branch: %s\n", hostname)
+	}
+
+	cfg := &config.Config{
+		GitURL:   gitURL,
+		RepoPath: repoPath,
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		return fmt.Errorf("saving config: %w", err)
+	}
+	state := &config.State{LastCommit: headSHA}
+	if err := config.SaveState(statePath, state); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+	fmt.Printf("Config saved to %s\n", cfgPath)
+	fmt.Println("\nhdf initialized. Use 'hdf enroll <path>' to start managing dot files.")
+	return nil
 }
 
 var enrollCmd = &cobra.Command{
@@ -330,17 +382,24 @@ func launchGUI(diffURLs []string) {
 		},
 	})
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		log.Fatal(err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
 func init() {
+	// Silence Cobra's built-in error/usage printing on RunE failures so we
+	// control the format ourselves and avoid duplicate output.
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
+
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(initCmd)
