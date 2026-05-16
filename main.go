@@ -58,10 +58,40 @@ var initCmd = &cobra.Command{
 	},
 }
 
+// isRemoteURL reports whether s looks like a remote git URL.
+// "file://" is intentionally excluded — users never type it; hdf adds it.
+func isRemoteURL(s string) bool {
+	return strings.HasPrefix(s, "https://") ||
+		strings.HasPrefix(s, "http://") ||
+		strings.HasPrefix(s, "git@") ||
+		strings.HasPrefix(s, "ssh://") ||
+		strings.HasPrefix(s, "git://")
+}
+
 // runInit runs the interactive init wizard.
 // cloneDir overrides the destination for remote clones (empty → ~/.local/share/hdf/repo).
 func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	reader := bufio.NewReader(stdin)
+
+	// Guard: if a config already exists, show it and require explicit confirmation
+	// before overwriting — re-init without warning would silently replace the
+	// user's existing dotfile setup.
+	if existing, err := os.ReadFile(cfgPath); err == nil {
+		fmt.Printf("Warning: hdf is already initialized at %s\n\n", cfgPath)
+		fmt.Println("Existing configuration:")
+		fmt.Println("---")
+		fmt.Print(string(existing))
+		fmt.Println("---")
+		fmt.Print("\nOverwrite existing configuration? [y/N]: ")
+		confirmStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("reading input: %w", err)
+		}
+		if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
+			return fmt.Errorf("aborted: existing configuration was not overwritten")
+		}
+		fmt.Println()
+	}
 
 	fmt.Println("How do you want to store your dot files?")
 	fmt.Println("  1) Local directory  (create or open a git repo on this machine)")
@@ -82,8 +112,9 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 
 	switch choice {
 	case "1":
+		// Stage A — working copy (local_dotfiles_dir)
 		const defaultLocalPath = "~/.local/share/hdf/repo"
-		fmt.Printf("Local repo path [%s]: ", defaultLocalPath)
+		fmt.Printf("Local working copy path [%s]: ", defaultLocalPath)
 		pathInput, err := reader.ReadString('\n')
 		if err != nil {
 			return fmt.Errorf("reading input: %w", err)
@@ -92,7 +123,6 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 		if input == "" {
 			input = defaultLocalPath
 		}
-		gitURL = input
 		expanded := config.ExpandPath(input)
 
 		// Relative paths are ambiguous: resolve to absolute and ask the user
@@ -127,6 +157,55 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 			fmt.Printf("Initialized new git repository at %s\n", expanded)
 		} else {
 			fmt.Printf("Opened existing repository at %s\n", expanded)
+		}
+
+		// Stage B — push target (git_push_target)
+		const defaultBarePath = "~/.local/share/hdf/repo-bare"
+		fmt.Println()
+		fmt.Println("Where should changes be pushed?")
+		fmt.Println("  Enter a remote URL (e.g. git@github.com:you/dotfiles.git)")
+		fmt.Println("  or a local path for a bare repo (e.g. ~/dotfiles-bare)")
+		fmt.Printf("Push target [%s]: ", defaultBarePath)
+		pushInput, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("reading push target: %w", err)
+		}
+		pushRaw := strings.TrimSpace(pushInput)
+		if pushRaw == "" {
+			pushRaw = defaultBarePath
+		}
+
+		if isRemoteURL(pushRaw) {
+			gitURL = pushRaw
+		} else {
+			pushExpanded := config.ExpandPath(pushRaw)
+			if !filepath.IsAbs(pushExpanded) {
+				abs, err := filepath.Abs(pushExpanded)
+				if err != nil {
+					return fmt.Errorf("resolving push target path: %w", err)
+				}
+				pushExpanded = abs
+			}
+			if pushExpanded == repoPath {
+				return fmt.Errorf("push target must differ from working copy (%s)", repoPath)
+			}
+			if err := os.MkdirAll(pushExpanded, 0o755); err != nil {
+				return fmt.Errorf("creating bare repo directory: %w", err)
+			}
+			_, created, err := repo.InitOrOpenBare(pushExpanded)
+			if err != nil {
+				return fmt.Errorf("initializing bare repo: %w", err)
+			}
+			if created {
+				fmt.Printf("Initialized bare repository at %s\n", pushExpanded)
+			} else {
+				fmt.Printf("Opened existing bare repository at %s\n", pushExpanded)
+			}
+			gitURL = "file://" + pushExpanded
+		}
+
+		if err := r.AddRemote("origin", gitURL); err != nil {
+			return fmt.Errorf("wiring origin remote: %w", err)
 		}
 	case "2":
 		fmt.Print("Remote git URL: ")
@@ -182,8 +261,8 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	}
 
 	cfg := &config.Config{
-		GitURL:   gitURL,
-		RepoPath: repoPath,
+		GitPushTarget:    gitURL,
+		LocalDotfilesDir: repoPath,
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)
@@ -216,21 +295,21 @@ var enrollCmd = &cobra.Command{
 			return fmt.Errorf("file not found: %s", expanded)
 		}
 
-		hash, err := link.Enroll(expanded, cfg.RepoPath)
+		hash, err := link.Enroll(expanded, cfg.LocalDotfilesDir)
 		if err != nil {
 			return fmt.Errorf("enrolling %s: %w", filePath, err)
 		}
 
-		r, err := repo.Open(cfg.RepoPath)
+		r, err := repo.Open(cfg.LocalDotfilesDir)
 		if err != nil {
 			return fmt.Errorf("opening repo: %w", err)
 		}
 
-		repoFilePath, err := link.RepoPathFor(expanded, cfg.RepoPath)
+		repoFilePath, err := link.RepoPathFor(expanded, cfg.LocalDotfilesDir)
 		if err != nil {
 			return fmt.Errorf("computing repo path: %w", err)
 		}
-		relName, err := filepath.Rel(cfg.RepoPath, repoFilePath)
+		relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
 		if err != nil {
 			return fmt.Errorf("computing relative path: %w", err)
 		}
@@ -283,7 +362,7 @@ var linkCmd = &cobra.Command{
 		}
 		for _, f := range cfg.Files {
 			expanded := config.ExpandPath(f.Path)
-			repoFile, err := link.RepoPathFor(expanded, cfg.RepoPath)
+			repoFile, err := link.RepoPathFor(expanded, cfg.LocalDotfilesDir)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
 				continue
@@ -308,15 +387,15 @@ var statusCmd = &cobra.Command{
 			return fmt.Errorf("loading config (run 'hdf init' first): %w", err)
 		}
 
-		r, err := repo.Open(cfg.RepoPath)
+		r, err := repo.Open(cfg.LocalDotfilesDir)
 		if err != nil {
 			return fmt.Errorf("opening repo: %w", err)
 		}
 		branch, _ := r.CurrentBranch()
 		state, _ := config.LoadState(config.DefaultStatePath())
 
-		fmt.Printf("Git URL:     %s\n", cfg.GitURL)
-		fmt.Printf("Repo path:   %s\n", cfg.RepoPath)
+		fmt.Printf("Git push target:    %s\n", cfg.GitPushTarget)
+		fmt.Printf("Local dotfiles dir: %s\n", cfg.LocalDotfilesDir)
 		fmt.Printf("Branch:      %s\n", branch)
 		fmt.Printf("Last commit: %s\n", state.LastCommit)
 		fmt.Printf("Last sync:   %s\n", state.LastSync.Format("2006-01-02 15:04:05"))

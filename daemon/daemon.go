@@ -36,9 +36,9 @@ func Sync(cfgPath, statePath string) error {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
-	r, err := repo.Open(cfg.RepoPath)
+	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
-		return fmt.Errorf("opening repo at %s: %w", cfg.RepoPath, err)
+		return fmt.Errorf("opening repo at %s: %w", cfg.LocalDotfilesDir, err)
 	}
 
 	// 1. Fetch from remote (non-fatal if no remote or no network).

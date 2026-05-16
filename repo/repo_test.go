@@ -125,6 +125,52 @@ func TestHasNewCommitsOnMain(t *testing.T) {
 	}
 }
 
+func TestPushToFilePushTarget(t *testing.T) {
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatalf("Init workDir: %v", err)
+	}
+
+	_, _, err = InitOrOpenBare(bareDir)
+	if err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+
+	if err := r.AddRemote("origin", "file://"+bareDir); err != nil {
+		t.Fatalf("AddRemote: %v", err)
+	}
+
+	if got := r.RemoteURL(); got != "file://"+bareDir {
+		t.Errorf("RemoteURL = %q, want %q", got, "file://"+bareDir)
+	}
+
+	if err := os.WriteFile(filepath.Join(workDir, "dot.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("dot.txt", "add dot.txt"); err != nil {
+		t.Fatalf("CommitFile: %v", err)
+	}
+
+	if err := r.Push("main"); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	bare, err := Open(bareDir)
+	if err != nil {
+		t.Fatalf("Open bareDir: %v", err)
+	}
+	sha, err := bare.HeadSHA()
+	if err != nil {
+		t.Fatalf("HeadSHA on bare repo: %v", err)
+	}
+	if sha == "" {
+		t.Error("expected non-empty SHA in bare repo after push")
+	}
+}
+
 func TestHasUnpushedCommits(t *testing.T) {
 	dir := t.TempDir()
 	r, err := Init(dir)

@@ -37,11 +37,18 @@ func makeFixtureRepo(t *testing.T) string {
 	return srcDir
 }
 
+// localInitStdin builds stdin for a choice-1 init with absolute working copy
+// and push target paths (no relative-path confirmation prompt triggered).
+func localInitStdin(workDir, bareDir string) string {
+	return "1\n" + workDir + "\n" + bareDir + "\n"
+}
+
 func TestRunInitLocalNewRepo(t *testing.T) {
 	repoDir := t.TempDir()
+	bareDir := t.TempDir()
 	cfgPath, statePath := initPaths(t)
 
-	if err := runInit(strings.NewReader("1\n"+repoDir+"\n"), cfgPath, statePath, ""); err != nil {
+	if err := runInit(strings.NewReader(localInitStdin(repoDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
@@ -53,11 +60,11 @@ func TestRunInitLocalNewRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
-	if cfg.RepoPath != repoDir {
-		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, repoDir)
+	if cfg.LocalDotfilesDir != repoDir {
+		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, repoDir)
 	}
-	if cfg.GitURL != repoDir {
-		t.Errorf("GitURL = %q, want %q", cfg.GitURL, repoDir)
+	if cfg.GitPushTarget != "file://"+bareDir {
+		t.Errorf("GitPushTarget = %q, want %q (file:// URL for bare repo)", cfg.GitPushTarget, "file://"+bareDir)
 	}
 
 	state, err := config.LoadState(statePath)
@@ -71,16 +78,17 @@ func TestRunInitLocalNewRepo(t *testing.T) {
 
 func TestRunInitLocalExistingRepo(t *testing.T) {
 	repoDir := t.TempDir()
+	bareDir := t.TempDir()
 	cfgPath, statePath := initPaths(t)
 
-	// First init creates the repo.
-	if err := runInit(strings.NewReader("1\n"+repoDir+"\n"), cfgPath, statePath, ""); err != nil {
+	// First init creates the repos.
+	if err := runInit(strings.NewReader(localInitStdin(repoDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("first runInit: %v", err)
 	}
 
-	// Second init on the same path should open (not re-init) without error.
+	// Second init on the same paths should open (not re-init) without error.
 	cfg2Path, state2Path := initPaths(t)
-	if err := runInit(strings.NewReader("1\n"+repoDir+"\n"), cfg2Path, state2Path, ""); err != nil {
+	if err := runInit(strings.NewReader(localInitStdin(repoDir, bareDir)), cfg2Path, state2Path, ""); err != nil {
 		t.Fatalf("second runInit (existing repo): %v", err)
 	}
 
@@ -88,8 +96,8 @@ func TestRunInitLocalExistingRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
-	if cfg.RepoPath != repoDir {
-		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, repoDir)
+	if cfg.LocalDotfilesDir != repoDir {
+		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, repoDir)
 	}
 }
 
@@ -98,6 +106,7 @@ func TestRunInitLocalExistingRepo(t *testing.T) {
 // printed output, then proceeds to create a local repo at the given path.
 func TestRunInitEmptyChoiceDefaultsToLocal(t *testing.T) {
 	repoDir := t.TempDir()
+	bareDir := t.TempDir()
 	cfgPath, statePath := initPaths(t)
 
 	// Capture stdout so we can assert the "defaulting" message is printed.
@@ -105,7 +114,7 @@ func TestRunInitEmptyChoiceDefaultsToLocal(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	err := runInit(strings.NewReader("\n"+repoDir+"\n"), cfgPath, statePath, "")
+	err := runInit(strings.NewReader("\n"+repoDir+"\n"+bareDir+"\n"), cfgPath, statePath, "")
 
 	_ = w.Close()
 	os.Stdout = origStdout
@@ -126,8 +135,8 @@ func TestRunInitEmptyChoiceDefaultsToLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
-	if cfg.RepoPath != repoDir {
-		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, repoDir)
+	if cfg.LocalDotfilesDir != repoDir {
+		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, repoDir)
 	}
 }
 
@@ -137,8 +146,9 @@ func TestRunInitLocalRelativePathConfirmed(t *testing.T) {
 
 	cfgPath, statePath := initPaths(t)
 
-	// stdin: choice 1 → relative name → confirm with "y"
-	if err := runInit(strings.NewReader("1\ndotfiles\ny\n"), cfgPath, statePath, ""); err != nil {
+	// stdin: choice 1 → relative name → confirm with "y" → bare dir
+	bareDir := t.TempDir()
+	if err := runInit(strings.NewReader("1\ndotfiles\ny\n"+bareDir+"\n"), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 
@@ -151,8 +161,11 @@ func TestRunInitLocalRelativePathConfirmed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
-	if cfg.RepoPath != absRepoPath {
-		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, absRepoPath)
+	if cfg.LocalDotfilesDir != absRepoPath {
+		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, absRepoPath)
+	}
+	if cfg.GitPushTarget != "file://"+bareDir {
+		t.Errorf("GitPushTarget = %q, want %q (file:// URL for bare repo)", cfg.GitPushTarget, "file://"+bareDir)
 	}
 }
 
@@ -226,11 +239,11 @@ func TestRunInitRemoteClone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
-	if cfg.RepoPath != cloneDir {
-		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, cloneDir)
+	if cfg.LocalDotfilesDir != cloneDir {
+		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, cloneDir)
 	}
-	if cfg.GitURL != srcDir {
-		t.Errorf("GitURL = %q, want %q", cfg.GitURL, srcDir)
+	if cfg.GitPushTarget != srcDir {
+		t.Errorf("GitURL = %q, want %q", cfg.GitPushTarget, srcDir)
 	}
 
 	state, err := config.LoadState(statePath)
@@ -239,6 +252,136 @@ func TestRunInitRemoteClone(t *testing.T) {
 	}
 	if state.LastCommit == "" {
 		t.Error("LastCommit should be set after cloning")
+	}
+}
+
+func TestRunInitOverwriteRejected(t *testing.T) {
+	repoDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	// First init writes a config.
+	if err := runInit(strings.NewReader(localInitStdin(repoDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("first runInit: %v", err)
+	}
+	originalCfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading original config: %v", err)
+	}
+
+	// Second init: user sees the warning and types "n".
+	repoDir2 := t.TempDir()
+	bareDir2 := t.TempDir()
+	err = runInit(strings.NewReader("n\n"+localInitStdin(repoDir2, bareDir2)), cfgPath, statePath, "")
+	if err == nil {
+		t.Fatal("expected error when overwrite is rejected, got nil")
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Errorf("error = %q, want it to contain 'aborted'", err.Error())
+	}
+
+	// Original config must be unchanged.
+	unchangedCfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config after rejection: %v", err)
+	}
+	if unchangedCfg.LocalDotfilesDir != originalCfg.LocalDotfilesDir {
+		t.Errorf("LocalDotfilesDir changed after rejection: got %q, want %q",
+			unchangedCfg.LocalDotfilesDir, originalCfg.LocalDotfilesDir)
+	}
+}
+
+func TestRunInitOverwriteConfirmed(t *testing.T) {
+	repoDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	// First init.
+	if err := runInit(strings.NewReader(localInitStdin(repoDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("first runInit: %v", err)
+	}
+
+	// Second init: user sees the warning and types "y".
+	repoDir2 := t.TempDir()
+	bareDir2 := t.TempDir()
+	if err := runInit(strings.NewReader("y\n"+localInitStdin(repoDir2, bareDir2)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("second runInit after confirmed overwrite: %v", err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config after overwrite: %v", err)
+	}
+	if cfg.LocalDotfilesDir != repoDir2 {
+		t.Errorf("LocalDotfilesDir = %q, want %q", cfg.LocalDotfilesDir, repoDir2)
+	}
+}
+
+// TestRunInitLocalWithFilePushTarget verifies that choice 1 creates a distinct
+// non-bare working copy and bare push target, wires origin, and writes the
+// correct config fields.
+func TestRunInitLocalWithFilePushTarget(t *testing.T) {
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	// Working copy must be non-bare: has .git directory.
+	if _, err := os.Stat(filepath.Join(workDir, ".git")); err != nil {
+		t.Errorf("working copy missing .git dir: %v", err)
+	}
+	// Bare repo must not have a .git subdirectory; HEAD at root is the bare marker.
+	if _, err := os.Stat(filepath.Join(bareDir, ".git")); err == nil {
+		t.Error("bare repo should not have a .git subdirectory")
+	}
+	if _, err := os.Stat(filepath.Join(bareDir, "HEAD")); err != nil {
+		t.Errorf("bare repo missing HEAD file: %v", err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	if cfg.LocalDotfilesDir != workDir {
+		t.Errorf("LocalDotfilesDir = %q, want %q", cfg.LocalDotfilesDir, workDir)
+	}
+	if cfg.GitPushTarget != "file://"+bareDir {
+		t.Errorf("GitPushTarget = %q, want %q", cfg.GitPushTarget, "file://"+bareDir)
+	}
+
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("loading state: %v", err)
+	}
+	if state.LastCommit == "" {
+		t.Error("LastCommit should be set after init")
+	}
+
+	// Working copy must have origin wired to the bare repo.
+	r, err := repo.Open(workDir)
+	if err != nil {
+		t.Fatalf("opening working copy: %v", err)
+	}
+	if got := r.RemoteURL(); got != "file://"+bareDir {
+		t.Errorf("RemoteURL = %q, want %q", got, "file://"+bareDir)
+	}
+}
+
+// TestRunInitLocalSamePathRejected verifies that providing the same path for
+// the working copy and the push target returns an error.
+func TestRunInitLocalSamePathRejected(t *testing.T) {
+	repoDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	err := runInit(strings.NewReader(localInitStdin(repoDir, repoDir)), cfgPath, statePath, "")
+	if err == nil {
+		t.Fatal("expected error when push target == working copy, got nil")
+	}
+	if !strings.Contains(err.Error(), "must differ") {
+		t.Errorf("error = %q, want it to contain 'must differ'", err.Error())
 	}
 }
 
