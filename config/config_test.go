@@ -14,6 +14,7 @@ func TestRoundTrip(t *testing.T) {
 	want := &Config{
 		GitPushTarget:    "https://github.com/test/dotfiles.git",
 		LocalDotfilesDir: "/home/user/.local/share/hdf/repo",
+		Branch:           "my-macbook",
 		Files: []ManagedFile{
 			{Path: "~/.bashrc", Hash: "sha256:deadbeef"},
 			{Path: "~/.vimrc", Hash: "sha256:cafebabe"},
@@ -34,6 +35,9 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if got.LocalDotfilesDir != want.LocalDotfilesDir {
 		t.Errorf("LocalDotfilesDir: got %q, want %q", got.LocalDotfilesDir, want.LocalDotfilesDir)
+	}
+	if got.Branch != want.Branch {
+		t.Errorf("Branch: got %q, want %q", got.Branch, want.Branch)
 	}
 	if len(got.Files) != len(want.Files) {
 		t.Fatalf("Files len: got %d, want %d", len(got.Files), len(want.Files))

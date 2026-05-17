@@ -273,6 +273,7 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	cfg := &config.Config{
 		GitPushTarget:    gitURL,
 		LocalDotfilesDir: repoPath,
+		Branch:           hostname,
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)

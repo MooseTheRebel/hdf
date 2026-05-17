@@ -14,6 +14,7 @@ const defaultConfigPath = "~/.config/hdf/config.toml"
 type Config struct {
 	GitPushTarget    string        `toml:"git_push_target"`
 	LocalDotfilesDir string        `toml:"local_dotfiles_dir"`
+	Branch           string        `toml:"branch"`
 	Files            []ManagedFile `toml:"files"`
 }
 

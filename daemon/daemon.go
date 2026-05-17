@@ -14,6 +14,20 @@ const syncInterval = 30 * time.Minute
 
 // Run starts the hdf sync daemon, which syncs on a fixed interval indefinitely.
 func Run(cfgPath string) error {
+	// Pre-flight: catch permanent configuration errors before entering the loop
+	// so the daemon fails fast with a clear message rather than spamming warnings.
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
+	}
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("cannot open dotfiles repo at %s: %w", cfg.LocalDotfilesDir, err)
+	}
+	if r.RemoteURL() == "" {
+		return fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
+	}
+
 	fmt.Fprintf(os.Stderr, "hdf daemon started (sync every %s)\n", syncInterval)
 	statePath := config.DefaultStatePath()
 	for {
@@ -67,9 +81,8 @@ func Sync(cfgPath, statePath string) error {
 		}
 	}
 
-	// 4. Check if hostname branch has commits not in main.
-	hostname, _ := os.Hostname()
-	unpushed, err := r.HasUnpushedCommits(hostname, "main")
+	// 4. Check if the machine's branch has commits not in main.
+	unpushed, err := r.HasUnpushedCommits(cfg.Branch, "main")
 	if err == nil && unpushed {
 		_ = notify.Send("hdf", "Unpushed changes — push your branch and merge into main")
 	}

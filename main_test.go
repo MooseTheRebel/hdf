@@ -412,7 +412,7 @@ func TestBranchNameFallbackFormat(t *testing.T) {
 			t.Errorf("suffix len = %d, want 4", len(suffix))
 		}
 		for _, c := range suffix {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
 				t.Errorf("suffix %q contains non-ASCII-letter character %q", suffix, c)
 			}
 		}
