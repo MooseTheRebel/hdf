@@ -9,6 +9,7 @@ import (
 	"hdf/link"
 	"hdf/repo"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,22 @@ func isRemoteURL(s string) bool {
 		strings.HasPrefix(s, "git@") ||
 		strings.HasPrefix(s, "ssh://") ||
 		strings.HasPrefix(s, "git://")
+}
+
+const branchNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+// branchName returns the machine hostname, falling back to "host-<4 random
+// ASCII letters>" if the hostname is unavailable or empty.
+func branchName() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		b := make([]byte, 4)
+		for i := range b {
+			b[i] = branchNameChars[rand.Intn(len(branchNameChars))]
+		}
+		return "host-" + string(b)
+	}
+	return h
 }
 
 // runInit runs the interactive init wizard.
@@ -237,7 +254,7 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 		}
 	}
 
-	hostname, _ := os.Hostname()
+	hostname := branchName()
 	if err := r.CreateAndCheckoutBranch(hostname); err != nil {
 		fmt.Printf("Branch %q already exists, continuing.\n", hostname)
 	} else {

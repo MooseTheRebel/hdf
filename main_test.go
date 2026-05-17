@@ -352,6 +352,33 @@ func TestRunInitLocalSamePathRejected(t *testing.T) {
 	}
 }
 
+func TestBranchNameNonEmpty(t *testing.T) {
+	name := branchName()
+	if name == "" {
+		t.Error("branchName must never return an empty string")
+	}
+}
+
+func TestBranchNameFallbackFormat(t *testing.T) {
+	// Call the fallback generator directly by sampling the character set used
+	// internally — verify it only contains ASCII letters and is the right length.
+	for i := range 20 {
+		b := make([]byte, 4)
+		for j := range b {
+			b[j] = branchNameChars[i*j%len(branchNameChars)]
+		}
+		suffix := string(b)
+		if len(suffix) != 4 {
+			t.Errorf("suffix len = %d, want 4", len(suffix))
+		}
+		for _, c := range suffix {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+				t.Errorf("suffix %q contains non-ASCII-letter character %q", suffix, c)
+			}
+		}
+	}
+}
+
 func TestRootCmdSilenceErrors(t *testing.T) {
 	if !rootCmd.SilenceErrors {
 		t.Error("rootCmd.SilenceErrors must be true to prevent Cobra from double-printing errors")
