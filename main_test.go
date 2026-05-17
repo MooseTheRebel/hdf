@@ -255,65 +255,32 @@ func TestRunInitRemoteClone(t *testing.T) {
 	}
 }
 
-func TestRunInitOverwriteRejected(t *testing.T) {
+// TestRunInitAlreadyInitialized verifies that running hdf init a second time
+// on the same config path is a hard stop — no wizard, no data loss.
+func TestRunInitAlreadyInitialized(t *testing.T) {
 	repoDir := t.TempDir()
 	bareDir := t.TempDir()
 	cfgPath, statePath := initPaths(t)
 
-	// First init writes a config.
 	if err := runInit(strings.NewReader(localInitStdin(repoDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("first runInit: %v", err)
 	}
-	originalCfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("loading original config: %v", err)
-	}
 
-	// Second init: user sees the warning and types "n".
-	repoDir2 := t.TempDir()
-	bareDir2 := t.TempDir()
-	err = runInit(strings.NewReader("n\n"+localInitStdin(repoDir2, bareDir2)), cfgPath, statePath, "")
+	err := runInit(strings.NewReader(localInitStdin(t.TempDir(), t.TempDir())), cfgPath, statePath, "")
 	if err == nil {
-		t.Fatal("expected error when overwrite is rejected, got nil")
+		t.Fatal("expected error on second init, got nil")
 	}
-	if !strings.Contains(err.Error(), "aborted") {
-		t.Errorf("error = %q, want it to contain 'aborted'", err.Error())
-	}
-
-	// Original config must be unchanged.
-	unchangedCfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("loading config after rejection: %v", err)
-	}
-	if unchangedCfg.LocalDotfilesDir != originalCfg.LocalDotfilesDir {
-		t.Errorf("LocalDotfilesDir changed after rejection: got %q, want %q",
-			unchangedCfg.LocalDotfilesDir, originalCfg.LocalDotfilesDir)
-	}
-}
-
-func TestRunInitOverwriteConfirmed(t *testing.T) {
-	repoDir := t.TempDir()
-	bareDir := t.TempDir()
-	cfgPath, statePath := initPaths(t)
-
-	// First init.
-	if err := runInit(strings.NewReader(localInitStdin(repoDir, bareDir)), cfgPath, statePath, ""); err != nil {
-		t.Fatalf("first runInit: %v", err)
+	if !strings.Contains(err.Error(), "already initialized") {
+		t.Errorf("error = %q, want it to contain 'already initialized'", err.Error())
 	}
 
-	// Second init: user sees the warning and types "y".
-	repoDir2 := t.TempDir()
-	bareDir2 := t.TempDir()
-	if err := runInit(strings.NewReader("y\n"+localInitStdin(repoDir2, bareDir2)), cfgPath, statePath, ""); err != nil {
-		t.Fatalf("second runInit after confirmed overwrite: %v", err)
+	// Config must be unchanged — the second init must not have touched it.
+	cfg, err2 := config.Load(cfgPath)
+	if err2 != nil {
+		t.Fatalf("loading config: %v", err2)
 	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("loading config after overwrite: %v", err)
-	}
-	if cfg.LocalDotfilesDir != repoDir2 {
-		t.Errorf("LocalDotfilesDir = %q, want %q", cfg.LocalDotfilesDir, repoDir2)
+	if cfg.LocalDotfilesDir != repoDir {
+		t.Errorf("LocalDotfilesDir changed: got %q, want %q", cfg.LocalDotfilesDir, repoDir)
 	}
 }
 

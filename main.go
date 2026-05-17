@@ -73,24 +73,8 @@ func isRemoteURL(s string) bool {
 func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	reader := bufio.NewReader(stdin)
 
-	// Guard: if a config already exists, show it and require explicit confirmation
-	// before overwriting — re-init without warning would silently replace the
-	// user's existing dotfile setup.
-	if existing, err := os.ReadFile(cfgPath); err == nil {
-		fmt.Printf("Warning: hdf is already initialized at %s\n\n", cfgPath)
-		fmt.Println("Existing configuration:")
-		fmt.Println("---")
-		fmt.Print(string(existing))
-		fmt.Println("---")
-		fmt.Print("\nOverwrite existing configuration? [y/N]: ")
-		confirmStr, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("reading input: %w", err)
-		}
-		if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
-			return fmt.Errorf("aborted: existing configuration was not overwritten")
-		}
-		fmt.Println()
+	if _, err := os.Stat(cfgPath); err == nil {
+		return fmt.Errorf("hdf is already initialized (%s).\nEdit that file to change settings, or delete it to run hdf init again", cfgPath)
 	}
 
 	fmt.Println("How do you want to store your dot files?")
