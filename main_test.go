@@ -188,6 +188,46 @@ func TestRunInitLocalRelativePathRejected(t *testing.T) {
 	}
 }
 
+func TestRunInitPushTargetRelativePathConfirmed(t *testing.T) {
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	cfgPath, statePath := initPaths(t)
+
+	// stdin: choice 1 → abs working copy → relative bare name → confirm "y"
+	absWorkDir := t.TempDir()
+	if err := runInit(strings.NewReader("1\n"+absWorkDir+"\nbare\ny\n"), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	absBareDir := filepath.Join(workDir, "bare")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	if cfg.GitPushTarget != "file://"+absBareDir {
+		t.Errorf("GitPushTarget = %q, want %q", cfg.GitPushTarget, "file://"+absBareDir)
+	}
+}
+
+func TestRunInitPushTargetRelativePathRejected(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfgPath, statePath := initPaths(t)
+
+	// stdin: choice 1 → abs working copy → relative bare name → reject "n"
+	absWorkDir := t.TempDir()
+	err := runInit(strings.NewReader("1\n"+absWorkDir+"\nbare\nn\n"), cfgPath, statePath, "")
+	if err == nil {
+		t.Fatal("expected error when user rejects relative push target, got nil")
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Errorf("error = %q, want it to contain 'aborted'", err.Error())
+	}
+
+	if _, statErr := os.Stat(cfgPath); statErr == nil {
+		t.Error("config file should not exist after rejection")
+	}
+}
+
 func TestRunInitInvalidChoice(t *testing.T) {
 	cfgPath, statePath := initPaths(t)
 

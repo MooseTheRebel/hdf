@@ -186,6 +186,15 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 					return fmt.Errorf("resolving push target path: %w", err)
 				}
 				pushExpanded = abs
+				fmt.Printf("  → Resolved to: %s\n", pushExpanded)
+				fmt.Print("  Confirm? [y/N]: ")
+				confirmStr, err := reader.ReadString('\n')
+				if err != nil {
+					return fmt.Errorf("reading confirmation: %w", err)
+				}
+				if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
+					return fmt.Errorf("aborted")
+				}
 			}
 			if pushExpanded == repoPath {
 				return fmt.Errorf("push target must differ from working copy (%s)", repoPath)
