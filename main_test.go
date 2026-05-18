@@ -392,6 +392,27 @@ func TestRunInitLocalSamePathRejected(t *testing.T) {
 	}
 }
 
+func TestLocalPathToFileURL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"unix absolute", "/home/user/bare", "file:///home/user/bare"},
+		{"unix nested", "/tmp/hdf/repo-bare", "file:///tmp/hdf/repo-bare"},
+		{"windows drive letter", `C:\Users\user\bare`, "file:///C:/Users/user/bare"},
+		{"windows forward slashes", "C:/Users/user/bare", "file:///C:/Users/user/bare"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := localPathToFileURL(c.in)
+			if got != c.want {
+				t.Errorf("localPathToFileURL(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
 func TestBranchNameNonEmpty(t *testing.T) {
 	name := branchName()
 	if name == "" {

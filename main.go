@@ -59,6 +59,17 @@ var initCmd = &cobra.Command{
 	},
 }
 
+// localPathToFileURL converts an absolute local path to a git-compatible
+// file:// URL. On Windows, drive-letter paths (e.g. C:\foo) become
+// file:///C:/foo; on Unix /foo becomes file:///foo.
+func localPathToFileURL(absPath string) string {
+	p := strings.ReplaceAll(absPath, "\\", "/")
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return "file://" + p
+}
+
 // isRemoteURL reports whether s looks like a remote git URL.
 // "file://" is intentionally excluded — users never type it; hdf adds it.
 func isRemoteURL(s string) bool {
@@ -211,7 +222,7 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 			} else {
 				fmt.Printf("Opened existing bare repository at %s\n", pushExpanded)
 			}
-			gitURL = "file://" + pushExpanded
+			gitURL = localPathToFileURL(pushExpanded)
 		}
 
 		if err := r.AddRemote("origin", gitURL); err != nil {
