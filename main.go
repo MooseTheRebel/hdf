@@ -96,6 +96,148 @@ func branchName() string {
 	return h
 }
 
+// setupLocalRepo runs the two-stage local wizard (working copy + push target).
+// Returns the opened repo, resolved paths, and the git push URL.
+func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
+	// Stage A — working copy (local_dotfiles_dir)
+	const defaultLocalPath = "~/.local/share/hdf/repo"
+	fmt.Printf("Local working copy path [%s]: ", defaultLocalPath)
+	pathInput, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, "", "", fmt.Errorf("reading input: %w", err)
+	}
+	input := strings.TrimSpace(pathInput)
+	if input == "" {
+		input = defaultLocalPath
+	}
+	expanded := config.ExpandPath(input)
+
+	// Relative paths are ambiguous: resolve to absolute and ask the user
+	// to confirm before creating anything on disk.
+	if !filepath.IsAbs(expanded) {
+		abs, err := filepath.Abs(expanded)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("resolving path: %w", err)
+		}
+		expanded = abs
+		fmt.Printf("  → Resolved to: %s\n", expanded)
+		fmt.Print("  Confirm? [y/N]: ")
+		confirmStr, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, "", "", fmt.Errorf("reading confirmation: %w", err)
+		}
+		if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
+			return nil, "", "", fmt.Errorf("aborted")
+		}
+	}
+
+	repoPath := expanded
+	if err := os.MkdirAll(expanded, 0o755); err != nil {
+		return nil, "", "", fmt.Errorf("creating repo directory: %w", err)
+	}
+	r, err := repo.Open(expanded)
+	if err != nil {
+		r, err = repo.Init(expanded)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("initializing repo: %w", err)
+		}
+		fmt.Printf("Initialized new git repository at %s\n", expanded)
+	} else {
+		fmt.Printf("Opened existing repository at %s\n", expanded)
+	}
+
+	// Stage B — push target (git_push_target)
+	const defaultBarePath = "~/.local/share/hdf/repo-bare"
+	fmt.Println()
+	fmt.Println("Where should changes be pushed?")
+	fmt.Println("  Enter a remote URL (e.g. git@github.com:you/dotfiles.git)")
+	fmt.Println("  or a local path for a bare repo (e.g. ~/dotfiles-bare)")
+	fmt.Printf("Push target [%s]: ", defaultBarePath)
+	pushInput, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, "", "", fmt.Errorf("reading push target: %w", err)
+	}
+	pushRaw := strings.TrimSpace(pushInput)
+	if pushRaw == "" {
+		pushRaw = defaultBarePath
+	}
+
+	var gitURL string
+	if isRemoteURL(pushRaw) {
+		gitURL = pushRaw
+	} else {
+		pushExpanded := config.ExpandPath(pushRaw)
+		if !filepath.IsAbs(pushExpanded) {
+			abs, err := filepath.Abs(pushExpanded)
+			if err != nil {
+				return nil, "", "", fmt.Errorf("resolving push target path: %w", err)
+			}
+			pushExpanded = abs
+			fmt.Printf("  → Resolved to: %s\n", pushExpanded)
+			fmt.Print("  Confirm? [y/N]: ")
+			confirmStr, err := reader.ReadString('\n')
+			if err != nil {
+				return nil, "", "", fmt.Errorf("reading confirmation: %w", err)
+			}
+			if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
+				return nil, "", "", fmt.Errorf("aborted")
+			}
+		}
+		if pushExpanded == repoPath {
+			return nil, "", "", fmt.Errorf("push target must differ from working copy (%s)", repoPath)
+		}
+		if err := os.MkdirAll(pushExpanded, 0o755); err != nil {
+			return nil, "", "", fmt.Errorf("creating bare repo directory: %w", err)
+		}
+		_, created, err := repo.InitOrOpenBare(pushExpanded)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("initializing bare repo: %w", err)
+		}
+		if created {
+			fmt.Printf("Initialized bare repository at %s\n", pushExpanded)
+		} else {
+			fmt.Printf("Opened existing bare repository at %s\n", pushExpanded)
+		}
+		gitURL = localPathToFileURL(pushExpanded)
+	}
+
+	if err := r.AddRemote("origin", gitURL); err != nil {
+		return nil, "", "", fmt.Errorf("wiring origin remote: %w", err)
+	}
+	return r, repoPath, gitURL, nil
+}
+
+// setupRemoteRepo clones a remote repository into cloneDir (or the default
+// path when cloneDir is empty). Returns the cloned repo, local path, and URL.
+func setupRemoteRepo(reader *bufio.Reader, cloneDir string) (*repo.Repo, string, string, error) {
+	fmt.Print("Remote git URL: ")
+	urlInput, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, "", "", fmt.Errorf("reading input: %w", err)
+	}
+	gitURL := strings.TrimSpace(urlInput)
+	if gitURL == "" {
+		return nil, "", "", fmt.Errorf("remote git URL cannot be empty")
+	}
+	repoPath := cloneDir
+	if repoPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, "", "", err
+		}
+		repoPath = filepath.Join(home, ".local", "share", "hdf", "repo")
+	}
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		return nil, "", "", fmt.Errorf("creating local repo directory: %w", err)
+	}
+	r, err := repo.Clone(gitURL, repoPath)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("cloning repo: %w", err)
+	}
+	fmt.Printf("Cloned repository to %s\n", repoPath)
+	return r, repoPath, gitURL, nil
+}
+
 // runInit runs the interactive init wizard.
 // cloneDir overrides the destination for remote clones (empty → ~/.local/share/hdf/repo).
 func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
@@ -124,136 +266,17 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 
 	switch choice {
 	case "1":
-		// Stage A — working copy (local_dotfiles_dir)
-		const defaultLocalPath = "~/.local/share/hdf/repo"
-		fmt.Printf("Local working copy path [%s]: ", defaultLocalPath)
-		pathInput, err := reader.ReadString('\n')
+		var err error
+		r, repoPath, gitURL, err = setupLocalRepo(reader)
 		if err != nil {
-			return fmt.Errorf("reading input: %w", err)
-		}
-		input := strings.TrimSpace(pathInput)
-		if input == "" {
-			input = defaultLocalPath
-		}
-		expanded := config.ExpandPath(input)
-
-		// Relative paths are ambiguous: resolve to absolute and ask the user
-		// to confirm before creating anything on disk.
-		if !filepath.IsAbs(expanded) {
-			abs, err := filepath.Abs(expanded)
-			if err != nil {
-				return fmt.Errorf("resolving path: %w", err)
-			}
-			expanded = abs
-			fmt.Printf("  → Resolved to: %s\n", expanded)
-			fmt.Print("  Confirm? [y/N]: ")
-			confirmStr, err := reader.ReadString('\n')
-			if err != nil {
-				return fmt.Errorf("reading confirmation: %w", err)
-			}
-			if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
-				return fmt.Errorf("aborted")
-			}
-		}
-
-		repoPath = expanded
-		if err := os.MkdirAll(expanded, 0o755); err != nil {
-			return fmt.Errorf("creating repo directory: %w", err)
-		}
-		r, err = repo.Open(expanded)
-		if err != nil {
-			r, err = repo.Init(expanded)
-			if err != nil {
-				return fmt.Errorf("initializing repo: %w", err)
-			}
-			fmt.Printf("Initialized new git repository at %s\n", expanded)
-		} else {
-			fmt.Printf("Opened existing repository at %s\n", expanded)
-		}
-
-		// Stage B — push target (git_push_target)
-		const defaultBarePath = "~/.local/share/hdf/repo-bare"
-		fmt.Println()
-		fmt.Println("Where should changes be pushed?")
-		fmt.Println("  Enter a remote URL (e.g. git@github.com:you/dotfiles.git)")
-		fmt.Println("  or a local path for a bare repo (e.g. ~/dotfiles-bare)")
-		fmt.Printf("Push target [%s]: ", defaultBarePath)
-		pushInput, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("reading push target: %w", err)
-		}
-		pushRaw := strings.TrimSpace(pushInput)
-		if pushRaw == "" {
-			pushRaw = defaultBarePath
-		}
-
-		if isRemoteURL(pushRaw) {
-			gitURL = pushRaw
-		} else {
-			pushExpanded := config.ExpandPath(pushRaw)
-			if !filepath.IsAbs(pushExpanded) {
-				abs, err := filepath.Abs(pushExpanded)
-				if err != nil {
-					return fmt.Errorf("resolving push target path: %w", err)
-				}
-				pushExpanded = abs
-				fmt.Printf("  → Resolved to: %s\n", pushExpanded)
-				fmt.Print("  Confirm? [y/N]: ")
-				confirmStr, err := reader.ReadString('\n')
-				if err != nil {
-					return fmt.Errorf("reading confirmation: %w", err)
-				}
-				if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
-					return fmt.Errorf("aborted")
-				}
-			}
-			if pushExpanded == repoPath {
-				return fmt.Errorf("push target must differ from working copy (%s)", repoPath)
-			}
-			if err := os.MkdirAll(pushExpanded, 0o755); err != nil {
-				return fmt.Errorf("creating bare repo directory: %w", err)
-			}
-			_, created, err := repo.InitOrOpenBare(pushExpanded)
-			if err != nil {
-				return fmt.Errorf("initializing bare repo: %w", err)
-			}
-			if created {
-				fmt.Printf("Initialized bare repository at %s\n", pushExpanded)
-			} else {
-				fmt.Printf("Opened existing bare repository at %s\n", pushExpanded)
-			}
-			gitURL = localPathToFileURL(pushExpanded)
-		}
-
-		if err := r.AddRemote("origin", gitURL); err != nil {
-			return fmt.Errorf("wiring origin remote: %w", err)
+			return err
 		}
 	case "2":
-		fmt.Print("Remote git URL: ")
-		urlInput, err := reader.ReadString('\n')
+		var err error
+		r, repoPath, gitURL, err = setupRemoteRepo(reader, cloneDir)
 		if err != nil {
-			return fmt.Errorf("reading input: %w", err)
+			return err
 		}
-		gitURL = strings.TrimSpace(urlInput)
-		if gitURL == "" {
-			return fmt.Errorf("remote git URL cannot be empty")
-		}
-		repoPath = cloneDir
-		if repoPath == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return err
-			}
-			repoPath = filepath.Join(home, ".local", "share", "hdf", "repo")
-		}
-		if err := os.MkdirAll(repoPath, 0o755); err != nil {
-			return fmt.Errorf("creating local repo directory: %w", err)
-		}
-		r, err = repo.Clone(gitURL, repoPath)
-		if err != nil {
-			return fmt.Errorf("cloning repo: %w", err)
-		}
-		fmt.Printf("Cloned repository to %s\n", repoPath)
 	default:
 		return fmt.Errorf("invalid choice %q: enter 1 or 2", choice)
 	}

@@ -4,8 +4,39 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestAddRemote(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	const remoteA = "file:///tmp/bare-a"
+	const remoteB = "file:///tmp/bare-b"
+
+	// First call: remote does not exist — should succeed.
+	if err := r.AddRemote("origin", remoteA); err != nil {
+		t.Fatalf("AddRemote (create): %v", err)
+	}
+
+	// Second call with the same URL: no-op, should succeed.
+	if err := r.AddRemote("origin", remoteA); err != nil {
+		t.Fatalf("AddRemote (same URL no-op): %v", err)
+	}
+
+	// Third call with a different URL: must return an error.
+	err = r.AddRemote("origin", remoteB)
+	if err == nil {
+		t.Fatal("expected error when adding remote with different URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "already points to a different URL") {
+		t.Errorf("error = %q, want it to mention 'already points to a different URL'", err.Error())
+	}
+}
 
 func TestCommitHistory(t *testing.T) {
 	dir := t.TempDir()

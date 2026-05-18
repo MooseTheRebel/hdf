@@ -118,7 +118,14 @@ func (r *Repo) AddRemote(name, url string) error {
 		URLs: []string{url},
 	})
 	if errors.Is(err, git.ErrRemoteExists) {
-		return nil
+		existing, remoteErr := r.r.Remote(name)
+		if remoteErr != nil {
+			return remoteErr
+		}
+		if urls := existing.Config().URLs; len(urls) > 0 && urls[0] == url {
+			return nil
+		}
+		return fmt.Errorf("remote %q already points to a different URL — remove it manually before running hdf init", name)
 	}
 	return err
 }
