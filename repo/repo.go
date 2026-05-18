@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,8 +36,8 @@ func authForURL(rawURL string) transport.AuthMethod {
 	return nil
 }
 
-// remoteURL returns the fetch URL of the "origin" remote, or "" if unavailable.
-func (r *Repo) remoteURL() string {
+// RemoteURL returns the fetch URL of the "origin" remote, or "" if unavailable.
+func (r *Repo) RemoteURL() string {
 	cfg, err := r.r.Config()
 	if err != nil {
 		return ""
@@ -86,6 +87,63 @@ func Clone(url, path string) (*Repo, error) {
 		return nil, err
 	}
 	return &Repo{r: r, path: path}, nil
+}
+
+// InitOrOpenBare initializes a bare repository at path, or opens it if it
+// already exists. The bool return is true when a new repo was created.
+// Returns an error if a non-bare repository already exists at path.
+func InitOrOpenBare(path string) (*Repo, bool, error) {
+	// A non-bare repo stores git data in a .git subdirectory. go-git's bare
+	// init does not detect this as a conflict, so we catch it first.
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+		return nil, false, fmt.Errorf("repository at %s is not a bare repository; hdf requires a bare repo as push target", path)
+	}
+	r, err := git.PlainInitWithOptions(path, &git.PlainInitOptions{
+		Bare: true,
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.NewBranchReferenceName("main"),
+		},
+	})
+	if err == nil {
+		return &Repo{r: r, path: path}, true, nil
+	}
+	if errors.Is(err, git.ErrRepositoryAlreadyExists) {
+		existing, openErr := git.PlainOpen(path)
+		if openErr != nil {
+			return nil, false, openErr
+		}
+		cfg, cfgErr := existing.Config()
+		if cfgErr != nil {
+			return nil, false, cfgErr
+		}
+		if !cfg.Core.IsBare {
+			return nil, false, fmt.Errorf("repository at %s is not a bare repository; hdf requires a bare repo as push target", path)
+		}
+		return &Repo{r: existing, path: path}, false, nil
+	}
+	return nil, false, err
+}
+
+// AddRemote adds a named remote to the repository. Silently no-ops if the
+// remote already exists.
+func (r *Repo) AddRemote(name, url string) error {
+	_, err := r.r.CreateRemote(&gitconfig.RemoteConfig{
+		Name: name,
+		URLs: []string{url},
+	})
+	if errors.Is(err, git.ErrRemoteExists) {
+		existing, remoteErr := r.r.Remote(name)
+		if remoteErr != nil {
+			return remoteErr
+		}
+		for _, u := range existing.Config().URLs {
+			if u == url {
+				return nil
+			}
+		}
+		return fmt.Errorf("remote %q already points to a different URL — remove it manually before running hdf init", name)
+	}
+	return err
 }
 
 // Path returns the local filesystem path of the repository.
@@ -182,7 +240,7 @@ func (r *Repo) CommitCount() (int, error) {
 
 // Fetch fetches updates from the remote. Returns nil if already up to date.
 func (r *Repo) Fetch() error {
-	err := r.r.Fetch(&git.FetchOptions{Auth: authForURL(r.remoteURL())})
+	err := r.r.Fetch(&git.FetchOptions{Auth: authForURL(r.RemoteURL())})
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
 	}
@@ -192,7 +250,7 @@ func (r *Repo) Fetch() error {
 // Push pushes the named branch to the remote.
 func (r *Repo) Push(branch string) error {
 	return r.r.Push(&git.PushOptions{
-		Auth: authForURL(r.remoteURL()),
+		Auth: authForURL(r.RemoteURL()),
 		RefSpecs: []gitconfig.RefSpec{
 			gitconfig.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)),
 		},

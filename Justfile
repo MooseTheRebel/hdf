@@ -2,6 +2,10 @@ bin := if os() == "macos" { "build/bin/hdf.app/Contents/MacOS/hdf" } else if os(
 
 export PATH := env_var('HOME') + "/go/bin:/usr/local/go/bin:" + env_var('PATH')
 
+# Build the binary
+build:
+    wails build
+
 # Install Go dependencies and build the binary
 install path="":
     #!/usr/bin/env bash

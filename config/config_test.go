@@ -12,8 +12,9 @@ func TestRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 
 	want := &Config{
-		GitURL:   "https://github.com/test/dotfiles.git",
-		RepoPath: "/home/user/.local/share/hdf/repo",
+		GitPushTarget:    "https://github.com/test/dotfiles.git",
+		LocalDotfilesDir: "/home/user/.local/share/hdf/repo",
+		Branch:           "my-macbook",
 		Files: []ManagedFile{
 			{Path: "~/.bashrc", Hash: "sha256:deadbeef"},
 			{Path: "~/.vimrc", Hash: "sha256:cafebabe"},
@@ -29,11 +30,14 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if got.GitURL != want.GitURL {
-		t.Errorf("GitURL: got %q, want %q", got.GitURL, want.GitURL)
+	if got.GitPushTarget != want.GitPushTarget {
+		t.Errorf("GitPushTarget: got %q, want %q", got.GitPushTarget, want.GitPushTarget)
 	}
-	if got.RepoPath != want.RepoPath {
-		t.Errorf("RepoPath: got %q, want %q", got.RepoPath, want.RepoPath)
+	if got.LocalDotfilesDir != want.LocalDotfilesDir {
+		t.Errorf("LocalDotfilesDir: got %q, want %q", got.LocalDotfilesDir, want.LocalDotfilesDir)
+	}
+	if got.Branch != want.Branch {
+		t.Errorf("Branch: got %q, want %q", got.Branch, want.Branch)
 	}
 	if len(got.Files) != len(want.Files) {
 		t.Fatalf("Files len: got %d, want %d", len(got.Files), len(want.Files))

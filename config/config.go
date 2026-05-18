@@ -12,9 +12,10 @@ const defaultConfigPath = "~/.config/hdf/config.toml"
 
 // Config holds the user-editable hdf configuration stored in config.toml.
 type Config struct {
-	GitURL   string        `toml:"git_url"`
-	RepoPath string        `toml:"repo_path"`
-	Files    []ManagedFile `toml:"files"`
+	GitPushTarget    string        `toml:"git_push_target"`
+	LocalDotfilesDir string        `toml:"local_dotfiles_dir"`
+	Branch           string        `toml:"branch"`
+	Files            []ManagedFile `toml:"files"`
 }
 
 // ManagedFile records a dot file under hdf management and its last-known hash.
