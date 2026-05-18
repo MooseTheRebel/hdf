@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	crand "crypto/rand"
 	"embed"
 	"fmt"
 	"hdf/config"
@@ -9,7 +10,6 @@ import (
 	"hdf/link"
 	"hdf/repo"
 	"io"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,8 +88,11 @@ func branchName() string {
 	h, err := os.Hostname()
 	if err != nil || h == "" {
 		b := make([]byte, 4)
+		if _, err := crand.Read(b); err != nil {
+			return "host-unknown"
+		}
 		for i := range b {
-			b[i] = branchNameChars[rand.Intn(len(branchNameChars))]
+			b[i] = branchNameChars[int(b[i])%len(branchNameChars)]
 		}
 		return "host-" + string(b)
 	}

@@ -421,12 +421,12 @@ func TestBranchNameNonEmpty(t *testing.T) {
 }
 
 func TestBranchNameFallbackFormat(t *testing.T) {
-	// Call the fallback generator directly by sampling the character set used
-	// internally — verify it only contains ASCII letters and is the right length.
+	// Verify the character-mapping used in the crypto/rand fallback path
+	// produces only ASCII letters and a 4-character suffix.
 	for i := range 20 {
 		b := make([]byte, 4)
 		for j := range b {
-			b[j] = branchNameChars[i*j%len(branchNameChars)]
+			b[j] = branchNameChars[int(byte(i*j))%len(branchNameChars)]
 		}
 		suffix := string(b)
 		if len(suffix) != 4 {
