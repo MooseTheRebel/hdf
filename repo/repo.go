@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -90,7 +91,13 @@ func Clone(url, path string) (*Repo, error) {
 
 // InitOrOpenBare initializes a bare repository at path, or opens it if it
 // already exists. The bool return is true when a new repo was created.
+// Returns an error if a non-bare repository already exists at path.
 func InitOrOpenBare(path string) (*Repo, bool, error) {
+	// A non-bare repo stores git data in a .git subdirectory. go-git's bare
+	// init does not detect this as a conflict, so we catch it first.
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+		return nil, false, fmt.Errorf("repository at %s is not a bare repository; hdf requires a bare repo as push target", path)
+	}
 	r, err := git.PlainInitWithOptions(path, &git.PlainInitOptions{
 		Bare: true,
 		InitOptions: git.InitOptions{
@@ -104,6 +111,13 @@ func InitOrOpenBare(path string) (*Repo, bool, error) {
 		existing, openErr := git.PlainOpen(path)
 		if openErr != nil {
 			return nil, false, openErr
+		}
+		cfg, cfgErr := existing.Config()
+		if cfgErr != nil {
+			return nil, false, cfgErr
+		}
+		if !cfg.Core.IsBare {
+			return nil, false, fmt.Errorf("repository at %s is not a bare repository; hdf requires a bare repo as push target", path)
 		}
 		return &Repo{r: existing, path: path}, false, nil
 	}

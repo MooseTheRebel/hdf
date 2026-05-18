@@ -38,6 +38,53 @@ func TestAddRemote(t *testing.T) {
 	}
 }
 
+func TestInitOrOpenBare(t *testing.T) {
+	t.Run("creates bare repo", func(t *testing.T) {
+		dir := t.TempDir()
+		_, created, err := InitOrOpenBare(dir)
+		if err != nil {
+			t.Fatalf("InitOrOpenBare (create): %v", err)
+		}
+		if !created {
+			t.Error("expected created=true for a new bare repo")
+		}
+		if _, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil {
+			t.Errorf("bare repo missing HEAD file: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			t.Error("bare repo should not have a .git subdirectory")
+		}
+	})
+
+	t.Run("opens existing bare repo", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, _, err := InitOrOpenBare(dir); err != nil {
+			t.Fatalf("first InitOrOpenBare: %v", err)
+		}
+		_, created, err := InitOrOpenBare(dir)
+		if err != nil {
+			t.Fatalf("second InitOrOpenBare (open): %v", err)
+		}
+		if created {
+			t.Error("expected created=false when opening existing bare repo")
+		}
+	})
+
+	t.Run("errors on non-bare repo", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := Init(dir); err != nil {
+			t.Fatalf("Init: %v", err)
+		}
+		_, _, err := InitOrOpenBare(dir)
+		if err == nil {
+			t.Fatal("expected error when path contains a non-bare repo, got nil")
+		}
+		if !strings.Contains(err.Error(), "not a bare repository") {
+			t.Errorf("error = %q, want it to mention 'not a bare repository'", err.Error())
+		}
+	})
+}
+
 func TestCommitHistory(t *testing.T) {
 	dir := t.TempDir()
 	r, err := Init(dir)
