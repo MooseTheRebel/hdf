@@ -82,21 +82,41 @@ func isRemoteURL(s string) bool {
 
 const branchNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-// branchName returns the machine hostname, falling back to "host-<4 random
-// ASCII letters>" if the hostname is unavailable or empty.
+// isYes returns true when the user typed "y" or "yes" (case-insensitive).
+func isYes(s string) bool {
+	c := strings.ToLower(strings.TrimSpace(s))
+	return c == "y" || c == "yes"
+}
+
+// sanitizeBranchName replaces any character that is not an ASCII letter,
+// digit, or hyphen with a hyphen, then strips leading/trailing hyphens.
+func sanitizeBranchName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return '-'
+	}, s)
+	return strings.Trim(s, "-")
+}
+
+// branchName returns the sanitized machine hostname, falling back to
+// "host-<4 random ASCII letters>" if the hostname is unavailable or empty.
 func branchName() string {
 	h, err := os.Hostname()
-	if err != nil || h == "" {
-		b := make([]byte, 4)
-		if _, err := crand.Read(b); err != nil {
-			return "host-unknown"
+	if err == nil && h != "" {
+		if sanitized := sanitizeBranchName(h); sanitized != "" {
+			return sanitized
 		}
-		for i := range b {
-			b[i] = branchNameChars[int(b[i])%len(branchNameChars)]
-		}
-		return "host-" + string(b)
 	}
-	return h
+	b := make([]byte, 4)
+	if _, err := crand.Read(b); err != nil {
+		return "host-unknown"
+	}
+	for i := range b {
+		b[i] = branchNameChars[int(b[i])%len(branchNameChars)]
+	}
+	return "host-" + string(b)
 }
 
 // setupLocalRepo runs the two-stage local wizard (working copy + push target).
@@ -129,7 +149,7 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 		if err != nil {
 			return nil, "", "", fmt.Errorf("reading confirmation: %w", err)
 		}
-		if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
+		if !isYes(confirmStr) {
 			return nil, "", "", fmt.Errorf("aborted")
 		}
 	}
@@ -182,7 +202,7 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 			if err != nil {
 				return nil, "", "", fmt.Errorf("reading confirmation: %w", err)
 			}
-			if strings.ToLower(strings.TrimSpace(confirmStr)) != "y" {
+			if !isYes(confirmStr) {
 				return nil, "", "", fmt.Errorf("aborted")
 			}
 		}

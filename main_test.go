@@ -209,6 +209,27 @@ func TestRunInitPushTargetRelativePathConfirmed(t *testing.T) {
 	}
 }
 
+func TestRunInitLocalRelativePathConfirmedWithYes(t *testing.T) {
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	cfgPath, statePath := initPaths(t)
+
+	bareDir := t.TempDir()
+	// "yes" should be accepted as confirmation for the relative working-copy path.
+	if err := runInit(strings.NewReader("1\ndotfiles\nyes\n"+bareDir+"\n"), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	wantDir := filepath.Join(workDir, "dotfiles")
+	if cfg.LocalDotfilesDir != wantDir {
+		t.Errorf("LocalDotfilesDir = %q, want %q", cfg.LocalDotfilesDir, wantDir)
+	}
+}
+
 func TestRunInitPushTargetRelativePathRejected(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cfgPath, statePath := initPaths(t)
@@ -410,6 +431,42 @@ func TestLocalPathToFileURL(t *testing.T) {
 				t.Errorf("localPathToFileURL(%q) = %q, want %q", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+func TestIsYes(t *testing.T) {
+	yes := []string{"y", "Y", "yes", "Yes", "YES", "y\n", "yes\n", " yes "}
+	no := []string{"n", "no", "", "yep", "yeah"}
+	for _, s := range yes {
+		if !isYes(s) {
+			t.Errorf("isYes(%q) = false, want true", s)
+		}
+	}
+	for _, s := range no {
+		if isYes(s) {
+			t.Errorf("isYes(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestSanitizeBranchName(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"my-macbook", "my-macbook"},
+		{"My MacBook Pro", "My-MacBook-Pro"},
+		{"host.local", "host-local"},
+		{"host_name", "host-name"},
+		{"192.168.1.1", "192-168-1-1"},
+		{"-leading", "leading"},
+		{"trailing-", "trailing"},
+		{"a", "a"},
+	}
+	for _, tc := range cases {
+		if got := sanitizeBranchName(tc.input); got != tc.want {
+			t.Errorf("sanitizeBranchName(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
 
