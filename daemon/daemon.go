@@ -55,9 +55,12 @@ func Sync(cfgPath, statePath string) error {
 		return fmt.Errorf("opening repo at %s: %w", cfg.LocalDotfilesDir, err)
 	}
 
-	// 1. Fetch from remote (non-fatal if no remote or no network).
+	// 1. Verify remote is configured and fetch from it.
+	if r.RemoteURL() == "" {
+		return fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
+	}
 	if err := r.Fetch(); err != nil {
-		fmt.Fprintf(os.Stderr, "fetch warning: %v\n", err)
+		return fmt.Errorf("fetching from remote: %w", err)
 	}
 
 	// 2. Check if main has advanced past our tracked commit.
