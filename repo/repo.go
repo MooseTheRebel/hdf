@@ -136,8 +136,10 @@ func (r *Repo) AddRemote(name, url string) error {
 		if remoteErr != nil {
 			return remoteErr
 		}
-		if urls := existing.Config().URLs; len(urls) > 0 && urls[0] == url {
-			return nil
+		for _, u := range existing.Config().URLs {
+			if u == url {
+				return nil
+			}
 		}
 		return fmt.Errorf("remote %q already points to a different URL — remove it manually before running hdf init", name)
 	}
