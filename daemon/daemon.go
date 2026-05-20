@@ -71,14 +71,27 @@ func Sync(cfgPath, statePath string) error {
 		}
 	}
 
-	// 3. Compare on-disk hashes against stored hashes.
-	for _, f := range cfg.Files {
+	// 3. Load the shared file registry and compare on-disk hashes.
+	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("loading registry: %w", err)
+	}
+	for _, f := range reg.Files {
 		expanded := config.ExpandPath(f.Path)
 		hash, err := link.HashFile(expanded)
 		if err != nil {
 			continue
 		}
-		if hash != f.Hash {
+		currentHash := f.Hash
+		if len(f.Variants) > 0 {
+			for _, v := range f.Variants {
+				if v.Branch == cfg.Branch {
+					currentHash = v.Hash
+					break
+				}
+			}
+		}
+		if hash != currentHash {
 			_ = notify.Send("hdf",
 				fmt.Sprintf("Local file changed but not committed — run: hdf enroll %s", f.Path))
 		}

@@ -61,6 +61,18 @@ func Enroll(homePath, repoDir string) (string, error) {
 	return enrollWithHome(homePath, repoDir, home)
 }
 
+// EnrollInHome is Enroll with an explicit homeDir; used by tests and callers
+// that already hold the home directory path.
+func EnrollInHome(homePath, repoDir, homeDir string) (string, error) {
+	return enrollWithHome(homePath, repoDir, homeDir)
+}
+
+// RepoPathForHome is RepoPathFor with an explicit homeDir; used by tests and
+// callers that already hold the home directory path.
+func RepoPathForHome(homePath, repoDir, homeDir string) (string, error) {
+	return repoPathForHome(homePath, repoDir, homeDir)
+}
+
 func enrollWithHome(homePath, repoDir, home string) (string, error) {
 	dst, err := repoPathForHome(homePath, repoDir, home)
 	if err != nil {
