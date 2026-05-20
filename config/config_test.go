@@ -137,7 +137,7 @@ local_dotfiles_dir = "/tmp/repo"
 branch = "test-host"
 
 [[files]]
-path = testBashrcPath
+path = "~/.bashrc"
 hash = "sha256:deadbeef"
 
 [[files]]
