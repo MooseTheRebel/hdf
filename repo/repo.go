@@ -191,6 +191,32 @@ func (r *Repo) CommitFile(filename, message string) (string, error) {
 	return hash.String(), nil
 }
 
+// StageFile stages a single file (repo-relative path) without committing.
+func (r *Repo) StageFile(filename string) error {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return err
+	}
+	_, err = w.Add(filename)
+	return err
+}
+
+// CommitStaged creates a commit from whatever is currently staged.
+// Returns the commit SHA.
+func (r *Repo) CommitStaged(message string) (string, error) {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return "", err
+	}
+	hash, err := w.Commit(message, &git.CommitOptions{
+		Author: gitAuthor(),
+	})
+	if err != nil {
+		return "", err
+	}
+	return hash.String(), nil
+}
+
 // gitAuthor loads the user identity from the global git config.
 // Falls back to a generic "hdf" identity if the config is unavailable.
 func gitAuthor() *object.Signature {

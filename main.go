@@ -70,6 +70,21 @@ func localPathToFileURL(absPath string) string {
 	return "file://" + p
 }
 
+// resolveRepoPath returns the absolute repo file path for a managed file on
+// the current branch. For variant files it looks up the matching variant;
+// returns "" (no error) when the file has variants but none match the branch.
+func resolveRepoPath(f config.ManagedFile, branch, repoDir, expandedHome string) (string, error) {
+	if len(f.Variants) > 0 {
+		for _, v := range f.Variants {
+			if v.Branch == branch {
+				return filepath.Join(repoDir, v.RepoPath), nil
+			}
+		}
+		return "", nil // variant file, no match for this branch
+	}
+	return link.RepoPathFor(expandedHome, repoDir)
+}
+
 // isRemoteURL reports whether s looks like a remote git URL.
 // "file://" is intentionally excluded — users never type it; hdf adds it.
 func isRemoteURL(s string) bool {
@@ -381,10 +396,6 @@ var enrollCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("computing relative path: %w", err)
 		}
-		sha, err := r.CommitFile(relName, fmt.Sprintf("hdf: enroll %s", filePath))
-		if err != nil {
-			return fmt.Errorf("committing: %w", err)
-		}
 
 		// Normalise the stored path to ~/… form for portability.
 		tildeFile := filePath
@@ -393,18 +404,39 @@ var enrollCmd = &cobra.Command{
 				tildeFile = "~" + expanded[len(home):]
 			}
 		}
-		for i, f := range cfg.Files {
+
+		// Update the in-repo registry.
+		reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+		if err != nil {
+			return fmt.Errorf("loading registry: %w", err)
+		}
+		found := false
+		for i, f := range reg.Files {
 			if f.Path == tildeFile {
-				cfg.Files[i].Hash = hash
-				goto save
+				reg.Files[i].Hash = hash
+				found = true
+				break
 			}
 		}
-		cfg.Files = append(cfg.Files, config.ManagedFile{Path: tildeFile, Hash: hash})
-
-	save:
-		if err := config.Save(cfgPath, cfg); err != nil {
-			return fmt.Errorf("saving config: %w", err)
+		if !found {
+			reg.Files = append(reg.Files, config.ManagedFile{Path: tildeFile, Hash: hash})
 		}
+		if err := config.SaveRegistry(cfg.LocalDotfilesDir, reg); err != nil {
+			return fmt.Errorf("saving registry: %w", err)
+		}
+
+		// Commit file + updated registry together.
+		if err := r.StageFile(relName); err != nil {
+			return fmt.Errorf("staging file: %w", err)
+		}
+		if err := r.StageFile(".hdf/managed.toml"); err != nil {
+			return fmt.Errorf("staging registry: %w", err)
+		}
+		sha, err := r.CommitStaged(fmt.Sprintf("hdf: enroll %s", filePath))
+		if err != nil {
+			return fmt.Errorf("committing: %w", err)
+		}
+
 		statePath := config.DefaultStatePath()
 		state, err := config.LoadState(statePath)
 		if err != nil {
@@ -428,18 +460,27 @@ var linkCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("loading config (run 'hdf init' first): %w", err)
 		}
-		for _, f := range cfg.Files {
+		reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+		if err != nil {
+			return fmt.Errorf("loading registry: %w", err)
+		}
+		for _, f := range reg.Files {
 			expanded := config.ExpandPath(f.Path)
-			repoFile, err := link.RepoPathFor(expanded, cfg.LocalDotfilesDir)
+			repoFile, err := resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
+				continue
+			}
+			if repoFile == "" {
+				fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — run: hdf enroll --variant %s\n",
+					f.Path, cfg.Branch, f.Path)
 				continue
 			}
 			if err := link.Link(expanded, repoFile); err != nil {
 				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
 				continue
 			}
-			fmt.Printf("linked %s → %s\n", f.Path, repoFile)
+			fmt.Printf("linked %s\n", f.Path)
 		}
 		return nil
 	},
@@ -462,20 +503,32 @@ var statusCmd = &cobra.Command{
 		branch, _ := r.CurrentBranch()
 		state, _ := config.LoadState(config.DefaultStatePath())
 
+		reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+		if err != nil {
+			return fmt.Errorf("loading registry: %w", err)
+		}
+
 		fmt.Printf("Git push target:    %s\n", cfg.GitPushTarget)
 		fmt.Printf("Local dotfiles dir: %s\n", cfg.LocalDotfilesDir)
 		fmt.Printf("Branch:      %s\n", branch)
 		fmt.Printf("Last commit: %s\n", state.LastCommit)
 		fmt.Printf("Last sync:   %s\n", state.LastSync.Format("2006-01-02 15:04:05"))
-		fmt.Printf("\nManaged files (%d):\n", len(cfg.Files))
+		fmt.Printf("\nManaged files (%d):\n", len(reg.Files))
 
-		for _, f := range cfg.Files {
+		for _, f := range reg.Files {
 			expanded := config.ExpandPath(f.Path)
+			expectedHash := f.Hash
+			for _, v := range f.Variants {
+				if v.Branch == cfg.Branch {
+					expectedHash = v.Hash
+					break
+				}
+			}
 			currentHash, err := link.HashFile(expanded)
 			status := "ok"
 			if err != nil {
 				status = "missing"
-			} else if currentHash != f.Hash {
+			} else if currentHash != expectedHash {
 				status = "CHANGED (uncommitted)"
 			}
 			fmt.Printf("  %-40s %s\n", f.Path, status)

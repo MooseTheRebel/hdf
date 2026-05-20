@@ -249,6 +249,48 @@ func TestPushToFilePushTarget(t *testing.T) {
 	}
 }
 
+func TestStageAndCommitMultipleFiles(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	files := []string{"a.txt", "b.txt", "c.txt"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.StageFile(name); err != nil {
+			t.Fatalf("StageFile(%s): %v", name, err)
+		}
+	}
+
+	sha, err := r.CommitStaged("batch commit")
+	if err != nil {
+		t.Fatalf("CommitStaged: %v", err)
+	}
+	if sha == "" {
+		t.Error("CommitStaged returned empty SHA")
+	}
+
+	count, err := r.CommitCount()
+	if err != nil {
+		t.Fatalf("CommitCount: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("CommitCount = %d, want 1", count)
+	}
+
+	head, err := r.HeadSHA()
+	if err != nil {
+		t.Fatalf("HeadSHA: %v", err)
+	}
+	if head != sha {
+		t.Errorf("HEAD = %s, want %s", head, sha)
+	}
+}
+
 func TestHasUnpushedCommits(t *testing.T) {
 	dir := t.TempDir()
 	r, err := Init(dir)
