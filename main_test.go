@@ -497,6 +497,91 @@ func TestBranchNameFallbackFormat(t *testing.T) {
 	}
 }
 
+func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
+	// Set up a local repo with a bare push target.
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+
+	// Create a dotfile in a fake home dir.
+	homeDir := t.TempDir()
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("# test config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+		t.Fatalf("runEnroll: %v", err)
+	}
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatalf("opening repo: %v", err)
+	}
+
+	// main branch must have an empty stub at the file's repo-relative path.
+	stubBytes, err := r.ReadFileFromBranch("main", ".testrc")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch stub: %v", err)
+	}
+	if stubBytes == nil {
+		t.Fatal("expected empty stub in main, got nil")
+	}
+	if len(stubBytes) != 0 {
+		t.Errorf("expected empty stub, got %q", stubBytes)
+	}
+
+	// main branch must have managed.toml listing the file with an empty hash.
+	regBytes, err := r.ReadFileFromBranch("main", ".hdf/managed.toml")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch registry: %v", err)
+	}
+	if regBytes == nil {
+		t.Fatal("expected managed.toml in main, got nil")
+	}
+	mainReg, err := config.RegistryFromBytes(regBytes)
+	if err != nil {
+		t.Fatalf("parsing main registry: %v", err)
+	}
+	if len(mainReg.Files) != 1 {
+		t.Fatalf("main registry Files len = %d, want 1", len(mainReg.Files))
+	}
+	if mainReg.Files[0].Path != "~/.testrc" {
+		t.Errorf("main Files[0].Path = %q, want ~/.testrc", mainReg.Files[0].Path)
+	}
+	if mainReg.Files[0].Hash != "" {
+		t.Errorf("main Files[0].Hash = %q, want empty", mainReg.Files[0].Hash)
+	}
+
+	// Both branches must be pushed to the bare remote.
+	bare, err := repo.Open(bareDir)
+	if err != nil {
+		t.Fatalf("opening bare repo: %v", err)
+	}
+	hostStub, err := bare.ReadFileFromBranch(cfg.Branch, ".testrc")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch on bare (hostname): %v", err)
+	}
+	if hostStub == nil {
+		t.Error("hostname branch not pushed to bare remote")
+	}
+	mainStub, err := bare.ReadFileFromBranch("main", ".testrc")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch on bare (main): %v", err)
+	}
+	if mainStub == nil {
+		t.Error("main branch not pushed to bare remote")
+	}
+}
+
 func TestRootCmdSilenceErrors(t *testing.T) {
 	if !rootCmd.SilenceErrors {
 		t.Error("rootCmd.SilenceErrors must be true to prevent Cobra from double-printing errors")

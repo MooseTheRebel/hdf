@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -244,6 +245,59 @@ func (r *Repo) HeadSHA() (string, error) {
 		return "", err
 	}
 	return head.Hash().String(), nil
+}
+
+// ReadFileFromBranch returns the bytes of repoRelPath from the given branch's
+// committed tree. Returns nil, nil when the branch or file does not exist.
+func (r *Repo) ReadFileFromBranch(branch, repoRelPath string) ([]byte, error) {
+	ref, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	commit, err := r.r.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, err
+	}
+	tree, err := r.r.TreeObject(commit.TreeHash)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(repoRelPath, "/")
+	for _, part := range parts[:len(parts)-1] {
+		var found bool
+		for _, e := range tree.Entries {
+			if e.Name == part {
+				tree, err = r.r.TreeObject(e.Hash)
+				if err != nil {
+					return nil, err
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, nil
+		}
+	}
+	fileName := parts[len(parts)-1]
+	for _, e := range tree.Entries {
+		if e.Name == fileName {
+			blob, err := r.r.BlobObject(e.Hash)
+			if err != nil {
+				return nil, err
+			}
+			rdr, err := blob.Reader()
+			if err != nil {
+				return nil, err
+			}
+			defer func() { _ = rdr.Close() }()
+			return io.ReadAll(rdr)
+		}
+	}
+	return nil, nil
 }
 
 // CommitCount returns the total number of commits reachable from HEAD.

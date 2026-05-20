@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -138,6 +139,24 @@ func SaveRegistry(repoDir string, reg *Registry) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// RegistryFromBytes parses TOML-encoded bytes into a Registry.
+func RegistryFromBytes(data []byte) (*Registry, error) {
+	var reg Registry
+	if _, err := toml.Decode(string(data), &reg); err != nil {
+		return nil, err
+	}
+	return &reg, nil
+}
+
+// RegistryToBytes serialises reg to TOML bytes.
+func RegistryToBytes(reg *Registry) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(reg); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // MigrateFilesToRegistry reads any Files from an old-style config.toml and
