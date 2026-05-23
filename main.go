@@ -27,6 +27,17 @@ var rootCmd = &cobra.Command{
 	Use:   "hdf",
 	Short: "home-dawt-files: manage your $HOME dot files",
 	Long:  `hdf manages dot files by symlinking them from $HOME into a git-backed repository.`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := config.DefaultPath()
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			return nil // no config yet (e.g. before hdf init), skip migration
+		}
+		// Best-effort: errors are ignored so a stale or partial config
+		// doesn't block subcommands that would surface a clearer message.
+		_ = config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir)
+		return nil
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		launchGUI([]string{})
 	},
@@ -73,7 +84,7 @@ func localPathToFileURL(absPath string) string {
 // resolveRepoPath returns the absolute repo file path for a managed file on
 // the current branch. For variant files it looks up the matching variant;
 // returns "" (no error) when the file has variants but none match the branch.
-func resolveRepoPath(f config.ManagedFile, branch, repoDir, expandedHome string) (string, error) {
+func resolveRepoPath(f config.ManagedFile, branch, repoDir, expandedPath string) (string, error) {
 	if len(f.Variants) > 0 {
 		for _, v := range f.Variants {
 			if v.Branch == branch {
@@ -82,7 +93,7 @@ func resolveRepoPath(f config.ManagedFile, branch, repoDir, expandedHome string)
 		}
 		return "", nil // variant file, no match for this branch
 	}
-	return link.RepoPathFor(expandedHome, repoDir)
+	return link.RepoPathFor(expandedPath, repoDir)
 }
 
 // isRemoteURL reports whether s looks like a remote git URL.
@@ -359,6 +370,52 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	return nil
 }
 
+// upsertRegistryEntry updates an existing entry's hash in reg, or appends a
+// new one. hash is set to "" when called for the main-branch stub.
+func upsertRegistryEntry(reg *config.Registry, tildeFile, hash string) {
+	for i, f := range reg.Files {
+		if f.Path == tildeFile {
+			reg.Files[i].Hash = hash
+			return
+		}
+	}
+	reg.Files = append(reg.Files, config.ManagedFile{Path: tildeFile, Hash: hash})
+}
+
+// updateMainRegistry reads the registry from the main branch, upserts an
+// empty stub for tildeFile, and commits the updated registry (plus an empty
+// placeholder blob for slashRel) directly to main without touching the
+// working tree.
+func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) error {
+	mainRegBytes, err := r.ReadFileFromBranch("main", ".hdf/managed.toml")
+	if err != nil {
+		return fmt.Errorf("reading main registry: %w", err)
+	}
+	var mainReg *config.Registry
+	if len(mainRegBytes) > 0 {
+		mainReg, err = config.RegistryFromBytes(mainRegBytes)
+		if err != nil {
+			return fmt.Errorf("parsing main registry: %w", err)
+		}
+	} else {
+		mainReg = &config.Registry{}
+	}
+
+	upsertRegistryEntry(mainReg, tildeFile, "")
+
+	mainRegBytes, err = config.RegistryToBytes(mainReg)
+	if err != nil {
+		return fmt.Errorf("serialising main registry: %w", err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: slashRel, Content: []byte{}},
+		{RepoRelPath: ".hdf/managed.toml", Content: mainRegBytes},
+	}, fmt.Sprintf("hdf: register %s baseline", filePath)); err != nil {
+		return fmt.Errorf("registering main baseline: %w", err)
+	}
+	return nil
+}
+
 // runEnroll copies filePath into the hdf repo, commits it to the hostname
 // branch, registers an empty stub in main, and pushes both branches.
 // homeDir is used as the home directory for path resolution; callers should
@@ -406,17 +463,7 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
 	}
-	found := false
-	for i, f := range reg.Files {
-		if f.Path == tildeFile {
-			reg.Files[i].Hash = hash
-			found = true
-			break
-		}
-	}
-	if !found {
-		reg.Files = append(reg.Files, config.ManagedFile{Path: tildeFile, Hash: hash})
-	}
+	upsertRegistryEntry(reg, tildeFile, hash)
 	if err := config.SaveRegistry(cfg.LocalDotfilesDir, reg); err != nil {
 		return fmt.Errorf("saving registry: %w", err)
 	}
@@ -435,39 +482,8 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 
 	// Register an empty stub in main so other machines can discover the file.
 	slashRel := filepath.ToSlash(relName)
-	mainRegBytes, err := r.ReadFileFromBranch("main", ".hdf/managed.toml")
-	if err != nil {
-		return fmt.Errorf("reading main registry: %w", err)
-	}
-	var mainReg *config.Registry
-	if len(mainRegBytes) > 0 {
-		mainReg, err = config.RegistryFromBytes(mainRegBytes)
-		if err != nil {
-			return fmt.Errorf("parsing main registry: %w", err)
-		}
-	} else {
-		mainReg = &config.Registry{}
-	}
-	mainFound := false
-	for i, f := range mainReg.Files {
-		if f.Path == tildeFile {
-			mainReg.Files[i].Hash = ""
-			mainFound = true
-			break
-		}
-	}
-	if !mainFound {
-		mainReg.Files = append(mainReg.Files, config.ManagedFile{Path: tildeFile})
-	}
-	mainRegBytes, err = config.RegistryToBytes(mainReg)
-	if err != nil {
-		return fmt.Errorf("serialising main registry: %w", err)
-	}
-	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
-		{RepoRelPath: slashRel, Content: []byte{}},
-		{RepoRelPath: ".hdf/managed.toml", Content: mainRegBytes},
-	}, fmt.Sprintf("hdf: register %s baseline", filePath)); err != nil {
-		return fmt.Errorf("registering main baseline: %w", err)
+	if err := updateMainRegistry(r, tildeFile, slashRel, filePath); err != nil {
+		return err
 	}
 
 	// Push hostname branch then main if a remote is configured.

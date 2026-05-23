@@ -141,6 +141,38 @@ func TestEnroll(t *testing.T) {
 	}
 }
 
+func TestEnrollIdempotent(t *testing.T) {
+	homeDir := t.TempDir()
+	repoDir := t.TempDir()
+
+	homeFile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(homeFile, []byte("important config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hash1, err := enrollWithHome(homeFile, repoDir, homeDir)
+	if err != nil {
+		t.Fatalf("first enrollWithHome: %v", err)
+	}
+
+	// Second enroll: homeFile is now a symlink; must not corrupt the file.
+	hash2, err := enrollWithHome(homeFile, repoDir, homeDir)
+	if err != nil {
+		t.Fatalf("second enrollWithHome: %v", err)
+	}
+	if hash1 != hash2 {
+		t.Errorf("hash changed after re-enroll: %q → %q", hash1, hash2)
+	}
+
+	content, err := os.ReadFile(homeFile)
+	if err != nil {
+		t.Fatalf("reading file after re-enroll: %v", err)
+	}
+	if string(content) != "important config" {
+		t.Errorf("content corrupted: got %q", content)
+	}
+}
+
 func TestEnrollMirrorsSubdirectory(t *testing.T) {
 	homeDir := t.TempDir()
 	repoDir := t.TempDir()

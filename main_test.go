@@ -582,6 +582,12 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 	}
 }
 
+func TestRootCmdMigrationHook(t *testing.T) {
+	if rootCmd.PersistentPreRunE == nil {
+		t.Error("rootCmd.PersistentPreRunE must be set to wire up legacy config.toml migration")
+	}
+}
+
 func TestRootCmdSilenceErrors(t *testing.T) {
 	if !rootCmd.SilenceErrors {
 		t.Error("rootCmd.SilenceErrors must be true to prevent Cobra from double-printing errors")

@@ -167,7 +167,10 @@ hash = "sha256:cafebabe"
 	if err := MigrateFilesToRegistry(cfgPath, repoDir); err != nil {
 		t.Fatalf("second MigrateFilesToRegistry: %v", err)
 	}
-	reg2, _ := LoadRegistry(repoDir)
+	reg2, err := LoadRegistry(repoDir)
+	if err != nil {
+		t.Fatalf("second LoadRegistry call failed: %v", err)
+	}
 	if len(reg2.Files) != 2 {
 		t.Errorf("idempotent: Files len = %d, want 2", len(reg2.Files))
 	}

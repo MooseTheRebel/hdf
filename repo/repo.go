@@ -3,7 +3,6 @@ package repo
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -261,43 +260,18 @@ func (r *Repo) ReadFileFromBranch(branch, repoRelPath string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := r.r.TreeObject(commit.TreeHash)
+	file, err := commit.File(repoRelPath)
+	if err != nil {
+		if errors.Is(err, object.ErrFileNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	contents, err := file.Contents()
 	if err != nil {
 		return nil, err
 	}
-	parts := strings.Split(repoRelPath, "/")
-	for _, part := range parts[:len(parts)-1] {
-		var found bool
-		for _, e := range tree.Entries {
-			if e.Name == part {
-				tree, err = r.r.TreeObject(e.Hash)
-				if err != nil {
-					return nil, err
-				}
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, nil
-		}
-	}
-	fileName := parts[len(parts)-1]
-	for _, e := range tree.Entries {
-		if e.Name == fileName {
-			blob, err := r.r.BlobObject(e.Hash)
-			if err != nil {
-				return nil, err
-			}
-			rdr, err := blob.Reader()
-			if err != nil {
-				return nil, err
-			}
-			defer func() { _ = rdr.Close() }()
-			return io.ReadAll(rdr)
-		}
-	}
-	return nil, nil
+	return []byte(contents), nil
 }
 
 // CommitCount returns the total number of commits reachable from HEAD.
