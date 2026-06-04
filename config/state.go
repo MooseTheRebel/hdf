@@ -14,8 +14,9 @@ const defaultStatePath = "~/.config/hdf/state.toml"
 // It is kept separate from Config so the user-editable config.toml is not
 // rewritten every sync cycle.
 type State struct {
-	LastSync   time.Time `toml:"last_sync"`
-	LastCommit string    `toml:"last_commit"`
+	LastSync       time.Time `toml:"last_sync"`
+	LastCommit     string    `toml:"last_commit"`
+	LastNotifiedAt time.Time `toml:"last_notified_at"`
 }
 
 // DefaultStatePath returns the default path to the hdf state file.

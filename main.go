@@ -431,14 +431,39 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 		return fmt.Errorf("file not found: %s", expanded)
 	}
 
-	hash, err := link.EnrollInHome(expanded, cfg.LocalDotfilesDir, homeDir)
-	if err != nil {
-		return fmt.Errorf("enrolling %s: %w", filePath, err)
+	// Normalise to ~/... form early — needed for the ignored-paths guard.
+	tildeFile := filePath
+	if !strings.HasPrefix(filePath, "~/") {
+		if rel, err := filepath.Rel(homeDir, expanded); err == nil && !strings.HasPrefix(rel, "..") {
+			tildeFile = "~/" + filepath.ToSlash(rel)
+		}
 	}
 
+	// Open the repo before touching the filesystem so we can read shared
+	// settings and fail fast on a missing/invalid repo.
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
+	}
+
+	// Guard: reject files that match the fleet-wide ignored-paths list.
+	// Fall back to package defaults when shared settings are unavailable
+	// (e.g. before the first sync has fetched origin/main).
+	ignoredPaths := config.DefaultIgnoredPaths
+	if ssBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile); len(ssBytes) > 0 {
+		if ss, err := config.SharedSettingsFromBytes(ssBytes); err == nil {
+			ss.ApplyDefaults()
+			ignoredPaths = ss.IgnoredPaths
+		}
+	}
+	if config.IsIgnored(tildeFile, ignoredPaths) {
+		return fmt.Errorf("%s matches an ignored path — edit %s on the main branch to override",
+			filePath, config.SharedSettingsFile)
+	}
+
+	hash, err := link.EnrollInHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	if err != nil {
+		return fmt.Errorf("enrolling %s: %w", filePath, err)
 	}
 
 	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
@@ -448,14 +473,6 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 	relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
 	if err != nil {
 		return fmt.Errorf("computing relative path: %w", err)
-	}
-
-	// Normalise stored path to ~/… form for portability.
-	tildeFile := filePath
-	if !strings.HasPrefix(filePath, "~/") {
-		if rel, err := filepath.Rel(homeDir, expanded); err == nil && !strings.HasPrefix(rel, "..") {
-			tildeFile = "~/" + filepath.ToSlash(rel)
-		}
 	}
 
 	// Update hostname branch registry with the real content hash.

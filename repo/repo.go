@@ -274,6 +274,36 @@ func (r *Repo) ReadFileFromBranch(branch, repoRelPath string) ([]byte, error) {
 	return []byte(contents), nil
 }
 
+// ReadFileFromRemoteBranch returns the bytes of repoRelPath from the given
+// remote tracking branch (e.g. remote="origin", branch="main"). This reads
+// refs/remotes/<remote>/<branch>, which is updated by Fetch without touching
+// local branch refs. Returns nil, nil when the ref or file does not exist.
+func (r *Repo) ReadFileFromRemoteBranch(remote, branch, repoRelPath string) ([]byte, error) {
+	ref, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, branch), true)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	commit, err := r.r.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, err
+	}
+	file, err := commit.File(repoRelPath)
+	if err != nil {
+		if errors.Is(err, object.ErrFileNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	contents, err := file.Contents()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(contents), nil
+}
+
 // CommitCount returns the total number of commits reachable from HEAD.
 func (r *Repo) CommitCount() (int, error) {
 	head, err := r.r.Head()
