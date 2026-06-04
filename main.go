@@ -27,6 +27,17 @@ var rootCmd = &cobra.Command{
 	Use:   "hdf",
 	Short: "home-dawt-files: manage your $HOME dot files",
 	Long:  `hdf manages dot files by symlinking them from $HOME into a git-backed repository.`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := config.DefaultPath()
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			return nil // no config yet (e.g. before hdf init), skip migration
+		}
+		// Best-effort: errors are ignored so a stale or partial config
+		// doesn't block subcommands that would surface a clearer message.
+		_ = config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir)
+		return nil
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		launchGUI([]string{})
 	},
@@ -68,6 +79,21 @@ func localPathToFileURL(absPath string) string {
 		p = "/" + p
 	}
 	return "file://" + p
+}
+
+// resolveRepoPath returns the absolute repo file path for a managed file on
+// the current branch. For variant files it looks up the matching variant;
+// returns "" (no error) when the file has variants but none match the branch.
+func resolveRepoPath(f config.ManagedFile, branch, repoDir, expandedPath string) (string, error) {
+	if len(f.Variants) > 0 {
+		for _, v := range f.Variants {
+			if v.Branch == branch {
+				return filepath.Join(repoDir, v.RepoPath), nil
+			}
+		}
+		return "", nil // variant file, no match for this branch
+	}
+	return link.RepoPathFor(expandedPath, repoDir)
 }
 
 // isRemoteURL reports whether s looks like a remote git URL.
@@ -344,78 +370,159 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	return nil
 }
 
+// upsertRegistryEntry updates an existing entry's hash in reg, or appends a
+// new one. hash is set to "" when called for the main-branch stub.
+func upsertRegistryEntry(reg *config.Registry, tildeFile, hash string) {
+	for i, f := range reg.Files {
+		if f.Path == tildeFile {
+			reg.Files[i].Hash = hash
+			return
+		}
+	}
+	reg.Files = append(reg.Files, config.ManagedFile{Path: tildeFile, Hash: hash})
+}
+
+// updateMainRegistry reads the registry from the main branch, upserts an
+// empty stub for tildeFile, and commits the updated registry (plus an empty
+// placeholder blob for slashRel) directly to main without touching the
+// working tree.
+func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) error {
+	mainRegBytes, err := r.ReadFileFromBranch("main", ".hdf/managed.toml")
+	if err != nil {
+		return fmt.Errorf("reading main registry: %w", err)
+	}
+	var mainReg *config.Registry
+	if len(mainRegBytes) > 0 {
+		mainReg, err = config.RegistryFromBytes(mainRegBytes)
+		if err != nil {
+			return fmt.Errorf("parsing main registry: %w", err)
+		}
+	} else {
+		mainReg = &config.Registry{}
+	}
+
+	upsertRegistryEntry(mainReg, tildeFile, "")
+
+	mainRegBytes, err = config.RegistryToBytes(mainReg)
+	if err != nil {
+		return fmt.Errorf("serialising main registry: %w", err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: slashRel, Content: []byte{}},
+		{RepoRelPath: ".hdf/managed.toml", Content: mainRegBytes},
+	}, fmt.Sprintf("hdf: register %s baseline", filePath)); err != nil {
+		return fmt.Errorf("registering main baseline: %w", err)
+	}
+	return nil
+}
+
+// runEnroll copies filePath into the hdf repo, commits it to the hostname
+// branch, registers an empty stub in main, and pushes both branches.
+// homeDir is used as the home directory for path resolution; callers should
+// pass os.UserHomeDir() in production and a temp dir in tests.
+func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) error {
+	// Expand ~/... using the provided homeDir.
+	expanded := filePath
+	if strings.HasPrefix(filePath, "~/") {
+		expanded = filepath.Join(homeDir, filePath[2:])
+	}
+
+	if _, err := os.Stat(expanded); err != nil {
+		return fmt.Errorf("file not found: %s", expanded)
+	}
+
+	hash, err := link.EnrollInHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	if err != nil {
+		return fmt.Errorf("enrolling %s: %w", filePath, err)
+	}
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("opening repo: %w", err)
+	}
+
+	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	if err != nil {
+		return fmt.Errorf("computing repo path: %w", err)
+	}
+	relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
+	if err != nil {
+		return fmt.Errorf("computing relative path: %w", err)
+	}
+
+	// Normalise stored path to ~/… form for portability.
+	tildeFile := filePath
+	if !strings.HasPrefix(filePath, "~/") {
+		if rel, err := filepath.Rel(homeDir, expanded); err == nil && !strings.HasPrefix(rel, "..") {
+			tildeFile = "~/" + filepath.ToSlash(rel)
+		}
+	}
+
+	// Update hostname branch registry with the real content hash.
+	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("loading registry: %w", err)
+	}
+	upsertRegistryEntry(reg, tildeFile, hash)
+	if err := config.SaveRegistry(cfg.LocalDotfilesDir, reg); err != nil {
+		return fmt.Errorf("saving registry: %w", err)
+	}
+
+	// Commit file + registry to hostname branch.
+	if err := r.StageFile(relName); err != nil {
+		return fmt.Errorf("staging file: %w", err)
+	}
+	if err := r.StageFile(".hdf/managed.toml"); err != nil {
+		return fmt.Errorf("staging registry: %w", err)
+	}
+	sha, err := r.CommitStaged(fmt.Sprintf("hdf: enroll %s", filePath))
+	if err != nil {
+		return fmt.Errorf("committing: %w", err)
+	}
+
+	// Register an empty stub in main so other machines can discover the file.
+	slashRel := filepath.ToSlash(relName)
+	if err := updateMainRegistry(r, tildeFile, slashRel, filePath); err != nil {
+		return err
+	}
+
+	// Push hostname branch then main if a remote is configured.
+	if cfg.GitPushTarget != "" {
+		if err := r.Push(cfg.Branch); err != nil {
+			return fmt.Errorf("pushing hostname branch: %w", err)
+		}
+		if err := r.Push("main"); err != nil {
+			return fmt.Errorf("pushing main: %w", err)
+		}
+	}
+
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		return fmt.Errorf("loading state: %w", err)
+	}
+	state.LastCommit = sha
+	if err := config.SaveState(statePath, state); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+	fmt.Printf("Enrolled %s (commit %s)\n", filePath, sha[:8])
+	return nil
+}
+
 var enrollCmd = &cobra.Command{
 	Use:   "enroll <path>",
 	Short: "Enroll a dot file under hdf management",
 	Long:  `Copies the file into the hdf repo, replaces it with a symlink, and commits.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfgPath := config.DefaultPath()
-		cfg, err := config.Load(cfgPath)
+		cfg, err := config.Load(config.DefaultPath())
 		if err != nil {
 			return fmt.Errorf("loading config (run 'hdf init' first): %w", err)
 		}
-
-		filePath := args[0]
-		expanded := config.ExpandPath(filePath)
-
-		if _, err := os.Stat(expanded); err != nil {
-			return fmt.Errorf("file not found: %s", expanded)
-		}
-
-		hash, err := link.Enroll(expanded, cfg.LocalDotfilesDir)
+		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("enrolling %s: %w", filePath, err)
+			return fmt.Errorf("getting home directory: %w", err)
 		}
-
-		r, err := repo.Open(cfg.LocalDotfilesDir)
-		if err != nil {
-			return fmt.Errorf("opening repo: %w", err)
-		}
-
-		repoFilePath, err := link.RepoPathFor(expanded, cfg.LocalDotfilesDir)
-		if err != nil {
-			return fmt.Errorf("computing repo path: %w", err)
-		}
-		relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
-		if err != nil {
-			return fmt.Errorf("computing relative path: %w", err)
-		}
-		sha, err := r.CommitFile(relName, fmt.Sprintf("hdf: enroll %s", filePath))
-		if err != nil {
-			return fmt.Errorf("committing: %w", err)
-		}
-
-		// Normalise the stored path to ~/… form for portability.
-		tildeFile := filePath
-		if !strings.HasPrefix(filePath, "~/") {
-			if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(expanded, home) {
-				tildeFile = "~" + expanded[len(home):]
-			}
-		}
-		for i, f := range cfg.Files {
-			if f.Path == tildeFile {
-				cfg.Files[i].Hash = hash
-				goto save
-			}
-		}
-		cfg.Files = append(cfg.Files, config.ManagedFile{Path: tildeFile, Hash: hash})
-
-	save:
-		if err := config.Save(cfgPath, cfg); err != nil {
-			return fmt.Errorf("saving config: %w", err)
-		}
-		statePath := config.DefaultStatePath()
-		state, err := config.LoadState(statePath)
-		if err != nil {
-			return fmt.Errorf("loading state: %w", err)
-		}
-		state.LastCommit = sha
-		if err := config.SaveState(statePath, state); err != nil {
-			return fmt.Errorf("saving state: %w", err)
-		}
-		fmt.Printf("Enrolled %s (commit %s)\n", filePath, sha[:8])
-		return nil
+		return runEnroll(args[0], homeDir, cfg, config.DefaultStatePath())
 	},
 }
 
@@ -428,18 +535,27 @@ var linkCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("loading config (run 'hdf init' first): %w", err)
 		}
-		for _, f := range cfg.Files {
+		reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+		if err != nil {
+			return fmt.Errorf("loading registry: %w", err)
+		}
+		for _, f := range reg.Files {
 			expanded := config.ExpandPath(f.Path)
-			repoFile, err := link.RepoPathFor(expanded, cfg.LocalDotfilesDir)
+			repoFile, err := resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
+				continue
+			}
+			if repoFile == "" {
+				fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — run: hdf enroll --variant %s\n",
+					f.Path, cfg.Branch, f.Path)
 				continue
 			}
 			if err := link.Link(expanded, repoFile); err != nil {
 				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
 				continue
 			}
-			fmt.Printf("linked %s → %s\n", f.Path, repoFile)
+			fmt.Printf("linked %s\n", f.Path)
 		}
 		return nil
 	},
@@ -462,20 +578,32 @@ var statusCmd = &cobra.Command{
 		branch, _ := r.CurrentBranch()
 		state, _ := config.LoadState(config.DefaultStatePath())
 
+		reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+		if err != nil {
+			return fmt.Errorf("loading registry: %w", err)
+		}
+
 		fmt.Printf("Git push target:    %s\n", cfg.GitPushTarget)
 		fmt.Printf("Local dotfiles dir: %s\n", cfg.LocalDotfilesDir)
 		fmt.Printf("Branch:      %s\n", branch)
 		fmt.Printf("Last commit: %s\n", state.LastCommit)
 		fmt.Printf("Last sync:   %s\n", state.LastSync.Format("2006-01-02 15:04:05"))
-		fmt.Printf("\nManaged files (%d):\n", len(cfg.Files))
+		fmt.Printf("\nManaged files (%d):\n", len(reg.Files))
 
-		for _, f := range cfg.Files {
+		for _, f := range reg.Files {
 			expanded := config.ExpandPath(f.Path)
+			expectedHash := f.Hash
+			for _, v := range f.Variants {
+				if v.Branch == cfg.Branch {
+					expectedHash = v.Hash
+					break
+				}
+			}
 			currentHash, err := link.HashFile(expanded)
 			status := "ok"
 			if err != nil {
 				status = "missing"
-			} else if currentHash != f.Hash {
+			} else if currentHash != expectedHash {
 				status = "CHANGED (uncommitted)"
 			}
 			fmt.Printf("  %-40s %s\n", f.Path, status)

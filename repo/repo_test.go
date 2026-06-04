@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 func TestAddRemote(t *testing.T) {
@@ -246,6 +248,133 @@ func TestPushToFilePushTarget(t *testing.T) {
 	}
 	if sha == "" {
 		t.Error("expected non-empty SHA in bare repo after push")
+	}
+}
+
+func TestCommitFilesToBranch(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Initial commit on main.
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("init.txt", "initial"); err != nil {
+		t.Fatalf("CommitFile: %v", err)
+	}
+
+	// Check out a hostname branch — from now on main is NOT the working branch.
+	if err := r.CreateAndCheckoutBranch("my-host"); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	// Write two files to main without touching the working tree.
+	sha, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "stub.txt", Content: []byte{}},
+		{RepoRelPath: ".hdf/managed.toml", Content: []byte("[files]\n")},
+	}, "hdf: register baseline")
+	if err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if sha == "" {
+		t.Fatal("CommitFilesToBranch returned empty SHA")
+	}
+
+	// Verify: still on my-host (working tree unchanged).
+	branch, err := r.CurrentBranch()
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+	if branch != "my-host" {
+		t.Errorf("CurrentBranch = %q, want %q", branch, "my-host")
+	}
+
+	// Verify: main ref points to the new commit.
+	mainRef, err := r.r.Reference(plumbing.NewBranchReferenceName("main"), true)
+	if err != nil {
+		t.Fatalf("resolving main: %v", err)
+	}
+	if mainRef.Hash().String() != sha {
+		t.Errorf("main HEAD = %s, want %s", mainRef.Hash(), sha)
+	}
+
+	// Verify: the new main commit's tree contains stub.txt and .hdf/managed.toml.
+	mainCommit, err := r.r.CommitObject(mainRef.Hash())
+	if err != nil {
+		t.Fatalf("CommitObject: %v", err)
+	}
+	mainTree, err := r.r.TreeObject(mainCommit.TreeHash)
+	if err != nil {
+		t.Fatalf("TreeObject: %v", err)
+	}
+	foundStub := false
+	foundHDF := false
+	for _, e := range mainTree.Entries {
+		if e.Name == "stub.txt" {
+			foundStub = true
+		}
+		if e.Name == ".hdf" {
+			// Verify the subtree contains managed.toml.
+			sub, err := r.r.TreeObject(e.Hash)
+			if err == nil {
+				for _, se := range sub.Entries {
+					if se.Name == "managed.toml" {
+						foundHDF = true
+					}
+				}
+			}
+		}
+	}
+	if !foundStub {
+		t.Error("stub.txt not found in main tree")
+	}
+	if !foundHDF {
+		t.Error(".hdf/managed.toml not found in main tree")
+	}
+}
+
+func TestStageAndCommitMultipleFiles(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	files := []string{"a.txt", "b.txt", "c.txt"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.StageFile(name); err != nil {
+			t.Fatalf("StageFile(%s): %v", name, err)
+		}
+	}
+
+	sha, err := r.CommitStaged("batch commit")
+	if err != nil {
+		t.Fatalf("CommitStaged: %v", err)
+	}
+	if sha == "" {
+		t.Error("CommitStaged returned empty SHA")
+	}
+
+	count, err := r.CommitCount()
+	if err != nil {
+		t.Fatalf("CommitCount: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("CommitCount = %d, want 1", count)
+	}
+
+	head, err := r.HeadSHA()
+	if err != nil {
+		t.Fatalf("HeadSHA: %v", err)
+	}
+	if head != sha {
+		t.Errorf("HEAD = %s, want %s", head, sha)
 	}
 }
 

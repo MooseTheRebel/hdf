@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const testBashrcPath = "~/.bashrc"
+
 func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -15,10 +17,6 @@ func TestRoundTrip(t *testing.T) {
 		GitPushTarget:    "https://github.com/test/dotfiles.git",
 		LocalDotfilesDir: "/home/user/.local/share/hdf/repo",
 		Branch:           "my-macbook",
-		Files: []ManagedFile{
-			{Path: "~/.bashrc", Hash: "sha256:deadbeef"},
-			{Path: "~/.vimrc", Hash: "sha256:cafebabe"},
-		},
 	}
 
 	if err := Save(path, want); err != nil {
@@ -39,6 +37,30 @@ func TestRoundTrip(t *testing.T) {
 	if got.Branch != want.Branch {
 		t.Errorf("Branch: got %q, want %q", got.Branch, want.Branch)
 	}
+}
+
+func TestRegistryRoundTrip(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, ".hdf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	want := &Registry{
+		Files: []ManagedFile{
+			{Path: testBashrcPath, Hash: "sha256:deadbeef"},
+			{Path: "~/.vimrc", Hash: "sha256:cafebabe"},
+		},
+	}
+
+	if err := SaveRegistry(repoDir, want); err != nil {
+		t.Fatalf("SaveRegistry: %v", err)
+	}
+
+	got, err := LoadRegistry(repoDir)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+
 	if len(got.Files) != len(want.Files) {
 		t.Fatalf("Files len: got %d, want %d", len(got.Files), len(want.Files))
 	}
@@ -49,6 +71,108 @@ func TestRoundTrip(t *testing.T) {
 		if got.Files[i].Hash != f.Hash {
 			t.Errorf("Files[%d].Hash: got %q, want %q", i, got.Files[i].Hash, f.Hash)
 		}
+	}
+}
+
+func TestRegistryWithVariants(t *testing.T) {
+	repoDir := t.TempDir()
+
+	want := &Registry{
+		Files: []ManagedFile{
+			{
+				Path: "~/.ssh/id_rsa",
+				Hash: "",
+				Variants: []Variant{
+					{Branch: "work-macbook", RepoPath: ".ssh/id_rsa_work-macbook", Hash: "sha256:aaa"},
+					{Branch: "home-laptop", RepoPath: ".ssh/id_rsa_home-laptop", Hash: "sha256:bbb"},
+				},
+			},
+		},
+	}
+
+	if err := SaveRegistry(repoDir, want); err != nil {
+		t.Fatalf("SaveRegistry: %v", err)
+	}
+	got, err := LoadRegistry(repoDir)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+
+	if len(got.Files) != 1 {
+		t.Fatalf("Files len: got %d, want 1", len(got.Files))
+	}
+	f := got.Files[0]
+	if f.Path != "~/.ssh/id_rsa" {
+		t.Errorf("Path: got %q, want ~/.ssh/id_rsa", f.Path)
+	}
+	if len(f.Variants) != 2 {
+		t.Fatalf("Variants len: got %d, want 2", len(f.Variants))
+	}
+	if f.Variants[0].Branch != "work-macbook" || f.Variants[0].RepoPath != ".ssh/id_rsa_work-macbook" {
+		t.Errorf("Variants[0]: got %+v", f.Variants[0])
+	}
+	if f.Variants[1].Branch != "home-laptop" || f.Variants[1].RepoPath != ".ssh/id_rsa_home-laptop" {
+		t.Errorf("Variants[1]: got %+v", f.Variants[1])
+	}
+}
+
+func TestLoadRegistryMissing(t *testing.T) {
+	reg, err := LoadRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadRegistry on missing file should return empty registry, got error: %v", err)
+	}
+	if len(reg.Files) != 0 {
+		t.Errorf("expected empty registry, got %d files", len(reg.Files))
+	}
+}
+
+func TestRegistryMigrationFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	repoDir := t.TempDir()
+
+	// Write a legacy config.toml that has the old Files field.
+	legacy := `git_push_target = "file:///tmp/bare"
+local_dotfiles_dir = "/tmp/repo"
+branch = "test-host"
+
+[[files]]
+path = "~/.bashrc"
+hash = "sha256:deadbeef"
+
+[[files]]
+path = "~/.vimrc"
+hash = "sha256:cafebabe"
+`
+	if err := os.WriteFile(cfgPath, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MigrateFilesToRegistry(cfgPath, repoDir); err != nil {
+		t.Fatalf("MigrateFilesToRegistry: %v", err)
+	}
+
+	reg, err := LoadRegistry(repoDir)
+	if err != nil {
+		t.Fatalf("LoadRegistry after migration: %v", err)
+	}
+	if len(reg.Files) != 2 {
+		t.Fatalf("Files len after migration: got %d, want 2", len(reg.Files))
+	}
+	if reg.Files[0].Path != testBashrcPath || reg.Files[0].Hash != "sha256:deadbeef" {
+		t.Errorf("Files[0]: got %+v", reg.Files[0])
+	}
+
+	// Running migration again must be idempotent.
+	if err := MigrateFilesToRegistry(cfgPath, repoDir); err != nil {
+		t.Fatalf("second MigrateFilesToRegistry: %v", err)
+	}
+	reg2, err := LoadRegistry(repoDir)
+	if err != nil {
+		t.Fatalf("second LoadRegistry call failed: %v", err)
+	}
+	if len(reg2.Files) != 2 {
+		t.Errorf("idempotent: Files len = %d, want 2", len(reg2.Files))
 	}
 }
 
@@ -98,7 +222,7 @@ func TestExpandPath(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"~/.bashrc", filepath.Join(home, ".bashrc")},
+		{testBashrcPath, filepath.Join(home, ".bashrc")},
 		{"/absolute/path", "/absolute/path"},
 		{"relative/path", "relative/path"},
 	}

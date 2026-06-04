@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5"
 	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -191,6 +193,32 @@ func (r *Repo) CommitFile(filename, message string) (string, error) {
 	return hash.String(), nil
 }
 
+// StageFile stages a single file (repo-relative path) without committing.
+func (r *Repo) StageFile(filename string) error {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return err
+	}
+	_, err = w.Add(filename)
+	return err
+}
+
+// CommitStaged creates a commit from whatever is currently staged.
+// Returns the commit SHA.
+func (r *Repo) CommitStaged(message string) (string, error) {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return "", err
+	}
+	hash, err := w.Commit(message, &git.CommitOptions{
+		Author: gitAuthor(),
+	})
+	if err != nil {
+		return "", err
+	}
+	return hash.String(), nil
+}
+
 // gitAuthor loads the user identity from the global git config.
 // Falls back to a generic "hdf" identity if the config is unavailable.
 func gitAuthor() *object.Signature {
@@ -216,6 +244,34 @@ func (r *Repo) HeadSHA() (string, error) {
 		return "", err
 	}
 	return head.Hash().String(), nil
+}
+
+// ReadFileFromBranch returns the bytes of repoRelPath from the given branch's
+// committed tree. Returns nil, nil when the branch or file does not exist.
+func (r *Repo) ReadFileFromBranch(branch, repoRelPath string) ([]byte, error) {
+	ref, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	commit, err := r.r.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, err
+	}
+	file, err := commit.File(repoRelPath)
+	if err != nil {
+		if errors.Is(err, object.ErrFileNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	contents, err := file.Contents()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(contents), nil
 }
 
 // CommitCount returns the total number of commits reachable from HEAD.
@@ -296,4 +352,169 @@ func (r *Repo) HasUnpushedCommits(branch, base string) (bool, error) {
 		return false, err
 	}
 	return !merged, nil
+}
+
+// BranchFile is a file to be written into a branch via CommitFilesToBranch.
+type BranchFile struct {
+	RepoRelPath string // slash-separated path relative to repo root
+	Content     []byte
+}
+
+// CommitFilesToBranch writes the given files directly to the named branch
+// using git plumbing without touching the working tree or index. Safe to call
+// while a different branch is checked out.
+func (r *Repo) CommitFilesToBranch(branch string, files []BranchFile, message string) (string, error) {
+	storer := r.r.Storer
+
+	// Resolve current branch state (parent commit + root tree).
+	var treeHash, parentHash plumbing.Hash
+	ref, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err == nil {
+		parentHash = ref.Hash()
+		parent, err := r.r.CommitObject(parentHash)
+		if err != nil {
+			return "", fmt.Errorf("reading parent commit: %w", err)
+		}
+		treeHash = parent.TreeHash
+	}
+	// If the branch doesn't exist yet, treeHash is zero (empty tree).
+
+	// Apply each file, updating the root tree incrementally.
+	for _, f := range files {
+		blobHash, err := storeBlobObject(storer, f.Content)
+		if err != nil {
+			return "", fmt.Errorf("storing blob %s: %w", f.RepoRelPath, err)
+		}
+		parts := strings.Split(f.RepoRelPath, "/")
+		treeHash, err = upsertTreeEntry(r.r, storer, treeHash, parts, blobHash)
+		if err != nil {
+			return "", fmt.Errorf("updating tree for %s: %w", f.RepoRelPath, err)
+		}
+	}
+
+	// Build and store the commit object.
+	author := gitAuthor()
+	c := &object.Commit{
+		Author:    *author,
+		Committer: *author,
+		Message:   message,
+		TreeHash:  treeHash,
+	}
+	if !parentHash.IsZero() {
+		c.ParentHashes = []plumbing.Hash{parentHash}
+	}
+	obj := storer.NewEncodedObject()
+	if err := c.Encode(obj); err != nil {
+		return "", fmt.Errorf("encoding commit: %w", err)
+	}
+	commitHash, err := storer.SetEncodedObject(obj)
+	if err != nil {
+		return "", fmt.Errorf("storing commit: %w", err)
+	}
+
+	// Advance the branch ref.
+	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), commitHash)
+	if err := storer.SetReference(newRef); err != nil {
+		return "", fmt.Errorf("updating branch ref: %w", err)
+	}
+	return commitHash.String(), nil
+}
+
+// storeBlobObject writes raw content as a git blob and returns its hash.
+func storeBlobObject(storer interface {
+	NewEncodedObject() plumbing.EncodedObject
+	SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error)
+}, content []byte,
+) (plumbing.Hash, error) {
+	obj := storer.NewEncodedObject()
+	obj.SetType(plumbing.BlobObject)
+	obj.SetSize(int64(len(content)))
+	w, err := obj.Writer()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if _, err := w.Write(content); err != nil {
+		_ = w.Close()
+		return plumbing.ZeroHash, err
+	}
+	if err := w.Close(); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return storer.SetEncodedObject(obj)
+}
+
+// upsertTreeEntry recursively updates a tree so that the file described by
+// pathParts ends up pointing to blobHash. Returns the hash of the new root tree.
+func upsertTreeEntry(
+	gitRepo *git.Repository,
+	storer interface {
+		NewEncodedObject() plumbing.EncodedObject
+		SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error)
+	},
+	treeHash plumbing.Hash,
+	pathParts []string,
+	blobHash plumbing.Hash,
+) (plumbing.Hash, error) {
+	// Load existing entries (empty if tree is zero).
+	var entries []object.TreeEntry
+	if !treeHash.IsZero() {
+		tree, err := gitRepo.TreeObject(treeHash)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		entries = make([]object.TreeEntry, len(tree.Entries))
+		copy(entries, tree.Entries)
+	}
+
+	name := pathParts[0]
+
+	if len(pathParts) == 1 {
+		// Leaf: update or insert a blob entry.
+		found := false
+		for i, e := range entries {
+			if e.Name == name {
+				entries[i] = object.TreeEntry{Name: name, Mode: filemode.Regular, Hash: blobHash}
+				found = true
+				break
+			}
+		}
+		if !found {
+			entries = append(entries, object.TreeEntry{Name: name, Mode: filemode.Regular, Hash: blobHash})
+		}
+	} else {
+		// Intermediate directory: descend, then update the subtree entry.
+		var subHash plumbing.Hash
+		for _, e := range entries {
+			if e.Name == name {
+				subHash = e.Hash
+				break
+			}
+		}
+		newSubHash, err := upsertTreeEntry(gitRepo, storer, subHash, pathParts[1:], blobHash)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		found := false
+		for i, e := range entries {
+			if e.Name == name {
+				entries[i] = object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: newSubHash}
+				found = true
+				break
+			}
+		}
+		if !found {
+			entries = append(entries, object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: newSubHash})
+		}
+	}
+
+	// go-git requires tree entries sorted by treeEntrySortName (dirs get "/").
+	sort.Sort(object.TreeEntrySorter(entries))
+
+	// Store the updated tree object.
+	tree := &object.Tree{Entries: entries}
+	obj := storer.NewEncodedObject()
+	if err := tree.Encode(obj); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return storer.SetEncodedObject(obj)
 }

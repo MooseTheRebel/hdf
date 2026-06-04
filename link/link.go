@@ -61,6 +61,18 @@ func Enroll(homePath, repoDir string) (string, error) {
 	return enrollWithHome(homePath, repoDir, home)
 }
 
+// EnrollInHome is Enroll with an explicit homeDir; used by tests and callers
+// that already hold the home directory path.
+func EnrollInHome(homePath, repoDir, homeDir string) (string, error) {
+	return enrollWithHome(homePath, repoDir, homeDir)
+}
+
+// RepoPathForHome is RepoPathFor with an explicit homeDir; used by tests and
+// callers that already hold the home directory path.
+func RepoPathForHome(homePath, repoDir, homeDir string) (string, error) {
+	return repoPathForHome(homePath, repoDir, homeDir)
+}
+
 func enrollWithHome(homePath, repoDir, home string) (string, error) {
 	dst, err := repoPathForHome(homePath, repoDir, home)
 	if err != nil {
@@ -68,6 +80,11 @@ func enrollWithHome(homePath, repoDir, home string) (string, error) {
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", fmt.Errorf("creating repo dirs: %w", err)
+	}
+	// Already enrolled: homePath is a symlink pointing at dst. Copying would
+	// open src and dst as the same file, truncating it before reading.
+	if target, err := os.Readlink(homePath); err == nil && target == dst {
+		return HashFile(dst)
 	}
 	if err := copyFile(homePath, dst); err != nil {
 		return "", fmt.Errorf("copying to repo: %w", err)
