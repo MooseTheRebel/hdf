@@ -274,6 +274,36 @@ func (r *Repo) ReadFileFromBranch(branch, repoRelPath string) ([]byte, error) {
 	return []byte(contents), nil
 }
 
+// ReadFileFromRemoteBranch returns the bytes of repoRelPath from the given
+// remote tracking branch (e.g. remote="origin", branch="main"). This reads
+// refs/remotes/<remote>/<branch>, which is updated by Fetch without touching
+// local branch refs. Returns nil, nil when the ref or file does not exist.
+func (r *Repo) ReadFileFromRemoteBranch(remote, branch, repoRelPath string) ([]byte, error) {
+	ref, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, branch), true)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	commit, err := r.r.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, err
+	}
+	file, err := commit.File(repoRelPath)
+	if err != nil {
+		if errors.Is(err, object.ErrFileNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	contents, err := file.Contents()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(contents), nil
+}
+
 // CommitCount returns the total number of commits reachable from HEAD.
 func (r *Repo) CommitCount() (int, error) {
 	head, err := r.r.Head()
@@ -320,6 +350,25 @@ func (r *Repo) HasNewCommitsOnMain(lastCommitSHA string) (bool, error) {
 		return false, err
 	}
 	return ref.Hash().String() != lastCommitSHA, nil
+}
+
+// BranchSHA returns the current HEAD SHA of a local branch.
+func (r *Repo) BranchSHA(branch string) (string, error) {
+	ref, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		return "", err
+	}
+	return ref.Hash().String(), nil
+}
+
+// RemoteBranchSHA returns the SHA of a remote tracking branch
+// (refs/remotes/<remote>/<branch>), updated by Fetch without touching local refs.
+func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
+	ref, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, branch), true)
+	if err != nil {
+		return "", err
+	}
+	return ref.Hash().String(), nil
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.

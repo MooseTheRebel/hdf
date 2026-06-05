@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -41,7 +42,17 @@ func (a *App) GetDiffContent() string {
 	}
 
 	currentURL := a.diffURLs[a.currentIndex]
-	resp, err := http.Get(currentURL)
+	parentCtx := a.ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
+	if err != nil {
+		return fmt.Sprintf("Error creating request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Sprintf("Error fetching diff: %v", err)
 	}
