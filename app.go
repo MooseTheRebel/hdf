@@ -41,7 +41,11 @@ func (a *App) GetDiffContent() string {
 	}
 
 	currentURL := a.diffURLs[a.currentIndex]
-	resp, err := http.Get(currentURL)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, currentURL, nil)
+	if err != nil {
+		return fmt.Sprintf("Error creating request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Sprintf("Error fetching diff: %v", err)
 	}

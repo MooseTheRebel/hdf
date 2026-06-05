@@ -2,7 +2,7 @@ package config
 
 import (
 	"bytes"
-	"path/filepath"
+	"path"
 
 	"github.com/BurntSushi/toml"
 )
@@ -60,13 +60,13 @@ func DefaultSharedSettings() *SharedSettings {
 // blocklist). An explicit empty slice means the operator intentionally cleared
 // the list and is left untouched.
 func (s *SharedSettings) ApplyDefaults() {
-	if s.NotifyThreshold == 0 {
+	if s.NotifyThreshold <= 0 {
 		s.NotifyThreshold = DefaultNotifyThreshold
 	}
-	if s.SyncIntervalMinutes == 0 {
+	if s.SyncIntervalMinutes <= 0 {
 		s.SyncIntervalMinutes = DefaultSyncIntervalMinutes
 	}
-	if s.NotifyCooldownMinutes == 0 {
+	if s.NotifyCooldownMinutes <= 0 {
 		s.NotifyCooldownMinutes = DefaultNotifyCooldownMinutes
 	}
 	if s.IgnoredPaths == nil {
@@ -78,9 +78,9 @@ func (s *SharedSettings) ApplyDefaults() {
 // path and patterns are expected in ~/... form (e.g. "~/.ssh/id_rsa").
 // A single-level wildcard (*) matches any filename but not a path separator,
 // so "~/.ssh/*" blocks "~/.ssh/id_rsa" but not "~/.ssh/sub/key".
-func IsIgnored(path string, patterns []string) bool {
+func IsIgnored(p string, patterns []string) bool {
 	for _, pat := range patterns {
-		if matched, _ := filepath.Match(pat, path); matched {
+		if matched, _ := path.Match(pat, p); matched {
 			return true
 		}
 	}

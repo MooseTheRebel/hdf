@@ -5,16 +5,29 @@ linters:
   default: none
   enable:
     - bodyclose
+    - cyclop
     - errcheck
+    - exhaustive
     - goconst
     - gocritic
+    - gosec
     - govet
     - ineffassign
     - misspell
+    - noctx
     - revive
     - staticcheck
     - unused
   settings:
+    cyclop:
+      max-complexity: 30
+    gosec:
+      excludes:
+        - G107  # HTTP request with variable URL — update checker is intentional
+        - G115  # int→byte conversion — intentional bit manipulation in tests
+        - G301  # dir perms 0755 — standard for user-accessible dotfile dirs
+        - G304  # file path via variable — dotfiles manager reads user paths by design
+        - G306  # file perms 0644 — standard for dotfiles
     revive:
       rules:
         - name: exported
@@ -26,6 +39,10 @@ linters:
       - third_party$
       - builtin$
       - examples$
+    rules:
+      - linters:
+          - cyclop
+        path: _test\.go
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

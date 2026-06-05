@@ -351,7 +351,7 @@ func TestMultiHostIntegration(t *testing.T) {
 	// --- run one sync cycle per host ---
 	for i, spec := range hostSpecs {
 		env := envs[i]
-		if err := syncWithHome(env.cfgPath, env.statePath, env.notifier, env.homeDir); err != nil {
+		if _, err := syncWithHome(env.cfgPath, env.statePath, env.notifier, env.homeDir); err != nil {
 			t.Fatalf("host %s syncWithHome: %v", spec.branch, err)
 		}
 	}

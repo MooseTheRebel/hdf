@@ -28,21 +28,18 @@ func Run(cfgPath string) error {
 	if r.RemoteURL() == "" {
 		return fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
 	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("getting home dir: %w", err)
+	}
 
 	fmt.Fprintf(os.Stderr, "hdf daemon started\n")
 	statePath := config.DefaultStatePath()
 	for {
-		if err := Sync(cfgPath, statePath, nil); err != nil {
+		interval, err := syncWithHome(cfgPath, statePath, nil, homeDir)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
-		}
-		interval := time.Duration(config.DefaultSyncIntervalMinutes) * time.Minute
-		if freshR, err := repo.Open(cfg.LocalDotfilesDir); err == nil {
-			if ssBytes, err := freshR.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile); err == nil && len(ssBytes) > 0 {
-				if ss, err := config.SharedSettingsFromBytes(ssBytes); err == nil {
-					ss.ApplyDefaults()
-					interval = time.Duration(ss.SyncIntervalMinutes) * time.Minute
-				}
-			}
+			interval = time.Duration(config.DefaultSyncIntervalMinutes) * time.Minute
 		}
 		fmt.Fprintf(os.Stderr, "next sync in %s\n", interval)
 		time.Sleep(interval)
@@ -56,36 +53,38 @@ func Sync(cfgPath, statePath string, n notify.Notifier) error {
 	if err != nil {
 		return fmt.Errorf("getting home dir: %w", err)
 	}
-	return syncWithHome(cfgPath, statePath, n, homeDir)
+	_, err = syncWithHome(cfgPath, statePath, n, homeDir)
+	return err
 }
 
 // syncWithHome is the testable core of Sync with an injected homeDir.
-// Tests use temp directories as homeDir instead of os.UserHomeDir().
-func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) error {
+// It returns the next sync interval derived from SharedSettings so the caller
+// can reuse it without a redundant repo read.
+func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) (time.Duration, error) {
 	if n == nil {
 		n = notify.Default
 	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return 0, fmt.Errorf("loading config: %w", err)
 	}
 
 	state, err := config.LoadState(statePath)
 	if err != nil {
-		return fmt.Errorf("loading state: %w", err)
+		return 0, fmt.Errorf("loading state: %w", err)
 	}
 
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
-		return fmt.Errorf("opening repo at %s: %w", cfg.LocalDotfilesDir, err)
+		return 0, fmt.Errorf("opening repo at %s: %w", cfg.LocalDotfilesDir, err)
 	}
 
 	if r.RemoteURL() == "" {
-		return fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
+		return 0, fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
 	}
 	if err := r.Fetch(); err != nil {
-		return fmt.Errorf("fetching from remote: %w", err)
+		return 0, fmt.Errorf("fetching from remote: %w", err)
 	}
 
 	// 1. Check if main has advanced past our tracked commit.
@@ -104,13 +103,14 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 			ss = parsed
 		}
 	}
+	interval := time.Duration(ss.SyncIntervalMinutes) * time.Minute
 	threshold := ss.NotifyThreshold
 	cooldown := time.Duration(ss.NotifyCooldownMinutes) * time.Minute
 
 	// 3. Count total uncommitted hunks across all managed files.
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
-		return fmt.Errorf("loading registry: %w", err)
+		return 0, fmt.Errorf("loading registry: %w", err)
 	}
 
 	totalHunks := 0
@@ -169,7 +169,7 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 	}
 
 	state.LastSync = time.Now()
-	return config.SaveState(statePath, state)
+	return interval, config.SaveState(statePath, state)
 }
 
 // countHunks returns the number of contiguous non-Equal diff regions between
