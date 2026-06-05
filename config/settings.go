@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"path"
 
 	"github.com/BurntSushi/toml"
@@ -87,12 +88,19 @@ func IsIgnored(p string, patterns []string) bool {
 	return false
 }
 
-// SharedSettingsFromBytes parses TOML-encoded bytes into a SharedSettings.
-// Call ApplyDefaults after parsing to fill in any omitted fields.
+// SharedSettingsFromBytes parses TOML-encoded bytes into a SharedSettings and
+// validates all IgnoredPaths glob patterns. Returns an error immediately if any
+// pattern is malformed so operators see the problem at load time rather than
+// silently failing open at enroll time.
 func SharedSettingsFromBytes(data []byte) (*SharedSettings, error) {
 	var s SharedSettings
 	if _, err := toml.Decode(string(data), &s); err != nil {
 		return nil, err
+	}
+	for _, pat := range s.IgnoredPaths {
+		if _, err := path.Match(pat, ""); err != nil {
+			return nil, fmt.Errorf("invalid ignored_paths pattern %q: %w", pat, err)
+		}
 	}
 	return &s, nil
 }

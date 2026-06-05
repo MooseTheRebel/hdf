@@ -352,6 +352,15 @@ func (r *Repo) HasNewCommitsOnMain(lastCommitSHA string) (bool, error) {
 	return ref.Hash().String() != lastCommitSHA, nil
 }
 
+// BranchSHA returns the current HEAD SHA of a local branch.
+func (r *Repo) BranchSHA(branch string) (string, error) {
+	ref, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		return "", err
+	}
+	return ref.Hash().String(), nil
+}
+
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.
 func (r *Repo) HasUnpushedCommits(branch, base string) (bool, error) {
 	branchRef, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)

@@ -16,6 +16,7 @@ const defaultStatePath = "~/.config/hdf/state.toml"
 type State struct {
 	LastSync       time.Time `toml:"last_sync"`
 	LastCommit     string    `toml:"last_commit"`
+	LastMainCommit string    `toml:"last_main_commit"`
 	LastNotifiedAt time.Time `toml:"last_notified_at"`
 }
 

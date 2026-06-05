@@ -42,7 +42,7 @@ func (f *fakeNotifier) driftCount() int {
 func TestRunFailsWhenNotInitialized(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 
-	err := Run(cfgPath)
+	err := Run(t.Context(), cfgPath)
 	if err == nil {
 		t.Fatal("expected error when config missing, got nil")
 	}
@@ -81,7 +81,7 @@ func TestRunFailsWhenNoRemote(t *testing.T) {
 
 	cfgPath := saveConfig(t, &config.Config{LocalDotfilesDir: workDir, GitPushTarget: "", Branch: testHostBranch})
 
-	err := Run(cfgPath)
+	err := Run(t.Context(), cfgPath)
 	if err == nil {
 		t.Fatal("expected error when no remote configured, got nil")
 	}

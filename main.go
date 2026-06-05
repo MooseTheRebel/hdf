@@ -145,57 +145,62 @@ func branchName() string {
 	return "host-" + string(b)
 }
 
-// setupLocalRepo runs the two-stage local wizard (working copy + push target).
-// Returns the opened repo, resolved paths, and the git push URL.
-func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
-	// Stage A — working copy (local_dotfiles_dir)
-	const defaultLocalPath = "~/.local/share/hdf/repo"
-	fmt.Printf("Local working copy path [%s]: ", defaultLocalPath)
-	pathInput, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, "", "", fmt.Errorf("reading input: %w", err)
+// resolveAndConfirmPath expands a raw path string, and if it is relative,
+// resolves it to absolute and asks the user to confirm.
+func resolveAndConfirmPath(reader *bufio.Reader, raw string) (string, error) {
+	expanded := config.ExpandPath(raw)
+	if filepath.IsAbs(expanded) {
+		return expanded, nil
 	}
-	input := strings.TrimSpace(pathInput)
+	abs, err := filepath.Abs(expanded)
+	if err != nil {
+		return "", fmt.Errorf("resolving path: %w", err)
+	}
+	fmt.Printf("  → Resolved to: %s\n", abs)
+	fmt.Print("  Confirm? [y/N]: ")
+	confirm, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("reading confirmation: %w", err)
+	}
+	if !isYes(confirm) {
+		return "", fmt.Errorf("aborted")
+	}
+	return abs, nil
+}
+
+// readAndResolvePath reads a path from reader (applying defaultVal when blank)
+// then delegates to resolveAndConfirmPath.
+func readAndResolvePath(reader *bufio.Reader, defaultVal string) (string, error) {
+	raw, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("reading input: %w", err)
+	}
+	input := strings.TrimSpace(raw)
 	if input == "" {
-		input = defaultLocalPath
+		input = defaultVal
 	}
-	expanded := config.ExpandPath(input)
+	return resolveAndConfirmPath(reader, input)
+}
 
-	// Relative paths are ambiguous: resolve to absolute and ask the user
-	// to confirm before creating anything on disk.
-	if !filepath.IsAbs(expanded) {
-		abs, err := filepath.Abs(expanded)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("resolving path: %w", err)
-		}
-		expanded = abs
-		fmt.Printf("  → Resolved to: %s\n", expanded)
-		fmt.Print("  Confirm? [y/N]: ")
-		confirmStr, err := reader.ReadString('\n')
-		if err != nil {
-			return nil, "", "", fmt.Errorf("reading confirmation: %w", err)
-		}
-		if !isYes(confirmStr) {
-			return nil, "", "", fmt.Errorf("aborted")
-		}
-	}
-
-	repoPath := expanded
-	if err := os.MkdirAll(expanded, 0o755); err != nil {
-		return nil, "", "", fmt.Errorf("creating repo directory: %w", err)
-	}
-	r, err := repo.Open(expanded)
+// openOrInitRepo opens an existing git repository at path, or initialises a
+// new one if none exists.
+func openOrInitRepo(path string) (*repo.Repo, error) {
+	r, err := repo.Open(path)
 	if err != nil {
-		r, err = repo.Init(expanded)
+		r, err = repo.Init(path)
 		if err != nil {
-			return nil, "", "", fmt.Errorf("initializing repo: %w", err)
+			return nil, fmt.Errorf("initializing repo: %w", err)
 		}
-		fmt.Printf("Initialized new git repository at %s\n", expanded)
-	} else {
-		fmt.Printf("Opened existing repository at %s\n", expanded)
+		fmt.Printf("Initialized new git repository at %s\n", path)
+		return r, nil
 	}
+	fmt.Printf("Opened existing repository at %s\n", path)
+	return r, nil
+}
 
-	// Stage B — push target (git_push_target)
+// setupBareTarget interactively reads the push target (URL or local path) and
+// initialises a bare repository when a local path is given.
+func setupBareTarget(reader *bufio.Reader, repoPath string) (string, error) {
 	const defaultBarePath = "~/.local/share/hdf/repo-bare"
 	fmt.Println()
 	fmt.Println("Where should changes be pushed?")
@@ -204,52 +209,57 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 	fmt.Printf("Push target [%s]: ", defaultBarePath)
 	pushInput, err := reader.ReadString('\n')
 	if err != nil {
-		return nil, "", "", fmt.Errorf("reading push target: %w", err)
+		return "", fmt.Errorf("reading push target: %w", err)
 	}
 	pushRaw := strings.TrimSpace(pushInput)
 	if pushRaw == "" {
 		pushRaw = defaultBarePath
 	}
-
-	var gitURL string
 	if isRemoteURL(pushRaw) {
-		gitURL = pushRaw
-	} else {
-		pushExpanded := config.ExpandPath(pushRaw)
-		if !filepath.IsAbs(pushExpanded) {
-			abs, err := filepath.Abs(pushExpanded)
-			if err != nil {
-				return nil, "", "", fmt.Errorf("resolving push target path: %w", err)
-			}
-			pushExpanded = abs
-			fmt.Printf("  → Resolved to: %s\n", pushExpanded)
-			fmt.Print("  Confirm? [y/N]: ")
-			confirmStr, err := reader.ReadString('\n')
-			if err != nil {
-				return nil, "", "", fmt.Errorf("reading confirmation: %w", err)
-			}
-			if !isYes(confirmStr) {
-				return nil, "", "", fmt.Errorf("aborted")
-			}
-		}
-		if pushExpanded == repoPath {
-			return nil, "", "", fmt.Errorf("push target must differ from working copy (%s)", repoPath)
-		}
-		if err := os.MkdirAll(pushExpanded, 0o755); err != nil {
-			return nil, "", "", fmt.Errorf("creating bare repo directory: %w", err)
-		}
-		_, created, err := repo.InitOrOpenBare(pushExpanded)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("initializing bare repo: %w", err)
-		}
-		if created {
-			fmt.Printf("Initialized bare repository at %s\n", pushExpanded)
-		} else {
-			fmt.Printf("Opened existing bare repository at %s\n", pushExpanded)
-		}
-		gitURL = localPathToFileURL(pushExpanded)
+		return pushRaw, nil
 	}
+	pushExpanded, err := resolveAndConfirmPath(reader, pushRaw)
+	if err != nil {
+		return "", err
+	}
+	if pushExpanded == repoPath {
+		return "", fmt.Errorf("push target must differ from working copy (%s)", repoPath)
+	}
+	if err := os.MkdirAll(pushExpanded, 0o755); err != nil {
+		return "", fmt.Errorf("creating bare repo directory: %w", err)
+	}
+	_, created, err := repo.InitOrOpenBare(pushExpanded)
+	if err != nil {
+		return "", fmt.Errorf("initializing bare repo: %w", err)
+	}
+	if created {
+		fmt.Printf("Initialized bare repository at %s\n", pushExpanded)
+	} else {
+		fmt.Printf("Opened existing bare repository at %s\n", pushExpanded)
+	}
+	return localPathToFileURL(pushExpanded), nil
+}
 
+// setupLocalRepo runs the two-stage local wizard (working copy + push target).
+// Returns the opened repo, resolved paths, and the git push URL.
+func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
+	const defaultLocalPath = "~/.local/share/hdf/repo"
+	fmt.Printf("Local working copy path [%s]: ", defaultLocalPath)
+	repoPath, err := readAndResolvePath(reader, defaultLocalPath)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		return nil, "", "", fmt.Errorf("creating repo directory: %w", err)
+	}
+	r, err := openOrInitRepo(repoPath)
+	if err != nil {
+		return nil, "", "", err
+	}
+	gitURL, err := setupBareTarget(reader, repoPath)
+	if err != nil {
+		return nil, "", "", err
+	}
 	if err := r.AddRemote("origin", gitURL); err != nil {
 		return nil, "", "", fmt.Errorf("wiring origin remote: %w", err)
 	}
@@ -285,6 +295,27 @@ func setupRemoteRepo(reader *bufio.Reader, cloneDir string) (*repo.Repo, string,
 	}
 	fmt.Printf("Cloned repository to %s\n", repoPath)
 	return r, repoPath, gitURL, nil
+}
+
+// ensureInitialCommit returns the HEAD SHA of r. If the repo has no commits
+// yet it creates a minimal .hdf/.gitkeep commit first.
+func ensureInitialCommit(r *repo.Repo, repoPath string) (string, error) {
+	headSHA, err := r.HeadSHA()
+	if err == nil {
+		return headSHA, nil
+	}
+	keepFile := filepath.Join(repoPath, ".hdf", ".gitkeep")
+	if err := os.MkdirAll(filepath.Dir(keepFile), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(keepFile, []byte(""), 0o644); err != nil {
+		return "", err
+	}
+	headSHA, err = r.CommitFile(".hdf/.gitkeep", "hdf: initial commit")
+	if err != nil {
+		return "", fmt.Errorf("creating initial commit: %w", err)
+	}
+	return headSHA, nil
 }
 
 // runInit runs the interactive init wizard.
@@ -331,19 +362,9 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	}
 
 	// Ensure there is at least one commit so branching works.
-	headSHA, err := r.HeadSHA()
+	headSHA, err := ensureInitialCommit(r, repoPath)
 	if err != nil {
-		keepFile := filepath.Join(repoPath, ".hdf", ".gitkeep")
-		if err := os.MkdirAll(filepath.Dir(keepFile), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(keepFile, []byte(""), 0o644); err != nil {
-			return err
-		}
-		headSHA, err = r.CommitFile(".hdf/.gitkeep", "hdf: initial commit")
-		if err != nil {
-			return fmt.Errorf("creating initial commit: %w", err)
-		}
+		return err
 	}
 
 	hostname := branchName()
@@ -361,7 +382,7 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	if err := config.Save(cfgPath, cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)
 	}
-	state := &config.State{LastCommit: headSHA}
+	state := &config.State{LastCommit: headSHA, LastMainCommit: headSHA}
 	if err := config.SaveState(statePath, state); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -416,47 +437,85 @@ func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) erro
 	return nil
 }
 
-// runEnroll copies filePath into the hdf repo, commits it to the hostname
-// branch, registers an empty stub in main, and pushes both branches.
-// homeDir is used as the home directory for path resolution; callers should
-// pass os.UserHomeDir() in production and a temp dir in tests.
-func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) error {
-	// Expand ~/... using the provided homeDir.
-	expanded := filePath
+// expandAndValidate expands filePath relative to homeDir, verifies the file
+// exists, and returns both the absolute path and its ~/... normalised form.
+func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, err error) {
+	expanded = filePath
 	if strings.HasPrefix(filePath, "~/") {
 		expanded = filepath.Join(homeDir, filePath[2:])
 	}
-
 	if _, err := os.Stat(expanded); err != nil {
-		return fmt.Errorf("file not found: %s", expanded)
+		return "", "", fmt.Errorf("file not found: %s", expanded)
 	}
-
-	// Normalise to ~/... form early — needed for the ignored-paths guard.
-	tildeFile := filePath
+	tildeFile = filePath
 	if !strings.HasPrefix(filePath, "~/") {
 		if rel, err := filepath.Rel(homeDir, expanded); err == nil && !strings.HasPrefix(rel, "..") {
 			tildeFile = "~/" + filepath.ToSlash(rel)
 		}
 	}
+	return expanded, tildeFile, nil
+}
 
-	// Open the repo before touching the filesystem so we can read shared
-	// settings and fail fast on a missing/invalid repo.
+// ignoredPathsFromRemote returns the fleet-wide ignored-paths list from
+// SharedSettings on origin/main, or the package defaults when unavailable.
+func ignoredPathsFromRemote(r *repo.Repo) []string {
+	ssBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
+	if len(ssBytes) == 0 {
+		return config.DefaultIgnoredPaths
+	}
+	ss, err := config.SharedSettingsFromBytes(ssBytes)
+	if err != nil {
+		return config.DefaultIgnoredPaths
+	}
+	ss.ApplyDefaults()
+	return ss.IgnoredPaths
+}
+
+// stageAndCommit stages relName and the managed registry, then commits.
+func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
+	if err := r.StageFile(relName); err != nil {
+		return "", fmt.Errorf("staging file: %w", err)
+	}
+	if err := r.StageFile(".hdf/managed.toml"); err != nil {
+		return "", fmt.Errorf("staging registry: %w", err)
+	}
+	sha, err := r.CommitStaged(fmt.Sprintf("hdf: enroll %s", filePath))
+	if err != nil {
+		return "", fmt.Errorf("committing: %w", err)
+	}
+	return sha, nil
+}
+
+// pushBranches pushes the hostname branch and main when a remote is configured.
+func pushBranches(r *repo.Repo, cfg *config.Config) error {
+	if cfg.GitPushTarget == "" {
+		return nil
+	}
+	if err := r.Push(cfg.Branch); err != nil {
+		return fmt.Errorf("pushing hostname branch: %w", err)
+	}
+	if err := r.Push("main"); err != nil {
+		return fmt.Errorf("pushing main: %w", err)
+	}
+	return nil
+}
+
+// runEnroll copies filePath into the hdf repo, commits it to the hostname
+// branch, registers an empty stub in main, and pushes both branches.
+// homeDir is used as the home directory for path resolution; callers should
+// pass os.UserHomeDir() in production and a temp dir in tests.
+func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) error {
+	expanded, tildeFile, err := expandAndValidate(filePath, homeDir)
+	if err != nil {
+		return err
+	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
 	}
 
-	// Guard: reject files that match the fleet-wide ignored-paths list.
-	// Fall back to package defaults when shared settings are unavailable
-	// (e.g. before the first sync has fetched origin/main).
-	ignoredPaths := config.DefaultIgnoredPaths
-	if ssBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile); len(ssBytes) > 0 {
-		if ss, err := config.SharedSettingsFromBytes(ssBytes); err == nil {
-			ss.ApplyDefaults()
-			ignoredPaths = ss.IgnoredPaths
-		}
-	}
-	if config.IsIgnored(tildeFile, ignoredPaths) {
+	if config.IsIgnored(tildeFile, ignoredPathsFromRemote(r)) {
 		return fmt.Errorf("%s matches an ignored path — edit %s on the main branch to override",
 			filePath, config.SharedSettingsFile)
 	}
@@ -475,7 +534,6 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 		return fmt.Errorf("computing relative path: %w", err)
 	}
 
-	// Update hostname branch registry with the real content hash.
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
@@ -485,32 +543,17 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 		return fmt.Errorf("saving registry: %w", err)
 	}
 
-	// Commit file + registry to hostname branch.
-	if err := r.StageFile(relName); err != nil {
-		return fmt.Errorf("staging file: %w", err)
-	}
-	if err := r.StageFile(".hdf/managed.toml"); err != nil {
-		return fmt.Errorf("staging registry: %w", err)
-	}
-	sha, err := r.CommitStaged(fmt.Sprintf("hdf: enroll %s", filePath))
+	sha, err := stageAndCommit(r, relName, filePath)
 	if err != nil {
-		return fmt.Errorf("committing: %w", err)
-	}
-
-	// Register an empty stub in main so other machines can discover the file.
-	slashRel := filepath.ToSlash(relName)
-	if err := updateMainRegistry(r, tildeFile, slashRel, filePath); err != nil {
 		return err
 	}
 
-	// Push hostname branch then main if a remote is configured.
-	if cfg.GitPushTarget != "" {
-		if err := r.Push(cfg.Branch); err != nil {
-			return fmt.Errorf("pushing hostname branch: %w", err)
-		}
-		if err := r.Push("main"); err != nil {
-			return fmt.Errorf("pushing main: %w", err)
-		}
+	if err := updateMainRegistry(r, tildeFile, filepath.ToSlash(relName), filePath); err != nil {
+		return err
+	}
+
+	if err := pushBranches(r, cfg); err != nil {
+		return err
 	}
 
 	state, err := config.LoadState(statePath)
@@ -635,7 +678,7 @@ var daemonCmd = &cobra.Command{
 	Long:  `Runs a background loop that syncs every 30 minutes and sends OS notifications when action is needed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
-		return daemon.Run(cfgPath)
+		return daemon.Run(cmd.Context(), cfgPath)
 	},
 }
 

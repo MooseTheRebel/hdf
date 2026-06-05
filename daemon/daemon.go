@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"hdf/config"
 	"hdf/link"
@@ -13,10 +14,13 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
+const maxDiffFileSize = 1 << 20 // 1 MB
+
 // Run starts the hdf sync daemon, which syncs on a configurable interval indefinitely.
 // The interval is read from SharedSettings on the main branch after each sync cycle;
 // it defaults to DefaultSyncIntervalMinutes when no shared settings are available.
-func Run(cfgPath string) error {
+// Run returns when ctx is cancelled (graceful shutdown).
+func Run(ctx context.Context, cfgPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
@@ -42,7 +46,11 @@ func Run(cfgPath string) error {
 			interval = time.Duration(config.DefaultSyncIntervalMinutes) * time.Minute
 		}
 		fmt.Fprintf(os.Stderr, "next sync in %s\n", interval)
-		time.Sleep(interval)
+		select {
+		case <-time.After(interval):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -69,17 +77,14 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 	if err != nil {
 		return 0, fmt.Errorf("loading config: %w", err)
 	}
-
 	state, err := config.LoadState(statePath)
 	if err != nil {
 		return 0, fmt.Errorf("loading state: %w", err)
 	}
-
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return 0, fmt.Errorf("opening repo at %s: %w", cfg.LocalDotfilesDir, err)
 	}
-
 	if r.RemoteURL() == "" {
 		return 0, fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
 	}
@@ -87,22 +92,11 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 		return 0, fmt.Errorf("fetching from remote: %w", err)
 	}
 
-	// 1. Check if main has advanced past our tracked commit.
-	if state.LastCommit != "" {
-		behind, err := r.HasNewCommitsOnMain(state.LastCommit)
-		if err == nil && behind {
-			_ = n.Send("hdf", "New commits on main — merge into your branch")
-		}
-	}
+	// 1. Check if main has advanced since the last sync cycle.
+	checkMainProgress(state, r, n)
 
 	// 2. Read shared settings from origin/main (updated by Fetch above).
-	ss := config.DefaultSharedSettings()
-	if ssBytes, err := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile); err == nil && len(ssBytes) > 0 {
-		if parsed, err := config.SharedSettingsFromBytes(ssBytes); err == nil {
-			parsed.ApplyDefaults()
-			ss = parsed
-		}
-	}
+	ss := loadSharedSettings(r)
 	interval := time.Duration(ss.SyncIntervalMinutes) * time.Minute
 	threshold := ss.NotifyThreshold
 	cooldown := time.Duration(ss.NotifyCooldownMinutes) * time.Minute
@@ -112,47 +106,7 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 	if err != nil {
 		return 0, fmt.Errorf("loading registry: %w", err)
 	}
-
-	totalHunks := 0
-	for _, f := range reg.Files {
-		expanded := config.ExpandPath(f.Path)
-
-		diskBytes, err := os.ReadFile(expanded)
-		if err != nil {
-			continue
-		}
-
-		registryHash := f.Hash
-		for _, v := range f.Variants {
-			if v.Branch == cfg.Branch {
-				registryHash = v.Hash
-				break
-			}
-		}
-
-		diskHash, _ := link.HashFile(expanded)
-		if diskHash == registryHash {
-			continue // file is clean, skip diff
-		}
-
-		repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
-		if err != nil {
-			continue
-		}
-		rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
-		if err != nil {
-			continue
-		}
-		repoRelPath := filepath.ToSlash(rel)
-
-		committedBytes, err := r.ReadFileFromBranch(cfg.Branch, repoRelPath)
-		if err != nil || committedBytes == nil {
-			totalHunks++ // new or unreadable file counts as 1 hunk
-			continue
-		}
-
-		totalHunks += countHunks(string(committedBytes), string(diskBytes))
-	}
+	totalHunks := countDrift(reg, cfg, r, homeDir)
 
 	if totalHunks >= threshold {
 		if state.LastNotifiedAt.IsZero() || time.Since(state.LastNotifiedAt) >= cooldown {
@@ -170,6 +124,97 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 
 	state.LastSync = time.Now()
 	return interval, config.SaveState(statePath, state)
+}
+
+// checkMainProgress notifies if main has advanced past the last known commit and
+// updates state.LastMainCommit to the current main HEAD.
+func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
+	if state.LastMainCommit != "" {
+		behind, err := r.HasNewCommitsOnMain(state.LastMainCommit)
+		if err == nil && behind {
+			_ = n.Send("hdf", "New commits on main — merge into your branch")
+		}
+	}
+	if mainSHA, err := r.BranchSHA("main"); err == nil {
+		state.LastMainCommit = mainSHA
+	}
+}
+
+// loadSharedSettings reads SharedSettings from origin/main and returns the
+// parsed result. Falls back to package defaults on any error.
+func loadSharedSettings(r *repo.Repo) *config.SharedSettings {
+	ssBytes, err := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
+	if err != nil || len(ssBytes) == 0 {
+		return config.DefaultSharedSettings()
+	}
+	parsed, err := config.SharedSettingsFromBytes(ssBytes)
+	if err != nil {
+		return config.DefaultSharedSettings()
+	}
+	parsed.ApplyDefaults()
+	return parsed
+}
+
+// countDrift returns the total number of uncommitted diff hunks across all
+// files in the registry. Missing, unreadable, or oversized files each count
+// as one hunk.
+func countDrift(reg *config.Registry, cfg *config.Config, r *repo.Repo, homeDir string) int {
+	total := 0
+	for _, f := range reg.Files {
+		total += fileDrift(f, cfg, r, homeDir)
+	}
+	return total
+}
+
+// fileDrift returns the hunk count for a single managed file.
+func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir string) int {
+	expanded := config.ExpandPath(f.Path)
+
+	info, err := os.Stat(expanded)
+	if err != nil {
+		return 1 // missing or unreadable counts as drift
+	}
+	if info.Size() > maxDiffFileSize {
+		return 1 // oversized: skip diff, count as one hunk
+	}
+
+	diskBytes, err := os.ReadFile(expanded)
+	if err != nil {
+		return 1
+	}
+
+	registryHash := resolveHash(f, cfg.Branch)
+	diskHash, _ := link.HashFile(expanded)
+	if diskHash == registryHash {
+		return 0 // file is clean
+	}
+
+	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	if err != nil {
+		return 0
+	}
+	rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
+	if err != nil {
+		return 0
+	}
+
+	committedBytes, err := r.ReadFileFromBranch(cfg.Branch, filepath.ToSlash(rel))
+	if err != nil || committedBytes == nil {
+		return 1 // new or unreadable in repo counts as one hunk
+	}
+
+	return countHunks(string(committedBytes), string(diskBytes))
+}
+
+// resolveHash returns the hash for f on the given branch, falling back to the
+// base hash when no branch-specific variant exists.
+func resolveHash(f config.ManagedFile, branch string) string {
+	for _, v := range f.Variants {
+		if v.Branch == branch {
+			return v.Hash
+		}
+	}
+	return f.Hash
 }
 
 // countHunks returns the number of contiguous non-Equal diff regions between
