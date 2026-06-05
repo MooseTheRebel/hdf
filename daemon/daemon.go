@@ -127,17 +127,21 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 }
 
 // checkMainProgress notifies if main has advanced past the last known commit and
-// updates state.LastMainCommit to the current main HEAD.
+// updates state.LastMainCommit. It reads origin/main (updated by Fetch) so that
+// remote-only advances are detected; falls back to local main when the remote
+// tracking ref is absent.
 func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
-	if state.LastMainCommit != "" {
-		behind, err := r.HasNewCommitsOnMain(state.LastMainCommit)
-		if err == nil && behind {
-			_ = n.Send("hdf", "New commits on main — merge into your branch")
-		}
+	mainSHA, err := r.RemoteBranchSHA("origin", "main")
+	if err != nil {
+		mainSHA, err = r.BranchSHA("main")
 	}
-	if mainSHA, err := r.BranchSHA("main"); err == nil {
-		state.LastMainCommit = mainSHA
+	if err != nil {
+		return
 	}
+	if state.LastMainCommit != "" && state.LastMainCommit != mainSHA {
+		_ = n.Send("hdf", "New commits on main — merge into your branch")
+	}
+	state.LastMainCommit = mainSHA
 }
 
 // loadSharedSettings reads SharedSettings from origin/main and returns the
