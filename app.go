@@ -42,7 +42,11 @@ func (a *App) GetDiffContent() string {
 	}
 
 	currentURL := a.diffURLs[a.currentIndex]
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	parentCtx := a.ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
 	if err != nil {

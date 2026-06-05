@@ -46,9 +46,11 @@ func Run(ctx context.Context, cfgPath string) error {
 			interval = time.Duration(config.DefaultSyncIntervalMinutes) * time.Minute
 		}
 		fmt.Fprintf(os.Stderr, "next sync in %s\n", interval)
+		timer := time.NewTimer(interval)
 		select {
-		case <-time.After(interval):
+		case <-timer.C:
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
 		}
 	}
