@@ -443,6 +443,12 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 	expanded = filePath
 	if strings.HasPrefix(filePath, "~/") {
 		expanded = filepath.Join(homeDir, filePath[2:])
+	} else if !filepath.IsAbs(expanded) {
+		abs, err := filepath.Abs(expanded)
+		if err != nil {
+			return "", "", fmt.Errorf("resolving absolute path: %w", err)
+		}
+		expanded = abs
 	}
 	if _, err := os.Stat(expanded); err != nil {
 		return "", "", fmt.Errorf("file not found: %s", expanded)

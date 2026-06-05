@@ -497,6 +497,116 @@ func TestBranchNameFallbackFormat(t *testing.T) {
 	}
 }
 
+func TestExpandAndValidate(t *testing.T) {
+	const tildeBashrc = "~/.bashrc"
+
+	homeDir := t.TempDir()
+
+	// Create a real file inside homeDir for the success cases.
+	realFile := filepath.Join(homeDir, ".bashrc")
+	if err := os.WriteFile(realFile, []byte("# test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name         string
+		filePath     string
+		wantExpanded string
+		wantTilde    string
+		wantErr      bool
+	}{
+		{
+			name:         "tilde prefix",
+			filePath:     tildeBashrc,
+			wantExpanded: realFile,
+			wantTilde:    tildeBashrc,
+		},
+		{
+			name:         "absolute path inside home",
+			filePath:     realFile,
+			wantExpanded: realFile,
+			wantTilde:    tildeBashrc,
+		},
+		{
+			// Regression: relative path must be resolved to absolute so that
+			// filepath.Rel(homeDir, expanded) succeeds and the registry stores
+			// "~/.bashrc" rather than the raw relative string ".bashrc".
+			name:         "relative path resolved to tilde form",
+			filePath:     realFile, // use absolute as stand-in; real relative resolution tested via os.Chdir avoidance
+			wantExpanded: realFile,
+			wantTilde:    tildeBashrc,
+		},
+		{
+			name:     "missing file",
+			filePath: "~/.no-such-file",
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			expanded, tilde, err := expandAndValidate(tc.filePath, homeDir)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if expanded != tc.wantExpanded {
+				t.Errorf("expanded = %q, want %q", expanded, tc.wantExpanded)
+			}
+			if tilde != tc.wantTilde {
+				t.Errorf("tilde = %q, want %q", tilde, tc.wantTilde)
+			}
+		})
+	}
+}
+
+func TestExpandAndValidateRelativePath(t *testing.T) {
+	// This test is the direct regression for the bug: a bare filename like
+	// ".bashrc" passed to expandAndValidate must be resolved to an absolute
+	// path before filepath.Rel is called, so the registry entry is "~/.bashrc"
+	// and not the raw relative string.
+	//
+	// EvalSymlinks is needed on macOS where t.TempDir() returns a /var/...
+	// symlink but filepath.Abs resolves via the real /private/var/... path,
+	// which would cause filepath.Rel(homeDir, expanded) to mismatch.
+	rawHome := t.TempDir()
+	homeDir, err := filepath.EvalSymlinks(rawHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realFile := filepath.Join(homeDir, ".bashrc")
+	if err := os.WriteFile(realFile, []byte("# test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Change working directory to homeDir so that ".bashrc" resolves there.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(homeDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	expanded, tilde, err := expandAndValidate(".bashrc", homeDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if expanded != realFile {
+		t.Errorf("expanded = %q, want %q", expanded, realFile)
+	}
+	const wantTilde = "~/.bashrc"
+	if tilde != wantTilde {
+		t.Errorf("tilde = %q, want %s — relative path was not normalised to tilde form", tilde, wantTilde)
+	}
+}
+
 func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 	// Set up a local repo with a bare push target.
 	workDir := t.TempDir()
