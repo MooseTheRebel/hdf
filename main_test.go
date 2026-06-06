@@ -781,6 +781,53 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 	}
 }
 
+// Regression: runLink must be fully hermetic — it must use the homeDir it
+// receives, not os.UserHomeDir(), when resolving repo paths. Without the fix,
+// link.RepoPathFor calls os.UserHomeDir() internally, so a temp homeDir causes
+// filepath.Rel to produce a ".." prefix and every non-variant file fails.
+func TestRunLinkHermetic(t *testing.T) {
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+		t.Fatalf("runEnroll: %v", err)
+	}
+
+	// Remove the symlink to simulate a fresh machine needing re-linking.
+	if err := os.Remove(dotfile); err != nil {
+		t.Fatalf("removing symlink: %v", err)
+	}
+
+	if err := runLink(homeDir, cfg); err != nil {
+		t.Fatalf("runLink: %v", err)
+	}
+
+	info, err := os.Lstat(dotfile)
+	if err != nil {
+		t.Fatalf("Lstat after runLink: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("expected dotfile to be a symlink after runLink")
+	}
+}
+
 func TestRootCmdMigrationHook(t *testing.T) {
 	if rootCmd.PersistentPreRunE == nil {
 		t.Error("rootCmd.PersistentPreRunE must be set to wire up legacy config.toml migration")

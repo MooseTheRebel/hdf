@@ -461,8 +461,6 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 	dir, file := filepath.Split(expanded)
 	if rd, err := filepath.EvalSymlinks(dir); err == nil {
 		resolvedExpanded = filepath.Join(rd, file)
-	} else if re, err := filepath.EvalSymlinks(expanded); err == nil {
-		resolvedExpanded = re
 	}
 	rel, err := filepath.Rel(resolvedHome, resolvedExpanded)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
@@ -612,7 +610,13 @@ func runLink(homeDir string, cfg *config.Config) error {
 	}
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
-		repoFile, err := resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+		var repoFile string
+		var err error
+		if len(f.Variants) > 0 {
+			repoFile, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+		} else {
+			repoFile, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
 			continue
