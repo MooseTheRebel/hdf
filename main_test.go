@@ -11,6 +11,16 @@ import (
 	"testing"
 )
 
+// mustRel returns the relative path from base to target, fataling the test on error.
+func mustRel(t *testing.T, base, target string) string {
+	t.Helper()
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		t.Fatalf("filepath.Rel(%q, %q): %v", base, target, err)
+	}
+	return rel
+}
+
 // initPaths returns temp cfgPath and statePath inside a single temp dir.
 func initPaths(t *testing.T) (cfgPath, statePath string) {
 	t.Helper()
@@ -553,6 +563,20 @@ func TestExpandAndValidate(t *testing.T) {
 			// it can never be stored as an absolute path in the registry.
 			name:     "absolute path outside home returns error",
 			filePath: outsideFile,
+			wantErr:  true,
+		},
+		{
+			// Security: homeDir itself resolves to rel "." which must be rejected
+			// rather than producing the malformed canonical form "~/.".
+			name:     "home directory itself returns error",
+			filePath: homeDir,
+			wantErr:  true,
+		},
+		{
+			// Security: tilde-relative traversal (~/../other) expands outside home
+			// and must be rejected even though the path starts with "~/".
+			name:     "tilde traversal outside home returns error",
+			filePath: "~/" + mustRel(t, homeDir, outsideFile),
 			wantErr:  true,
 		},
 	}

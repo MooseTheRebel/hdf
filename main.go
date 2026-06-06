@@ -453,15 +453,11 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 	if _, err := os.Stat(expanded); err != nil {
 		return "", "", fmt.Errorf("file not found: %s", expanded)
 	}
-	tildeFile = filePath
-	if !strings.HasPrefix(filePath, "~/") {
-		if rel, err := filepath.Rel(homeDir, expanded); err == nil && !strings.HasPrefix(rel, "..") {
-			tildeFile = "~/" + filepath.ToSlash(rel)
-		}
-	}
-	if !strings.HasPrefix(tildeFile, "~/") {
+	rel, err := filepath.Rel(homeDir, expanded)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return "", "", fmt.Errorf("path %s is outside the home directory and cannot be managed", expanded)
 	}
+	tildeFile = "~/" + filepath.ToSlash(rel)
 	return expanded, tildeFile, nil
 }
 
