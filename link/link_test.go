@@ -227,6 +227,8 @@ func TestCopyFilePreservesMode(t *testing.T) {
 	}
 }
 
+// TestLink covers the happy path (symlink created, correct target) and
+// idempotency (re-linking an already-symlinked path succeeds without error).
 func TestLink(t *testing.T) {
 	homeDir := t.TempDir()
 	repoDir := t.TempDir()
@@ -253,5 +255,59 @@ func TestLink(t *testing.T) {
 	// Re-running Link should succeed (idempotent).
 	if err := Link(homePath, repoFile); err != nil {
 		t.Errorf("second Link: %v", err)
+	}
+}
+
+func TestLinkVariants(t *testing.T) {
+	cases := []struct {
+		name            string
+		relPath         string
+		existingContent string // non-empty → write a real file at homePath first
+	}{
+		{
+			name:    "creates missing parent directory",
+			relPath: filepath.Join(".config", "fish", "config.fish"),
+		},
+		{
+			name:            "replaces existing regular file",
+			relPath:         ".bashrc",
+			existingContent: "# original",
+		},
+		{
+			name:    "creates deeply nested missing directories",
+			relPath: filepath.Join(".config", "nvim", "lua", "plugins", "init.lua"),
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			repoDir := t.TempDir()
+
+			repoFile := filepath.Join(repoDir, filepath.Base(c.relPath))
+			if err := os.WriteFile(repoFile, []byte("content"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			homePath := filepath.Join(homeDir, c.relPath)
+			if c.existingContent != "" {
+				if err := os.MkdirAll(filepath.Dir(homePath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(homePath, []byte(c.existingContent), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err := Link(homePath, repoFile); err != nil {
+				t.Fatalf("Link: %v", err)
+			}
+			target, err := os.Readlink(homePath)
+			if err != nil {
+				t.Fatalf("Readlink: %v", err)
+			}
+			if target != repoFile {
+				t.Errorf("symlink target %q, want %q", target, repoFile)
+			}
+		})
 	}
 }

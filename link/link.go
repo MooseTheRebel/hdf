@@ -101,13 +101,31 @@ func enrollWithHome(homePath, repoDir, home string) (string, error) {
 }
 
 // Link creates (or re-creates) the symlink at homePath pointing to repoFile.
+// Parent directories are created as needed. The replacement is installed
+// atomically via a rename so the existing file at homePath is never removed
+// before the new symlink is ready.
 func Link(homePath, repoFile string) error {
-	if _, err := os.Lstat(homePath); err == nil {
-		if err := os.Remove(homePath); err != nil {
-			return fmt.Errorf("removing existing file: %w", err)
-		}
+	dir := filepath.Dir(homePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating parent directories: %w", err)
 	}
-	return os.Symlink(repoFile, homePath)
+	// Create a temp file in the same directory to obtain a unique name on the
+	// same filesystem (required for an atomic rename).
+	tmp, err := os.CreateTemp(dir, ".hdf-link-*")
+	if err != nil {
+		return fmt.Errorf("creating temp symlink: %w", err)
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(tmpPath) // remove placeholder so we can symlink at this path
+	if err := os.Symlink(repoFile, tmpPath); err != nil {
+		return fmt.Errorf("creating symlink: %w", err)
+	}
+	if err := os.Rename(tmpPath, homePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("installing symlink: %w", err)
+	}
+	return nil
 }
 
 // copyFile copies src to dst, preserving the source file's permission mode.
