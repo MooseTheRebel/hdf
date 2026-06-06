@@ -681,6 +681,23 @@ func TestExpandAndValidateDoesNotFollowFileSymlink(t *testing.T) {
 // Regression: a permission-denied error from os.Stat must not be reported as
 // "file not found". The two failure modes require different user actions and
 // collapsing them into one message is misleading.
+// TestExpandAndValidateHomeDirItself verifies that passing the home directory
+// itself produces the specific "home directory itself" message, not the generic
+// "outside the home directory" message.
+func TestExpandAndValidateHomeDirItself(t *testing.T) {
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = expandAndValidate(homeDir, homeDir)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "home directory itself") {
+		t.Errorf("error = %q, want it to contain 'home directory itself'", err.Error())
+	}
+}
+
 func TestExpandAndValidatePermissionDenied(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses DAC — permission test not meaningful")
@@ -885,6 +902,69 @@ func TestRunLinkHermetic(t *testing.T) {
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Error("expected dotfile to be a symlink after runLink")
+	}
+}
+
+// Regression: re-enrolling an already-managed, unchanged file must not create
+// an empty commit. go-git's Commit() creates a commit unconditionally, so the
+// fix short-circuits before staging/committing when hash and path already match.
+func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+		t.Fatalf("first runEnroll: %v", err)
+	}
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatalf("opening repo: %v", err)
+	}
+	countBefore, err := r.CommitCount()
+	if err != nil {
+		t.Fatalf("CommitCount before: %v", err)
+	}
+
+	// Capture stdout to verify the "already managed" message.
+	origStdout := os.Stdout
+	pr, pw, _ := os.Pipe()
+	os.Stdout = pw
+
+	err = runEnroll("~/.testrc", homeDir, cfg, statePath)
+
+	_ = pw.Close()
+	os.Stdout = origStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, pr)
+
+	if err != nil {
+		t.Fatalf("second runEnroll: %v", err)
+	}
+	if !strings.Contains(buf.String(), "already managed and unchanged") {
+		t.Errorf("stdout %q should contain 'already managed and unchanged'", buf.String())
+	}
+
+	countAfter, err := r.CommitCount()
+	if err != nil {
+		t.Fatalf("CommitCount after: %v", err)
+	}
+	if countAfter != countBefore {
+		t.Errorf("commit count went from %d to %d — empty commit was created", countBefore, countAfter)
 	}
 }
 
