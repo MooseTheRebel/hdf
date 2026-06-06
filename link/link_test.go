@@ -290,6 +290,9 @@ func TestLinkVariants(t *testing.T) {
 			}
 			homePath := filepath.Join(homeDir, c.relPath)
 			if c.existingContent != "" {
+				if err := os.MkdirAll(filepath.Dir(homePath), 0o755); err != nil {
+					t.Fatal(err)
+				}
 				if err := os.WriteFile(homePath, []byte(c.existingContent), 0o644); err != nil {
 					t.Fatal(err)
 				}
