@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,7 +89,15 @@ func NormalizePath(path, homeDir string) string {
 	if strings.HasPrefix(path, "~/") || !filepath.IsAbs(path) {
 		return path
 	}
-	rel, err := filepath.Rel(homeDir, path)
+	resolvedHome := homeDir
+	if rh, err := filepath.EvalSymlinks(homeDir); err == nil {
+		resolvedHome = rh
+	}
+	resolvedPath := path
+	if rp, err := filepath.EvalSymlinks(path); err == nil {
+		resolvedPath = rp
+	}
+	rel, err := filepath.Rel(resolvedHome, resolvedPath)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return path
 	}
@@ -197,7 +206,10 @@ func MigrateFilesToRegistry(cfgPath, repoDir string) error {
 	if len(legacy.Files) == 0 {
 		return nil
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("getting home directory for migration: %w", err)
+	}
 	for i := range legacy.Files {
 		legacy.Files[i].Path = NormalizePath(legacy.Files[i].Path, home)
 	}

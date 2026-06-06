@@ -510,7 +510,13 @@ func TestBranchNameFallbackFormat(t *testing.T) {
 func TestExpandAndValidate(t *testing.T) {
 	const tildeBashrc = "~/.bashrc"
 
-	homeDir := t.TempDir()
+	// Resolve symlinks so that filepath.Rel works correctly on macOS where
+	// t.TempDir() returns a /var/... symlink to /private/var/...
+	rawHome := t.TempDir()
+	homeDir, err := filepath.EvalSymlinks(rawHome)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a real file inside homeDir for the success cases.
 	realFile := filepath.Join(homeDir, ".bashrc")
@@ -518,19 +524,23 @@ func TestExpandAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a real file outside homeDir for the rejection case.
+	// Create a real file outside homeDir for the rejection cases.
 	outsideDir := t.TempDir()
 	outsideFile := filepath.Join(outsideDir, "outside.txt")
 	if err := os.WriteFile(outsideFile, []byte("outside\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
+	// symlinkFile uses the raw (unresolved) temp path to simulate how an
+	// absolute path might arrive when the caller hasn't resolved symlinks.
+	symlinkFile := filepath.Join(rawHome, ".bashrc")
+
 	cases := []struct {
 		name         string
-		filePath     string
-		wantExpanded string
-		wantTilde    string
-		wantErr      bool
+		filePath     string // raw input as the user would type it (~/..., absolute, or relative)
+		wantExpanded string // absolute path on disk that expandAndValidate must return
+		wantTilde    string // canonical ~/... registry form that expandAndValidate must return
+		wantErr      bool   // true when the call must fail (file missing, outside home, etc.)
 	}{
 		{
 			name:         "tilde prefix",
@@ -564,6 +574,15 @@ func TestExpandAndValidate(t *testing.T) {
 			name:     "absolute path outside home returns error",
 			filePath: outsideFile,
 			wantErr:  true,
+		},
+		{
+			// Symlink robustness: an absolute path using the unresolved (symlinked)
+			// form of homeDir must still be accepted and normalised correctly.
+			// On macOS t.TempDir() returns /var/... which symlinks to /private/var/...
+			name:         "absolute path via symlinked home normalises correctly",
+			filePath:     symlinkFile,
+			wantExpanded: symlinkFile,
+			wantTilde:    tildeBashrc,
 		},
 		{
 			// Security: homeDir itself resolves to rel "." which must be rejected

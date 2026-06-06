@@ -453,7 +453,15 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 	if _, err := os.Stat(expanded); err != nil {
 		return "", "", fmt.Errorf("file not found: %s", expanded)
 	}
-	rel, err := filepath.Rel(homeDir, expanded)
+	resolvedHome := homeDir
+	if rh, err := filepath.EvalSymlinks(homeDir); err == nil {
+		resolvedHome = rh
+	}
+	resolvedExpanded := expanded
+	if re, err := filepath.EvalSymlinks(expanded); err == nil {
+		resolvedExpanded = re
+	}
+	rel, err := filepath.Rel(resolvedHome, resolvedExpanded)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return "", "", fmt.Errorf("path %s is outside the home directory and cannot be managed", expanded)
 	}

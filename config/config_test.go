@@ -270,6 +270,31 @@ func TestNormalizePath(t *testing.T) {
 	}
 }
 
+// TestNormalizePathSymlinks verifies that NormalizePath resolves symlinks before
+// comparing paths. On macOS t.TempDir() returns a /var/... path that is a
+// symlink to /private/var/...; without EvalSymlinks the lexical filepath.Rel
+// would produce a ".." prefix and falsely leave the path un-normalised.
+func TestNormalizePathSymlinks(t *testing.T) {
+	rawHome := t.TempDir()
+	homeDir, err := filepath.EvalSymlinks(rawHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A file created under rawHome (the symlinked path) must normalise correctly
+	// even when homeDir is the resolved path and the file path uses rawHome.
+	absPath := filepath.Join(rawHome, ".bashrc")
+	if err := os.WriteFile(absPath, []byte("# test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := NormalizePath(absPath, homeDir)
+	want := testBashrcPath
+	if got != want {
+		t.Errorf("NormalizePath(%q, %q) = %q, want %q (symlink resolution failed)", absPath, homeDir, got, want)
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home, _ := os.UserHomeDir()
 
