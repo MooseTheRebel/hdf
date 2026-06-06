@@ -215,6 +215,61 @@ func TestLoadStateMissing(t *testing.T) {
 	}
 }
 
+func TestNormalizePath(t *testing.T) {
+	homeDir := "/home/alice"
+
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "tilde form unchanged",
+			path: testBashrcPath,
+			want: testBashrcPath,
+		},
+		{
+			name: "absolute path under home normalized",
+			path: "/home/alice/.bashrc",
+			want: testBashrcPath,
+		},
+		{
+			name: "nested absolute path under home normalized",
+			path: "/home/alice/.config/fish/config.fish",
+			want: "~/.config/fish/config.fish",
+		},
+		{
+			name: "absolute path outside home unchanged",
+			path: "/etc/hosts",
+			want: "/etc/hosts",
+		},
+		{
+			name: "absolute path from different machine unchanged",
+			path: "/home/bob/.bashrc",
+			want: "/home/bob/.bashrc",
+		},
+		{
+			name: "relative path unchanged",
+			path: ".bashrc",
+			want: ".bashrc",
+		},
+		{
+			name: "path equal to homeDir returns unchanged",
+			path: homeDir,
+			want: homeDir,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := NormalizePath(c.path, homeDir)
+			if got != c.want {
+				t.Errorf("NormalizePath(%q, %q) = %q, want %q", c.path, homeDir, got, c.want)
+			}
+		})
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home, _ := os.UserHomeDir()
 

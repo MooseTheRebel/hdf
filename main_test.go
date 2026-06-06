@@ -508,6 +508,13 @@ func TestExpandAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Create a real file outside homeDir for the rejection case.
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
 		name         string
 		filePath     string
@@ -539,6 +546,13 @@ func TestExpandAndValidate(t *testing.T) {
 		{
 			name:     "missing file",
 			filePath: "~/.no-such-file",
+			wantErr:  true,
+		},
+		{
+			// Regression: a path outside the home directory must be rejected so
+			// it can never be stored as an absolute path in the registry.
+			name:     "absolute path outside home returns error",
+			filePath: outsideFile,
 			wantErr:  true,
 		},
 	}
