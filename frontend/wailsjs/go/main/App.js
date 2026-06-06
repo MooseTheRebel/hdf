@@ -18,12 +18,12 @@ export function GetTotalDiffs() {
   return window['go']['main']['App']['GetTotalDiffs']();
 }
 
-export function Greet(arg1) {
-  return window['go']['main']['App']['Greet'](arg1);
-}
-
 export function HasDiff() {
   return window['go']['main']['App']['HasDiff']();
+}
+
+export function IsInitialized() {
+  return window['go']['main']['App']['IsInitialized']();
 }
 
 export function NextDiff() {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"hdf/config"
 	"io"
 	"net/http"
 	"time"
@@ -30,9 +31,10 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// Greet returns a greeting for the given name
-func (a *App) Greet(name string) string {
-	return fmt.Sprintf("Hello %s, It's show time!", name)
+// IsInitialized returns true when hdf has been configured on this machine.
+func (a *App) IsInitialized() bool {
+	_, err := config.Load(config.DefaultPath())
+	return err == nil
 }
 
 // GetDiffContent returns the diff content to display
