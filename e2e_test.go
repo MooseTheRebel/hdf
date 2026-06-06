@@ -19,15 +19,17 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("MkdirTemp: " + err.Error())
 	}
-	defer os.RemoveAll(dir)
 
 	bin := filepath.Join(dir, "hdf")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		os.RemoveAll(dir)
 		panic("go build failed:\n" + string(out))
 	}
 	hdfBin = bin
 
-	os.Exit(m.Run())
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // runHDF invokes the binary with args, the given HOME override, and optional
@@ -39,11 +41,11 @@ func runHDF(t *testing.T, home, stdin string, args ...string) (stdout, stderr st
 	// resolves into a temp directory rather than the real user's home.
 	env := []string{}
 	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "HOME=") {
+		if !strings.HasPrefix(e, "HOME=") && !strings.HasPrefix(e, "USERPROFILE=") {
 			env = append(env, e)
 		}
 	}
-	env = append(env, "HOME="+home)
+	env = append(env, "HOME="+home, "USERPROFILE="+home)
 	cmd.Env = env
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
