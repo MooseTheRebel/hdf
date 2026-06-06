@@ -253,6 +253,11 @@ func TestNormalizePath(t *testing.T) {
 			path: ".bashrc",
 			want: ".bashrc",
 		},
+		{
+			name: "path equal to homeDir returns unchanged",
+			path: homeDir,
+			want: homeDir,
+		},
 	}
 
 	for _, c := range cases {

@@ -89,7 +89,7 @@ func NormalizePath(path, homeDir string) string {
 		return path
 	}
 	rel, err := filepath.Rel(homeDir, path)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return path
 	}
 	return "~/" + filepath.ToSlash(rel)
