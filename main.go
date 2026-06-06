@@ -33,9 +33,11 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return nil // no config yet (e.g. before hdf init), skip migration
 		}
-		// Best-effort: errors are ignored so a stale or partial config
-		// doesn't block subcommands that would surface a clearer message.
-		_ = config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir)
+		// Best-effort: don't block subcommands, but warn so the user isn't
+		// left without any indication that migration failed.
+		if err := config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not migrate legacy managed files: %v\n", err)
+		}
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -451,7 +453,10 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 		expanded = abs
 	}
 	if _, err := os.Stat(expanded); err != nil {
-		return "", "", fmt.Errorf("file not found: %s", expanded)
+		if os.IsNotExist(err) {
+			return "", "", fmt.Errorf("file not found: %s", expanded)
+		}
+		return "", "", fmt.Errorf("cannot access %s: %w", expanded, err)
 	}
 	resolvedHome := homeDir
 	if rh, err := filepath.EvalSymlinks(homeDir); err == nil {

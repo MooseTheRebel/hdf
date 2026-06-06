@@ -155,6 +155,7 @@ func loadSharedSettings(r *repo.Repo) *config.SharedSettings {
 	}
 	parsed, err := config.SharedSettingsFromBytes(ssBytes)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not parse shared settings: %v\n", err)
 		return config.DefaultSharedSettings()
 	}
 	parsed.ApplyDefaults()
@@ -174,7 +175,7 @@ func countDrift(reg *config.Registry, cfg *config.Config, r *repo.Repo, homeDir 
 
 // fileDrift returns the hunk count for a single managed file.
 func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir string) int {
-	expanded := config.ExpandPath(f.Path)
+	expanded := config.ExpandPathIn(f.Path, homeDir)
 
 	info, err := os.Stat(expanded)
 	if err != nil {

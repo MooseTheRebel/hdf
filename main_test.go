@@ -535,6 +535,22 @@ func TestExpandAndValidate(t *testing.T) {
 	// absolute path might arrive when the caller hasn't resolved symlinks.
 	symlinkFile := filepath.Join(rawHome, ".bashrc")
 
+	// Create a file inside a locked subdirectory to test the permission-denied
+	// error path. os.Stat requires execute permission on each directory
+	// component, so chmod 000 on the parent triggers EACCES.
+	lockedDir := filepath.Join(homeDir, ".locked")
+	if err := os.Mkdir(lockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	noAccessFile := filepath.Join(lockedDir, "secret")
+	if err := os.WriteFile(noAccessFile, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockedDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) }) //nolint:gosec // restoring test directory to readable state
+
 	cases := []struct {
 		name         string
 		filePath     string // raw input as the user would type it (~/..., absolute, or relative)
@@ -589,6 +605,14 @@ func TestExpandAndValidate(t *testing.T) {
 			// rather than producing the malformed canonical form "~/.".
 			name:     "home directory itself returns error",
 			filePath: homeDir,
+			wantErr:  true,
+		},
+		{
+			// Permission/access errors must not be reported as "file not found".
+			// The parent directory is locked (0o000) so os.Stat returns EACCES,
+			// which must be wrapped rather than silently relabelled.
+			name:     "permission denied is not reported as file not found",
+			filePath: noAccessFile,
 			wantErr:  true,
 		},
 		{
@@ -651,6 +675,42 @@ func TestExpandAndValidateDoesNotFollowFileSymlink(t *testing.T) {
 	}
 	if tildeFile != "~/.bashrc" {
 		t.Errorf("tildeFile = %q, want ~/.bashrc — followed symlink into repo", tildeFile)
+	}
+}
+
+// Regression: a permission-denied error from os.Stat must not be reported as
+// "file not found". The two failure modes require different user actions and
+// collapsing them into one message is misleading.
+func TestExpandAndValidatePermissionDenied(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses DAC — permission test not meaningful")
+	}
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockedDir := filepath.Join(homeDir, ".locked")
+	if err := os.Mkdir(lockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	noAccess := filepath.Join(lockedDir, "secret")
+	if err := os.WriteFile(noAccess, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockedDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) }) //nolint:gosec // restoring test directory to readable state
+
+	_, _, err = expandAndValidate(noAccess, homeDir)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if strings.Contains(err.Error(), "file not found") {
+		t.Errorf("permission error was mislabelled as 'file not found': %v", err)
+	}
+	if !strings.Contains(err.Error(), "cannot access") {
+		t.Errorf("expected 'cannot access' in error, got: %v", err)
 	}
 }
 
