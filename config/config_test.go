@@ -215,6 +215,113 @@ func TestLoadStateMissing(t *testing.T) {
 	}
 }
 
+func TestNormalizePath(t *testing.T) {
+	homeDir := "/home/alice"
+
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "tilde form unchanged",
+			path: testBashrcPath,
+			want: testBashrcPath,
+		},
+		{
+			name: "absolute path under home normalized",
+			path: "/home/alice/.bashrc",
+			want: testBashrcPath,
+		},
+		{
+			name: "nested absolute path under home normalized",
+			path: "/home/alice/.config/fish/config.fish",
+			want: "~/.config/fish/config.fish",
+		},
+		{
+			name: "absolute path outside home unchanged",
+			path: "/etc/hosts",
+			want: "/etc/hosts",
+		},
+		{
+			name: "absolute path from different machine unchanged",
+			path: "/home/bob/.bashrc",
+			want: "/home/bob/.bashrc",
+		},
+		{
+			name: "relative path unchanged",
+			path: ".bashrc",
+			want: ".bashrc",
+		},
+		{
+			name: "path equal to homeDir returns unchanged",
+			path: homeDir,
+			want: homeDir,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := NormalizePath(c.path, homeDir)
+			if got != c.want {
+				t.Errorf("NormalizePath(%q, %q) = %q, want %q", c.path, homeDir, got, c.want)
+			}
+		})
+	}
+}
+
+// TestNormalizePathSymlinks verifies that NormalizePath resolves symlinks before
+// comparing paths. On macOS t.TempDir() returns a /var/... path that is a
+// symlink to /private/var/...; without EvalSymlinks the lexical filepath.Rel
+// would produce a ".." prefix and falsely leave the path un-normalised.
+func TestNormalizePathSymlinks(t *testing.T) {
+	rawHome := t.TempDir()
+	homeDir, err := filepath.EvalSymlinks(rawHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A file created under rawHome (the symlinked path) must normalise correctly
+	// even when homeDir is the resolved path and the file path uses rawHome.
+	absPath := filepath.Join(rawHome, ".bashrc")
+	if err := os.WriteFile(absPath, []byte("# test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := NormalizePath(absPath, homeDir)
+	want := testBashrcPath
+	if got != want {
+		t.Errorf("NormalizePath(%q, %q) = %q, want %q (symlink resolution failed)", absPath, homeDir, got, want)
+	}
+}
+
+// Regression: NormalizePath must not follow a symlink in the filename component.
+// An enrolled dotfile (~/.bashrc) is a symlink pointing into the repo; resolving
+// the full path would yield the repo path and produce the wrong canonical form.
+func TestNormalizePathDoesNotFollowFileSymlink(t *testing.T) {
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := t.TempDir()
+
+	// Simulate an enrolled file: repo copy exists, home path is a symlink to it.
+	repoFile := filepath.Join(repoDir, ".bashrc")
+	if err := os.WriteFile(repoFile, []byte("# config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	homePath := filepath.Join(homeDir, ".bashrc")
+	if err := os.Symlink(repoFile, homePath); err != nil {
+		t.Fatal(err)
+	}
+
+	got := NormalizePath(homePath, homeDir)
+	if got != testBashrcPath {
+		t.Errorf("NormalizePath(%q, %q) = %q, want %q — followed symlink into repo",
+			homePath, homeDir, got, testBashrcPath)
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home, _ := os.UserHomeDir()
 

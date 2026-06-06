@@ -109,7 +109,7 @@ func TestIsIgnored(t *testing.T) {
 	}
 
 	allowed := []string{
-		"~/.bashrc",
+		testBashrcPath,
 		"~/.vimrc",
 		"~/.config/fish/config.fish",
 		"~/.ssh",        // directory itself, no wildcard match

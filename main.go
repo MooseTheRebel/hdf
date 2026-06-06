@@ -33,10 +33,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return nil // no config yet (e.g. before hdf init), skip migration
 		}
-		// Best-effort: errors are ignored so a stale or partial config
-		// doesn't block subcommands that would surface a clearer message.
-		_ = config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir)
-		return nil
+		return config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir)
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		launchGUI([]string{})
@@ -451,14 +448,25 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 		expanded = abs
 	}
 	if _, err := os.Stat(expanded); err != nil {
-		return "", "", fmt.Errorf("file not found: %s", expanded)
-	}
-	tildeFile = filePath
-	if !strings.HasPrefix(filePath, "~/") {
-		if rel, err := filepath.Rel(homeDir, expanded); err == nil && !strings.HasPrefix(rel, "..") {
-			tildeFile = "~/" + filepath.ToSlash(rel)
+		if os.IsNotExist(err) {
+			return "", "", fmt.Errorf("file not found: %s", expanded)
 		}
+		return "", "", fmt.Errorf("cannot access %s: %w", expanded, err)
 	}
+	resolvedHome := homeDir
+	if rh, err := filepath.EvalSymlinks(homeDir); err == nil {
+		resolvedHome = rh
+	}
+	resolvedExpanded := expanded
+	dir, file := filepath.Split(expanded)
+	if rd, err := filepath.EvalSymlinks(dir); err == nil {
+		resolvedExpanded = filepath.Join(rd, file)
+	}
+	rel, err := filepath.Rel(resolvedHome, resolvedExpanded)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", "", fmt.Errorf("path %s is outside the home directory and cannot be managed", expanded)
+	}
+	tildeFile = "~/" + filepath.ToSlash(rel)
 	return expanded, tildeFile, nil
 }
 
@@ -592,6 +600,41 @@ var enrollCmd = &cobra.Command{
 	},
 }
 
+// runLink re-creates symlinks for all managed files. homeDir is the user's
+// home directory used for path normalisation; callers should pass
+// os.UserHomeDir() in production and a temp dir in tests.
+func runLink(homeDir string, cfg *config.Config) error {
+	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("loading registry: %w", err)
+	}
+	for _, f := range reg.Files {
+		expanded := config.ExpandPathIn(f.Path, homeDir)
+		var repoFile string
+		var err error
+		if len(f.Variants) > 0 {
+			repoFile, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+		} else {
+			repoFile, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
+			continue
+		}
+		if repoFile == "" {
+			fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — run: hdf enroll --variant %s\n",
+				f.Path, cfg.Branch, f.Path)
+			continue
+		}
+		if err := link.Link(expanded, repoFile); err != nil {
+			fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
+			continue
+		}
+		fmt.Printf("linked %s\n", f.Path)
+	}
+	return nil
+}
+
 var linkCmd = &cobra.Command{
 	Use:   "link",
 	Short: "Re-create symlinks for all managed files",
@@ -601,29 +644,11 @@ var linkCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("loading config (run 'hdf init' first): %w", err)
 		}
-		reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("loading registry: %w", err)
+			return fmt.Errorf("getting home directory: %w", err)
 		}
-		for _, f := range reg.Files {
-			expanded := config.ExpandPath(f.Path)
-			repoFile, err := resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
-				continue
-			}
-			if repoFile == "" {
-				fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — run: hdf enroll --variant %s\n",
-					f.Path, cfg.Branch, f.Path)
-				continue
-			}
-			if err := link.Link(expanded, repoFile); err != nil {
-				fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
-				continue
-			}
-			fmt.Printf("linked %s\n", f.Path)
-		}
-		return nil
+		return runLink(homeDir, cfg)
 	},
 }
 
@@ -654,10 +679,15 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("Branch:      %s\n", branch)
 		fmt.Printf("Last commit: %s\n", state.LastCommit)
 		fmt.Printf("Last sync:   %s\n", state.LastSync.Format("2006-01-02 15:04:05"))
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("getting home directory: %w", err)
+		}
+
 		fmt.Printf("\nManaged files (%d):\n", len(reg.Files))
 
 		for _, f := range reg.Files {
-			expanded := config.ExpandPath(f.Path)
+			expanded := config.ExpandPathIn(f.Path, homeDir)
 			expectedHash := f.Hash
 			for _, v := range f.Variants {
 				if v.Branch == cfg.Branch {

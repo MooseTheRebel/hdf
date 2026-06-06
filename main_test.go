@@ -11,6 +11,16 @@ import (
 	"testing"
 )
 
+// mustRel returns the relative path from base to target, fataling the test on error.
+func mustRel(t *testing.T, base, target string) string {
+	t.Helper()
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		t.Fatalf("filepath.Rel(%q, %q): %v", base, target, err)
+	}
+	return rel
+}
+
 // initPaths returns temp cfgPath and statePath inside a single temp dir.
 func initPaths(t *testing.T) (cfgPath, statePath string) {
 	t.Helper()
@@ -500,7 +510,13 @@ func TestBranchNameFallbackFormat(t *testing.T) {
 func TestExpandAndValidate(t *testing.T) {
 	const tildeBashrc = "~/.bashrc"
 
-	homeDir := t.TempDir()
+	// Resolve symlinks so that filepath.Rel works correctly on macOS where
+	// t.TempDir() returns a /var/... symlink to /private/var/...
+	rawHome := t.TempDir()
+	homeDir, err := filepath.EvalSymlinks(rawHome)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a real file inside homeDir for the success cases.
 	realFile := filepath.Join(homeDir, ".bashrc")
@@ -508,12 +524,39 @@ func TestExpandAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Create a real file outside homeDir for the rejection cases.
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// symlinkFile uses the raw (unresolved) temp path to simulate how an
+	// absolute path might arrive when the caller hasn't resolved symlinks.
+	symlinkFile := filepath.Join(rawHome, ".bashrc")
+
+	// Create a file inside a locked subdirectory to test the permission-denied
+	// error path. os.Stat requires execute permission on each directory
+	// component, so chmod 000 on the parent triggers EACCES.
+	lockedDir := filepath.Join(homeDir, ".locked")
+	if err := os.Mkdir(lockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	noAccessFile := filepath.Join(lockedDir, "secret")
+	if err := os.WriteFile(noAccessFile, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockedDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) }) //nolint:gosec // restoring test directory to readable state
+
 	cases := []struct {
 		name         string
-		filePath     string
-		wantExpanded string
-		wantTilde    string
-		wantErr      bool
+		filePath     string // raw input as the user would type it (~/..., absolute, or relative)
+		wantExpanded string // absolute path on disk that expandAndValidate must return
+		wantTilde    string // canonical ~/... registry form that expandAndValidate must return
+		wantErr      bool   // true when the call must fail (file missing, outside home, etc.)
 	}{
 		{
 			name:         "tilde prefix",
@@ -541,6 +584,44 @@ func TestExpandAndValidate(t *testing.T) {
 			filePath: "~/.no-such-file",
 			wantErr:  true,
 		},
+		{
+			// Regression: a path outside the home directory must be rejected so
+			// it can never be stored as an absolute path in the registry.
+			name:     "absolute path outside home returns error",
+			filePath: outsideFile,
+			wantErr:  true,
+		},
+		{
+			// Symlink robustness: an absolute path using the unresolved (symlinked)
+			// form of homeDir must still be accepted and normalised correctly.
+			// On macOS t.TempDir() returns /var/... which symlinks to /private/var/...
+			name:         "absolute path via symlinked home normalises correctly",
+			filePath:     symlinkFile,
+			wantExpanded: symlinkFile,
+			wantTilde:    tildeBashrc,
+		},
+		{
+			// Security: homeDir itself resolves to rel "." which must be rejected
+			// rather than producing the malformed canonical form "~/.".
+			name:     "home directory itself returns error",
+			filePath: homeDir,
+			wantErr:  true,
+		},
+		{
+			// Permission/access errors must not be reported as "file not found".
+			// The parent directory is locked (0o000) so os.Stat returns EACCES,
+			// which must be wrapped rather than silently relabelled.
+			name:     "permission denied is not reported as file not found",
+			filePath: noAccessFile,
+			wantErr:  true,
+		},
+		{
+			// Security: tilde-relative traversal (~/../other) expands outside home
+			// and must be rejected even though the path starts with "~/".
+			name:     "tilde traversal outside home returns error",
+			filePath: "~/" + mustRel(t, homeDir, outsideFile),
+			wantErr:  true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -562,6 +643,74 @@ func TestExpandAndValidate(t *testing.T) {
 				t.Errorf("tilde = %q, want %q", tilde, tc.wantTilde)
 			}
 		})
+	}
+}
+
+// Regression: expandAndValidate must not follow the dotfile symlink when
+// resolving the path. After enrollment ~/.bashrc is a symlink into the repo;
+// without the directory-only EvalSymlinks fix, tildeFile would come back as
+// ~/.local/share/hdf/repo/.bashrc and corrupt the registry on re-enroll.
+func TestExpandAndValidateDoesNotFollowFileSymlink(t *testing.T) {
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := t.TempDir()
+
+	repoFile := filepath.Join(repoDir, ".bashrc")
+	if err := os.WriteFile(repoFile, []byte("# config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	homePath := filepath.Join(homeDir, ".bashrc")
+	if err := os.Symlink(repoFile, homePath); err != nil {
+		t.Fatal(err)
+	}
+
+	expanded, tildeFile, err := expandAndValidate(homePath, homeDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if expanded != homePath {
+		t.Errorf("expanded = %q, want %q", expanded, homePath)
+	}
+	if tildeFile != "~/.bashrc" {
+		t.Errorf("tildeFile = %q, want ~/.bashrc — followed symlink into repo", tildeFile)
+	}
+}
+
+// Regression: a permission-denied error from os.Stat must not be reported as
+// "file not found". The two failure modes require different user actions and
+// collapsing them into one message is misleading.
+func TestExpandAndValidatePermissionDenied(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses DAC — permission test not meaningful")
+	}
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockedDir := filepath.Join(homeDir, ".locked")
+	if err := os.Mkdir(lockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	noAccess := filepath.Join(lockedDir, "secret")
+	if err := os.WriteFile(noAccess, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockedDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) }) //nolint:gosec // restoring test directory to readable state
+
+	_, _, err = expandAndValidate(noAccess, homeDir)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if strings.Contains(err.Error(), "file not found") {
+		t.Errorf("permission error was mislabelled as 'file not found': %v", err)
+	}
+	if !strings.Contains(err.Error(), "cannot access") {
+		t.Errorf("expected 'cannot access' in error, got: %v", err)
 	}
 }
 
@@ -689,6 +838,53 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 	}
 	if mainStub == nil {
 		t.Error("main branch not pushed to bare remote")
+	}
+}
+
+// Regression: runLink must be fully hermetic — it must use the homeDir it
+// receives, not os.UserHomeDir(), when resolving repo paths. Without the fix,
+// link.RepoPathFor calls os.UserHomeDir() internally, so a temp homeDir causes
+// filepath.Rel to produce a ".." prefix and every non-variant file fails.
+func TestRunLinkHermetic(t *testing.T) {
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+		t.Fatalf("runEnroll: %v", err)
+	}
+
+	// Remove the symlink to simulate a fresh machine needing re-linking.
+	if err := os.Remove(dotfile); err != nil {
+		t.Fatalf("removing symlink: %v", err)
+	}
+
+	if err := runLink(homeDir, cfg); err != nil {
+		t.Fatalf("runLink: %v", err)
+	}
+
+	info, err := os.Lstat(dotfile)
+	if err != nil {
+		t.Fatalf("Lstat after runLink: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("expected dotfile to be a symlink after runLink")
 	}
 }
 

@@ -170,6 +170,37 @@ func TestCountHunks(t *testing.T) {
 	}
 }
 
+// Regression: fileDrift must use the homeDir it receives, not os.UserHomeDir().
+// With the old config.ExpandPath call, a ~/... registry entry expanded using
+// the real home — causing fileDrift to look at the wrong path in tests, which
+// reported the file as missing (drift=1) even though it existed under homeDir.
+func TestFileDriftUsesInjectedHomeDir(t *testing.T) {
+	homeDir := t.TempDir()
+	workDir := t.TempDir()
+
+	// Write a file under homeDir and record its hash as the registry hash.
+	content := []byte("# config\n")
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := link.HashFile(dotfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := config.ManagedFile{Path: "~/.testrc", Hash: hash}
+	cfg := &config.Config{Branch: "test", LocalDotfilesDir: workDir}
+
+	// fileDrift must return 0 (no drift): the file exists under homeDir and
+	// its hash matches. Without the fix it returned 1 (file "missing") because
+	// it expanded ~/... against os.UserHomeDir() instead of homeDir.
+	got := fileDrift(f, cfg, nil, homeDir)
+	if got != 0 {
+		t.Errorf("fileDrift = %d, want 0 — path not resolved using injected homeDir", got)
+	}
+}
+
 // TestMultiHostIntegration verifies the hunk-based notification threshold with
 // three hosts sharing a single bare remote. The shared NotifyThreshold is 3.
 //

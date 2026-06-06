@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,38 @@ func ExpandPath(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// ExpandPathIn replaces a leading ~ with homeDir. Use this in contexts where
+// the home directory is already known to avoid a redundant os.UserHomeDir call.
+func ExpandPathIn(path, homeDir string) string {
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(homeDir, path[2:])
+	}
+	return path
+}
+
+// NormalizePath converts an absolute path that falls within homeDir to its
+// ~/... canonical form. Paths already in ~/... form, relative paths, and
+// absolute paths outside homeDir are returned unchanged.
+func NormalizePath(path, homeDir string) string {
+	if strings.HasPrefix(path, "~/") || !filepath.IsAbs(path) {
+		return path
+	}
+	resolvedHome := homeDir
+	if rh, err := filepath.EvalSymlinks(homeDir); err == nil {
+		resolvedHome = rh
+	}
+	resolvedPath := path
+	dir, file := filepath.Split(path)
+	if rd, err := filepath.EvalSymlinks(dir); err == nil {
+		resolvedPath = filepath.Join(rd, file)
+	}
+	rel, err := filepath.Rel(resolvedHome, resolvedPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return path
+	}
+	return "~/" + filepath.ToSlash(rel)
 }
 
 // Load reads and parses the config file at path.
@@ -173,6 +206,13 @@ func MigrateFilesToRegistry(cfgPath, repoDir string) error {
 	}
 	if len(legacy.Files) == 0 {
 		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("getting home directory for migration: %w", err)
+	}
+	for i := range legacy.Files {
+		legacy.Files[i].Path = NormalizePath(legacy.Files[i].Path, home)
 	}
 	reg := &Registry{Files: legacy.Files}
 	return SaveRegistry(repoDir, reg)
