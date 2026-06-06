@@ -190,6 +190,31 @@ func TestE2EInitAlreadyInitialized(t *testing.T) {
 	}
 }
 
+// TestE2EEnrollIdempotent verifies that re-enrolling an already-managed,
+// unchanged file exits 0 and reports "already managed and unchanged" rather
+// than silently creating an empty commit.
+func TestE2EEnrollIdempotent(t *testing.T) {
+	home, workDir, bareDir := t.TempDir(), t.TempDir(), t.TempDir()
+	initEnv(t, home, workDir, bareDir)
+
+	dotfile := filepath.Join(home, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, code := runHDF(t, home, "", "enroll", "~/.testrc"); code != 0 {
+		t.Fatalf("first enroll: exit code %d", code)
+	}
+
+	stdout, _, code := runHDF(t, home, "", "enroll", "~/.testrc")
+	if code != 0 {
+		t.Errorf("second enroll: exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "already managed and unchanged") {
+		t.Errorf("stdout %q should contain 'already managed and unchanged'", stdout)
+	}
+}
+
 // TestE2EMigrationFailureExitsNonZero verifies that a migration error causes
 // a non-zero exit rather than being silently swallowed. The trigger: a legacy
 // config with Files is present but the .hdf directory in the repo is replaced

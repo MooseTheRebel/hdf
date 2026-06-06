@@ -388,6 +388,17 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	return nil
 }
 
+// registryContains reports whether reg already has an entry for tildeFile
+// with exactly the given hash.
+func registryContains(reg *config.Registry, tildeFile, hash string) bool {
+	for _, f := range reg.Files {
+		if f.Path == tildeFile && f.Hash == hash {
+			return true
+		}
+	}
+	return false
+}
+
 // upsertRegistryEntry updates an existing entry's hash in reg, or appends a
 // new one. hash is set to "" when called for the main-branch stub.
 func upsertRegistryEntry(reg *config.Registry, tildeFile, hash string) {
@@ -554,6 +565,10 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
+	}
+	if registryContains(reg, tildeFile, hash) {
+		fmt.Printf("%s is already managed and unchanged\n", filePath)
+		return nil
 	}
 	upsertRegistryEntry(reg, tildeFile, hash)
 	if err := config.SaveRegistry(cfg.LocalDotfilesDir, reg); err != nil {

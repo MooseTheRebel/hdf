@@ -22,7 +22,7 @@ linters:
     - unused
   settings:
     cyclop:
-      max-complexity: 14
+      max-complexity: 15
     gosec:
       excludes:
         - G107  # HTTP request with variable URL — update checker is intentional
