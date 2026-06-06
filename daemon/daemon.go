@@ -153,8 +153,8 @@ func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
 // parsed result. A missing or empty file is treated as "not yet configured"
 // and returns defaults with no error. A malformed file is a hard error.
 func loadSharedSettings(r *repo.Repo) (*config.SharedSettings, error) {
-	ssBytes, err := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
-	if err != nil || len(ssBytes) == 0 {
+	ssBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
+	if len(ssBytes) == 0 {
 		return config.DefaultSharedSettings(), nil
 	}
 	parsed, err := config.SharedSettingsFromBytes(ssBytes)
