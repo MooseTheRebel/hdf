@@ -458,7 +458,10 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 		resolvedHome = rh
 	}
 	resolvedExpanded := expanded
-	if re, err := filepath.EvalSymlinks(expanded); err == nil {
+	dir, file := filepath.Split(expanded)
+	if rd, err := filepath.EvalSymlinks(dir); err == nil {
+		resolvedExpanded = filepath.Join(rd, file)
+	} else if re, err := filepath.EvalSymlinks(expanded); err == nil {
 		resolvedExpanded = re
 	}
 	rel, err := filepath.Rel(resolvedHome, resolvedExpanded)

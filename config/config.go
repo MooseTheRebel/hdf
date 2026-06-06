@@ -94,7 +94,10 @@ func NormalizePath(path, homeDir string) string {
 		resolvedHome = rh
 	}
 	resolvedPath := path
-	if rp, err := filepath.EvalSymlinks(path); err == nil {
+	dir, file := filepath.Split(path)
+	if rd, err := filepath.EvalSymlinks(dir); err == nil {
+		resolvedPath = filepath.Join(rd, file)
+	} else if rp, err := filepath.EvalSymlinks(path); err == nil {
 		resolvedPath = rp
 	}
 	rel, err := filepath.Rel(resolvedHome, resolvedPath)

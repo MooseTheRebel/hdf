@@ -622,6 +622,38 @@ func TestExpandAndValidate(t *testing.T) {
 	}
 }
 
+// Regression: expandAndValidate must not follow the dotfile symlink when
+// resolving the path. After enrollment ~/.bashrc is a symlink into the repo;
+// without the directory-only EvalSymlinks fix, tildeFile would come back as
+// ~/.local/share/hdf/repo/.bashrc and corrupt the registry on re-enroll.
+func TestExpandAndValidateDoesNotFollowFileSymlink(t *testing.T) {
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := t.TempDir()
+
+	repoFile := filepath.Join(repoDir, ".bashrc")
+	if err := os.WriteFile(repoFile, []byte("# config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	homePath := filepath.Join(homeDir, ".bashrc")
+	if err := os.Symlink(repoFile, homePath); err != nil {
+		t.Fatal(err)
+	}
+
+	expanded, tildeFile, err := expandAndValidate(homePath, homeDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if expanded != homePath {
+		t.Errorf("expanded = %q, want %q", expanded, homePath)
+	}
+	if tildeFile != "~/.bashrc" {
+		t.Errorf("tildeFile = %q, want ~/.bashrc — followed symlink into repo", tildeFile)
+	}
+}
+
 func TestExpandAndValidateRelativePath(t *testing.T) {
 	// This test is the direct regression for the bug: a bare filename like
 	// ".bashrc" passed to expandAndValidate must be resolved to an absolute

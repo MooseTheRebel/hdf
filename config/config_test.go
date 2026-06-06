@@ -295,6 +295,33 @@ func TestNormalizePathSymlinks(t *testing.T) {
 	}
 }
 
+// Regression: NormalizePath must not follow a symlink in the filename component.
+// An enrolled dotfile (~/.bashrc) is a symlink pointing into the repo; resolving
+// the full path would yield the repo path and produce the wrong canonical form.
+func TestNormalizePathDoesNotFollowFileSymlink(t *testing.T) {
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := t.TempDir()
+
+	// Simulate an enrolled file: repo copy exists, home path is a symlink to it.
+	repoFile := filepath.Join(repoDir, ".bashrc")
+	if err := os.WriteFile(repoFile, []byte("# config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	homePath := filepath.Join(homeDir, ".bashrc")
+	if err := os.Symlink(repoFile, homePath); err != nil {
+		t.Fatal(err)
+	}
+
+	got := NormalizePath(homePath, homeDir)
+	if got != testBashrcPath {
+		t.Errorf("NormalizePath(%q, %q) = %q, want %q — followed symlink into repo",
+			homePath, homeDir, got, testBashrcPath)
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home, _ := os.UserHomeDir()
 
