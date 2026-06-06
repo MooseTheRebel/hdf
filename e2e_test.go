@@ -120,6 +120,22 @@ func TestE2EEnrollOutsideHome(t *testing.T) {
 	}
 }
 
+// TestE2EEnrollHomeDirItself verifies that passing the home directory as the
+// enroll target exits non-zero and reports "home directory itself", not the
+// generic "outside the home directory" message.
+func TestE2EEnrollHomeDirItself(t *testing.T) {
+	home, workDir, bareDir := t.TempDir(), t.TempDir(), t.TempDir()
+	initEnv(t, home, workDir, bareDir)
+
+	_, stderr, code := runHDF(t, home, "", "enroll", home)
+	if code == 0 {
+		t.Error("expected non-zero exit code when enrolling the home directory itself")
+	}
+	if !strings.Contains(stderr, "home directory itself") {
+		t.Errorf("stderr %q should contain 'home directory itself'", stderr)
+	}
+}
+
 // TestE2EEnrollPermissionDenied verifies that a permission error from os.Stat
 // exits non-zero and is reported as "cannot access", not "file not found".
 func TestE2EEnrollPermissionDenied(t *testing.T) {

@@ -681,6 +681,23 @@ func TestExpandAndValidateDoesNotFollowFileSymlink(t *testing.T) {
 // Regression: a permission-denied error from os.Stat must not be reported as
 // "file not found". The two failure modes require different user actions and
 // collapsing them into one message is misleading.
+// TestExpandAndValidateHomeDirItself verifies that passing the home directory
+// itself produces the specific "home directory itself" message, not the generic
+// "outside the home directory" message.
+func TestExpandAndValidateHomeDirItself(t *testing.T) {
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = expandAndValidate(homeDir, homeDir)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "home directory itself") {
+		t.Errorf("error = %q, want it to contain 'home directory itself'", err.Error())
+	}
+}
+
 func TestExpandAndValidatePermissionDenied(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses DAC — permission test not meaningful")

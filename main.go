@@ -463,8 +463,11 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 		resolvedExpanded = filepath.Join(rd, file)
 	}
 	rel, err := filepath.Rel(resolvedHome, resolvedExpanded)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", "", fmt.Errorf("path %s is outside the home directory and cannot be managed", expanded)
+	}
+	if rel == "." {
+		return "", "", fmt.Errorf("path %s is the home directory itself and cannot be managed", expanded)
 	}
 	tildeFile = "~/" + filepath.ToSlash(rel)
 	return expanded, tildeFile, nil
