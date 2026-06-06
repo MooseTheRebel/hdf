@@ -98,7 +98,10 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 	checkMainProgress(state, r, n)
 
 	// 2. Read shared settings from origin/main (updated by Fetch above).
-	ss := loadSharedSettings(r)
+	ss, err := loadSharedSettings(r)
+	if err != nil {
+		return 0, err
+	}
 	interval := time.Duration(ss.SyncIntervalMinutes) * time.Minute
 	threshold := ss.NotifyThreshold
 	cooldown := time.Duration(ss.NotifyCooldownMinutes) * time.Minute
@@ -147,19 +150,19 @@ func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
 }
 
 // loadSharedSettings reads SharedSettings from origin/main and returns the
-// parsed result. Falls back to package defaults on any error.
-func loadSharedSettings(r *repo.Repo) *config.SharedSettings {
+// parsed result. A missing or empty file is treated as "not yet configured"
+// and returns defaults with no error. A malformed file is a hard error.
+func loadSharedSettings(r *repo.Repo) (*config.SharedSettings, error) {
 	ssBytes, err := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
 	if err != nil || len(ssBytes) == 0 {
-		return config.DefaultSharedSettings()
+		return config.DefaultSharedSettings(), nil
 	}
 	parsed, err := config.SharedSettingsFromBytes(ssBytes)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not parse shared settings: %v\n", err)
-		return config.DefaultSharedSettings()
+		return nil, fmt.Errorf("parsing shared settings: %w", err)
 	}
 	parsed.ApplyDefaults()
-	return parsed
+	return parsed, nil
 }
 
 // countDrift returns the total number of uncommitted diff hunks across all

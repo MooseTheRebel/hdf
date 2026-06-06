@@ -33,12 +33,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return nil // no config yet (e.g. before hdf init), skip migration
 		}
-		// Best-effort: don't block subcommands, but warn so the user isn't
-		// left without any indication that migration failed.
-		if err := config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not migrate legacy managed files: %v\n", err)
-		}
-		return nil
+		return config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir)
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		launchGUI([]string{})
