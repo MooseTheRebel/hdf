@@ -14,8 +14,9 @@ HasDiff().then((hasDiff) => {
 });
 
 function displayHomeScreen() {
+    const app = document.querySelector('#app');
+    if (!app) return;
     IsInitialized().then((initialized) => {
-        const app = document.querySelector('#app')!;
         if (initialized) {
             app.innerHTML = `
                 <div class="home-container">
@@ -97,8 +98,21 @@ function displayHomeScreen() {
         }
 
         document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
-    }).catch(() => {
-        document.querySelector('#app')!.innerHTML = `<div class="home-container"><p>Could not load hdf status.</p></div>`;
+    }).catch((err) => {
+        app.innerHTML = `
+            <div class="home-container">
+                <div class="home-header">
+                    <h1 class="home-title">home-dawt-files</h1>
+                    <span class="home-badge not-initialized">error</span>
+                </div>
+                <p class="home-subtitle">Could not read hdf configuration.</p>
+                <p class="home-subtitle" id="error-message"></p>
+                <button class="close-button" id="error-close-btn">Close</button>
+            </div>
+        `;
+        const errorMsgEl = document.getElementById('error-message');
+        if (errorMsgEl) errorMsgEl.textContent = String(err);
+        document.getElementById('error-close-btn')?.addEventListener('click', () => CloseWindow());
     });
 }
 
@@ -136,6 +150,7 @@ function loadCurrentDiff() {
         updateNavigationState();
     }).catch((err) => {
         if (loadingEl) loadingEl.textContent = 'Error loading diff: ' + err;
+        updateNavigationState();
     });
 }
 
@@ -167,8 +182,19 @@ function displayDiffViewer() {
         </div>
     `;
 
-    document.getElementById('prev-btn')?.addEventListener('click', () => PreviousDiff().then(loadCurrentDiff));
-    document.getElementById('next-btn')?.addEventListener('click', () => NextDiff().then(loadCurrentDiff));
+    const prevBtn = document.getElementById('prev-btn') as HTMLButtonElement | null;
+    const nextBtn = document.getElementById('next-btn') as HTMLButtonElement | null;
+
+    prevBtn?.addEventListener('click', () => {
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        PreviousDiff().then(loadCurrentDiff);
+    });
+    nextBtn?.addEventListener('click', () => {
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        NextDiff().then(loadCurrentDiff);
+    });
     document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
 
     loadCurrentDiff();
