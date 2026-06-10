@@ -1,22 +1,120 @@
 import './style.css';
 import './app.css';
 
-import logo from './assets/images/logo-universal.png';
-import {Greet, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow} from '../wailsjs/go/main/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow} from '../wailsjs/go/main/App';
 
-// Check if we're in diff mode
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
-        // Display diff viewer
         displayDiffViewer();
     } else {
-        // Display normal greet interface
-        displayGreetInterface();
+        displayHomeScreen();
     }
-}).catch((err) => {
-    console.error('Error checking diff mode:', err);
-    displayGreetInterface();
+}).catch(() => {
+    displayHomeScreen();
 });
+
+function displayHomeScreen() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    IsInitialized().then((initialized) => {
+        if (initialized) {
+            app.innerHTML = `
+                <div class="home-container">
+                    <div class="home-header">
+                        <h1 class="home-title">home-dawt-files</h1>
+                        <span class="home-badge initialized">initialized</span>
+                    </div>
+                    <p class="home-subtitle">Your dotfiles are managed by hdf.</p>
+                    <div class="command-list">
+                        <div class="command-row">
+                            <code class="cmd">hdf enroll &lt;path&gt;</code>
+                            <span class="cmd-desc">Start managing a new dotfile</span>
+                        </div>
+                        <div class="command-row">
+                            <code class="cmd">hdf link</code>
+                            <span class="cmd-desc">Re-create all managed symlinks</span>
+                        </div>
+                        <div class="command-row">
+                            <code class="cmd">hdf status</code>
+                            <span class="cmd-desc">Show managed files and sync state</span>
+                        </div>
+                        <div class="command-row">
+                            <code class="cmd">hdf daemon</code>
+                            <span class="cmd-desc">Start the background sync daemon</span>
+                        </div>
+                        <div class="command-row">
+                            <code class="cmd">hdf diff [url]</code>
+                            <span class="cmd-desc">View a diff in this window</span>
+                        </div>
+                    </div>
+                    <button class="close-button" id="close-btn">Close</button>
+                </div>
+            `;
+        } else {
+            app.innerHTML = `
+                <div class="home-container">
+                    <div class="home-header">
+                        <h1 class="home-title">home-dawt-files</h1>
+                        <span class="home-badge not-initialized">not initialized</span>
+                    </div>
+                    <p class="home-subtitle">Manage your dotfiles with git — across every machine.</p>
+                    <div class="steps">
+                        <div class="step">
+                            <span class="step-number">1</span>
+                            <div class="step-body">
+                                <div class="step-label">Initialize hdf</div>
+                                <code class="step-cmd">hdf init</code>
+                                <div class="step-hint">Sets up a local git repo and push target.</div>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <span class="step-number">2</span>
+                            <div class="step-body">
+                                <div class="step-label">Enroll a dotfile</div>
+                                <code class="step-cmd">hdf enroll ~/.bashrc</code>
+                                <div class="step-hint">Copies the file into the repo and replaces it with a symlink.</div>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <span class="step-number">3</span>
+                            <div class="step-body">
+                                <div class="step-label">On a new machine — re-link</div>
+                                <code class="step-cmd">hdf link</code>
+                                <div class="step-hint">Recreates symlinks for all managed files after cloning.</div>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <span class="step-number">4</span>
+                            <div class="step-body">
+                                <div class="step-label">Check drift</div>
+                                <code class="step-cmd">hdf status</code>
+                                <div class="step-hint">Shows which files have uncommitted local changes.</div>
+                            </div>
+                        </div>
+                    </div>
+                    <button class="close-button" id="close-btn">Close</button>
+                </div>
+            `;
+        }
+
+        document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
+    }).catch((err) => {
+        app.innerHTML = `
+            <div class="home-container">
+                <div class="home-header">
+                    <h1 class="home-title">home-dawt-files</h1>
+                    <span class="home-badge not-initialized">error</span>
+                </div>
+                <p class="home-subtitle">Could not read hdf configuration.</p>
+                <p class="home-subtitle" id="error-message"></p>
+                <button class="close-button" id="error-close-btn">Close</button>
+            </div>
+        `;
+        const errorMsgEl = document.getElementById('error-message');
+        if (errorMsgEl) errorMsgEl.textContent = String(err);
+        document.getElementById('error-close-btn')?.addEventListener('click', () => CloseWindow());
+    });
+}
 
 function loadCurrentDiff() {
     const loadingEl = document.getElementById('loading');
@@ -28,7 +126,6 @@ function loadCurrentDiff() {
     GetDiffContent().then((content) => {
         if (loadingEl) loadingEl.style.display = 'none';
         if (diffEl) {
-            // Parse and render diff with highlighting
             const lines = content.split('\n');
             const htmlLines = lines.map(line => {
                 let className = 'diff-line';
@@ -41,27 +138,19 @@ function loadCurrentDiff() {
                 } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
                     className += ' diff-header';
                 }
-
-                // Escape HTML to prevent injection
                 const escapedLine = line
                     .replace(/&/g, '&amp;')
                     .replace(/</g, '&lt;')
                     .replace(/>/g, '&gt;');
-
                 return `<div class="${className}">${escapedLine || ' '}</div>`;
             });
-
             diffEl.innerHTML = htmlLines.join('');
             diffEl.style.display = 'block';
         }
-
-        // Update button states and counter
         updateNavigationState();
     }).catch((err) => {
-        console.error('Error loading diff:', err);
-        if (loadingEl) {
-            loadingEl.textContent = 'Error loading diff: ' + err;
-        }
+        if (loadingEl) loadingEl.textContent = 'Error loading diff: ' + err;
+        updateNavigationState();
     });
 }
 
@@ -70,18 +159,9 @@ function updateNavigationState() {
         const counterEl = document.getElementById('diff-counter');
         const prevBtn = document.getElementById('prev-btn') as HTMLButtonElement;
         const nextBtn = document.getElementById('next-btn') as HTMLButtonElement;
-
-        if (counterEl) {
-            counterEl.textContent = `Diff ${currentIndex + 1} of ${totalDiffs}`;
-        }
-
-        if (prevBtn) {
-            prevBtn.disabled = currentIndex === 0;
-        }
-
-        if (nextBtn) {
-            nextBtn.disabled = currentIndex === totalDiffs - 1;
-        }
+        if (counterEl) counterEl.textContent = `Diff ${currentIndex + 1} of ${totalDiffs}`;
+        if (prevBtn) prevBtn.disabled = currentIndex === 0;
+        if (nextBtn) nextBtn.disabled = currentIndex === totalDiffs - 1;
     });
 }
 
@@ -102,73 +182,20 @@ function displayDiffViewer() {
         </div>
     `;
 
-    // Set up button handlers
-    const prevBtn = document.getElementById('prev-btn');
-    const nextBtn = document.getElementById('next-btn');
-    const closeBtn = document.getElementById('close-btn');
+    const prevBtn = document.getElementById('prev-btn') as HTMLButtonElement | null;
+    const nextBtn = document.getElementById('next-btn') as HTMLButtonElement | null;
 
-    if (prevBtn) {
-        prevBtn.addEventListener('click', () => {
-            PreviousDiff().then(() => {
-                loadCurrentDiff();
-            });
-        });
-    }
+    prevBtn?.addEventListener('click', () => {
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        PreviousDiff().then(loadCurrentDiff);
+    });
+    nextBtn?.addEventListener('click', () => {
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        NextDiff().then(loadCurrentDiff);
+    });
+    document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
 
-    if (nextBtn) {
-        nextBtn.addEventListener('click', () => {
-            NextDiff().then(() => {
-                loadCurrentDiff();
-            });
-        });
-    }
-
-    if (closeBtn) {
-        closeBtn.addEventListener('click', () => {
-            CloseWindow();
-        });
-    }
-
-    // Load the initial diff
     loadCurrentDiff();
-}
-
-function displayGreetInterface() {
-    // Setup the greet function
-    (window as any).greet = function () {
-        // Get name
-        let name = nameElement!.value;
-
-        // Check if the input is empty
-        if (name === "") return;
-
-        // Call App.Greet(name)
-        try {
-            Greet(name)
-                .then((result) => {
-                    // Update result with data back from App.Greet()
-                    resultElement!.innerText = result;
-                })
-                .catch((err) => {
-                    console.error(err);
-                });
-        } catch (err) {
-            console.error(err);
-        }
-    };
-
-    document.querySelector('#app')!.innerHTML = `
-        <img id="logo" class="logo">
-          <div class="result" id="result">Please enter your name below 👇</div>
-          <div class="input-box" id="input">
-            <input class="input" id="name" type="text" autocomplete="off" />
-            <button class="btn" onclick="greet()">Greet</button>
-          </div>
-        </div>
-    `;
-    (document.getElementById('logo') as HTMLImageElement).src = logo;
-
-    let nameElement = (document.getElementById("name") as HTMLInputElement);
-    nameElement.focus();
-    let resultElement = document.getElementById("result");
 }

@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"hdf/config"
 	"io"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -13,6 +17,7 @@ import (
 // App struct
 type App struct {
 	ctx          context.Context
+	mu           sync.Mutex
 	diffURLs     []string
 	currentIndex int
 }
@@ -30,18 +35,34 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// Greet returns a greeting for the given name
-func (a *App) Greet(name string) string {
-	return fmt.Sprintf("Hello %s, It's show time!", name)
+// IsInitialized reports whether hdf has been configured on this machine.
+// It returns (false, nil) when the config file is absent and (false, err)
+// when the file exists but is corrupted, so the UI can distinguish the two.
+func (a *App) IsInitialized() (bool, error) {
+	return isInitialized(config.DefaultPath())
+}
+
+func isInitialized(path string) (bool, error) {
+	_, err := config.Load(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 // GetDiffContent returns the diff content to display
 func (a *App) GetDiffContent() string {
+	a.mu.Lock()
 	if len(a.diffURLs) == 0 || a.currentIndex >= len(a.diffURLs) {
+		a.mu.Unlock()
 		return ""
 	}
-
 	currentURL := a.diffURLs[a.currentIndex]
+	a.mu.Unlock()
+
 	parentCtx := a.ctx
 	if parentCtx == nil {
 		parentCtx = context.Background()
@@ -68,21 +89,29 @@ func (a *App) GetDiffContent() string {
 
 // HasDiff returns true if a diff URL is set
 func (a *App) HasDiff() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return len(a.diffURLs) > 0
 }
 
 // GetCurrentIndex returns the current diff index
 func (a *App) GetCurrentIndex() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.currentIndex
 }
 
 // GetTotalDiffs returns the total number of diffs
 func (a *App) GetTotalDiffs() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return len(a.diffURLs)
 }
 
 // NextDiff moves to the next diff
 func (a *App) NextDiff() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.currentIndex < len(a.diffURLs)-1 {
 		a.currentIndex++
 	}
@@ -90,6 +119,8 @@ func (a *App) NextDiff() {
 
 // PreviousDiff moves to the previous diff
 func (a *App) PreviousDiff() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.currentIndex > 0 {
 		a.currentIndex--
 	}

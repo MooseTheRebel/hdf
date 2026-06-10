@@ -1,3 +1,167 @@
+/* Home screen */
+
+.home-container {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 48px 32px;
+    text-align: left;
+}
+
+.home-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 8px;
+}
+
+.home-title {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: -0.5px;
+}
+
+.home-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.home-badge.initialized {
+    background-color: rgba(46, 160, 67, 0.25);
+    color: #4caf70;
+    border: 1px solid rgba(46, 160, 67, 0.4);
+}
+
+.home-badge.not-initialized {
+    background-color: rgba(200, 130, 40, 0.2);
+    color: #e0a050;
+    border: 1px solid rgba(200, 130, 40, 0.35);
+}
+
+.home-subtitle {
+    color: #8a9bb0;
+    font-size: 15px;
+    margin: 0 0 32px;
+}
+
+/* Command reference (initialized state) */
+
+.command-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 36px;
+}
+
+.command-row {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    align-items: baseline;
+    gap: 16px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+.command-row:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+}
+
+.cmd {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    color: #c3dafe;
+    background: none;
+}
+
+.cmd-desc {
+    font-size: 13px;
+    color: #8a9bb0;
+}
+
+/* Steps (not-initialized state) */
+
+.steps {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin-bottom: 36px;
+}
+
+.step {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.step-number {
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    border-radius: 50%;
+    background-color: rgba(100, 149, 237, 0.25);
+    color: #c3dafe;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 2px;
+}
+
+.step-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.step-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #dde6f0;
+}
+
+.step-cmd {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    color: #c3dafe;
+    background-color: rgba(255, 255, 255, 0.06);
+    padding: 4px 10px;
+    border-radius: 4px;
+    display: inline-block;
+    width: fit-content;
+}
+
+.step-hint {
+    font-size: 12px;
+    color: #8a9bb0;
+}
+
+/* Shared close button */
+
+.close-button {
+    padding: 9px 24px;
+    font-size: 14px;
+    font-weight: 500;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    background-color: #3a3a4a;
+    color: #cccccc;
+    transition: background-color 0.15s;
+}
+
+.close-button:hover {
+    background-color: #4a4a5a;
+}
+
+/* Legacy (neeed to refactor) — kept IDs below for diff viewer */
+
 #logo {
     display: block;
     width: 50%;

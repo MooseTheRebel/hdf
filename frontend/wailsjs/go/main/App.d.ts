@@ -9,9 +9,9 @@ export function GetDiffContent():Promise<string>;
 
 export function GetTotalDiffs():Promise<number>;
 
-export function Greet(arg1:string):Promise<string>;
-
 export function HasDiff():Promise<boolean>;
+
+export function IsInitialized():Promise<boolean>;
 
 export function NextDiff():Promise<void>;
 
