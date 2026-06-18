@@ -270,6 +270,13 @@
     white-space: pre;
     text-align: left;
     margin: 0;
+    /* Prevent very long diff lines from overflowing the container.
+       overflow-x: auto allows horizontal scrolling per-line;
+       word-break: break-all is a fallback for environments that
+       do not support per-element scroll. */
+    overflow-x: auto;
+    word-break: break-all;
+    max-width: 100%;
 }
 
 .diff-addition {

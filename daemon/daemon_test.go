@@ -11,6 +11,59 @@ import (
 	"testing"
 )
 
+func TestGenerateUnifiedDiff(t *testing.T) {
+	cases := []struct {
+		name      string
+		committed string
+		disk      string
+		wantEmpty bool
+		wantPlus  string
+		wantMinus string
+	}{
+		{
+			name:      "identical content returns empty",
+			committed: "line one\nline two\n",
+			disk:      "line one\nline two\n",
+			wantEmpty: true,
+		},
+		{
+			name:      "added line appears with + prefix",
+			committed: "line one\n",
+			disk:      "line one\nnew line\n",
+			wantPlus:  "+new line",
+		},
+		{
+			name:      "removed line appears with - prefix",
+			committed: "line one\nold line\n",
+			disk:      "line one\n",
+			wantMinus: "-old line",
+		},
+		{
+			name:      "new file (empty committed) shows all lines as additions",
+			committed: "",
+			disk:      "brand new\n",
+			wantPlus:  "+brand new",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := GenerateUnifiedDiff(tc.committed, tc.disk)
+			if tc.wantEmpty {
+				if got != "" {
+					t.Errorf("expected empty diff, got %q", got)
+				}
+				return
+			}
+			if tc.wantPlus != "" && !strings.Contains(got, tc.wantPlus) {
+				t.Errorf("diff missing %q:\n%s", tc.wantPlus, got)
+			}
+			if tc.wantMinus != "" && !strings.Contains(got, tc.wantMinus) {
+				t.Errorf("diff missing %q:\n%s", tc.wantMinus, got)
+			}
+		})
+	}
+}
+
 const testHostBranch = "test-hostabc123"
 
 // fakeNotifier captures all notification messages for test assertions.
@@ -382,7 +435,7 @@ func TestMultiHostIntegration(t *testing.T) {
 	// --- run one sync cycle per host ---
 	for i, spec := range hostSpecs {
 		env := envs[i]
-		if _, err := syncWithHome(env.cfgPath, env.statePath, env.notifier, env.homeDir); err != nil {
+		if _, err := syncWithHome(env.cfgPath, env.statePath, env.notifier, nil, env.homeDir); err != nil {
 			t.Fatalf("host %s syncWithHome: %v", spec.branch, err)
 		}
 	}
@@ -453,4 +506,160 @@ func TestMultiHostIntegration(t *testing.T) {
 				hostAFilePath, discoveredReg.Files)
 		}
 	})
+}
+
+func TestSyncAutosPushBranch(t *testing.T) {
+	const branch = "test-host"
+
+	setupBare := func(t *testing.T) (bareURL, bareDir string) {
+		t.Helper()
+		bareDir = t.TempDir()
+		if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+			t.Fatalf("InitOrOpenBare: %v", err)
+		}
+		bareURL = "file://" + bareDir
+
+		seedDir := t.TempDir()
+		seed, err := repo.Init(seedDir)
+		if err != nil {
+			t.Fatalf("seed Init: %v", err)
+		}
+		hdfDir := filepath.Join(seedDir, ".hdf")
+		if err := os.MkdirAll(hdfDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
+			t.Fatalf("seed CommitFile: %v", err)
+		}
+		if err := seed.AddRemote("origin", bareURL); err != nil {
+			t.Fatalf("seed AddRemote: %v", err)
+		}
+		if err := seed.Push("main"); err != nil {
+			t.Fatalf("seed Push main: %v", err)
+		}
+		return bareURL, bareDir
+	}
+
+	cases := []struct {
+		name         string
+		preCommit    bool
+		makeReadOnly bool
+		wantErr      bool
+		wantWarning  bool
+	}{
+		{
+			name:        "already up to date",
+			preCommit:   false,
+			wantErr:     false,
+			wantWarning: false,
+		},
+		{
+			name:        "unpushed commit pushed successfully",
+			preCommit:   true,
+			wantErr:     false,
+			wantWarning: false,
+		},
+		{
+			name:         "push fails",
+			preCommit:    true,
+			makeReadOnly: true,
+			wantErr:      true,
+			wantWarning:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Drain any warnings left by earlier tests before asserting.
+			PendingWarnings()
+
+			bareURL, bareDir := setupBare(t)
+
+			workDir := t.TempDir()
+			homeDir := t.TempDir()
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			statePath := filepath.Join(t.TempDir(), "state.toml")
+
+			r, err := repo.Clone(bareURL, workDir)
+			if err != nil {
+				t.Fatalf("Clone: %v", err)
+			}
+			if err := r.CreateAndCheckoutBranch(branch); err != nil {
+				t.Fatalf("CreateAndCheckoutBranch: %v", err)
+			}
+			if err := r.Push(branch); err != nil {
+				t.Fatalf("initial Push: %v", err)
+			}
+
+			if err := config.Save(cfgPath, &config.Config{
+				Branch:           branch,
+				LocalDotfilesDir: workDir,
+				GitPushTarget:    bareURL,
+			}); err != nil {
+				t.Fatalf("Save config: %v", err)
+			}
+
+			if tc.preCommit {
+				f := filepath.Join(workDir, "test.txt")
+				if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := r.CommitFile("test.txt", "hdf: test commit"); err != nil {
+					t.Fatalf("CommitFile: %v", err)
+				}
+			}
+
+			if tc.makeReadOnly {
+				// Recursively make the bare repo read-only so that go-git cannot
+				// write new pack files or update refs during Push, while Fetch
+				// (which only reads from the remote) still succeeds.
+				if err := filepath.Walk(bareDir, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+					if info.IsDir() {
+						return os.Chmod(path, 0o555) //nolint:gosec
+					}
+					return os.Chmod(path, 0o444) //nolint:gosec
+				}); err != nil {
+					t.Fatalf("chmod bare tree: %v", err)
+				}
+				t.Cleanup(func() {
+					_ = filepath.Walk(bareDir, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						if info.IsDir() {
+							return os.Chmod(path, 0o755) //nolint:gosec
+						}
+						return os.Chmod(path, 0o644) //nolint:gosec
+					})
+				})
+			}
+
+			n := &fakeNotifier{}
+			_, err = syncWithHome(cfgPath, statePath, n, n, homeDir)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Error("want error from syncWithHome, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+
+			warnings := PendingWarnings()
+			if tc.wantWarning && len(warnings) == 0 {
+				t.Error("want pending warning, got none")
+			}
+			if !tc.wantWarning && len(warnings) > 0 {
+				t.Errorf("want no pending warning, got: %v", warnings)
+			}
+		})
+	}
 }

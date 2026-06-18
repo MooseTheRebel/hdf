@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hdf/config"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -53,12 +54,40 @@ func isInitialized(path string) (bool, error) {
 	return false, err
 }
 
-// GetDiffContent returns the diff content to display
-func (a *App) GetDiffContent() string {
+// fetchDiff fetches raw unified-diff content from url.
+// Non-2xx responses are logged and returned as errors so callers and the
+// daemon log can surface them without silently discarding the failure.
+func fetchDiff(ctx context.Context, url string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetching diff: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("[WARN] fetchDiff: HTTP %d from %s", resp.StatusCode, url)
+		return "", fmt.Errorf("fetching diff from %s: HTTP %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading diff: %w", err)
+	}
+	return string(body), nil
+}
+
+// GetDiffContent returns the diff content for the current index.
+// Returns ("", nil) when there are no diffs to display (HasDiff() == false),
+// which is the safe no-op path when the wails window is opened without diffs.
+func (a *App) GetDiffContent() (string, error) {
 	a.mu.Lock()
 	if len(a.diffURLs) == 0 || a.currentIndex >= len(a.diffURLs) {
 		a.mu.Unlock()
-		return ""
+		return "", nil
 	}
 	currentURL := a.diffURLs[a.currentIndex]
 	a.mu.Unlock()
@@ -67,27 +96,10 @@ func (a *App) GetDiffContent() string {
 	if parentCtx == nil {
 		parentCtx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
-	if err != nil {
-		return fmt.Sprintf("Error creating request: %v", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Sprintf("Error fetching diff: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Sprintf("Error reading diff: %v", err)
-	}
-
-	return string(body)
+	return fetchDiff(parentCtx, currentURL)
 }
 
-// HasDiff returns true if a diff URL is set
+// HasDiff returns true if one or more diff URLs are queued for display.
 func (a *App) HasDiff() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -126,7 +138,9 @@ func (a *App) PreviousDiff() {
 	}
 }
 
-// CloseWindow closes the application window
+// CloseWindow closes the application window.
+// Note: this must only be called from the wails GUI path; the daemon process
+// must never call into this function.
 func (a *App) CloseWindow() {
 	runtime.Quit(a.ctx)
 }

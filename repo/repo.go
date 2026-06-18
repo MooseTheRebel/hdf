@@ -70,6 +70,15 @@ func Init(path string) (*Repo, error) {
 	return &Repo{r: r, path: path}, nil
 }
 
+// InitOrOpen initializes a non-bare repository at path, or opens it if it
+// already exists.
+func InitOrOpen(path string) (*Repo, error) {
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+		return Open(path)
+	}
+	return Init(path)
+}
+
 // Open opens an existing git repository at path.
 func Open(path string) (*Repo, error) {
 	r, err := git.PlainOpen(path)
@@ -369,6 +378,64 @@ func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
 		return "", err
 	}
 	return ref.Hash().String(), nil
+}
+
+// MergeFromMain fast-forwards the current branch to origin/main.
+// Returns an error if the branches have diverged (manual merge required).
+func (r *Repo) MergeFromMain() error {
+	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName("origin", "main"), true)
+	if err != nil {
+		return fmt.Errorf("resolving origin/main: %w", err)
+	}
+
+	head, err := r.r.Head()
+	if err != nil {
+		return fmt.Errorf("resolving HEAD: %w", err)
+	}
+
+	if head.Hash() == remoteRef.Hash() {
+		return nil
+	}
+
+	headCommit, err := r.r.CommitObject(head.Hash())
+	if err != nil {
+		return fmt.Errorf("reading HEAD commit: %w", err)
+	}
+	remoteCommit, err := r.r.CommitObject(remoteRef.Hash())
+	if err != nil {
+		return fmt.Errorf("reading origin/main commit: %w", err)
+	}
+
+	bases, err := headCommit.MergeBase(remoteCommit)
+	if err != nil {
+		return fmt.Errorf("computing merge base: %w", err)
+	}
+	if len(bases) == 0 {
+		return fmt.Errorf("no common ancestor between HEAD and origin/main")
+	}
+	if bases[0].Hash == remoteRef.Hash() {
+		return nil // already at or ahead of origin/main
+	}
+	if bases[0].Hash != head.Hash() {
+		return fmt.Errorf("cannot fast-forward: HEAD and origin/main have diverged; run 'git merge' manually")
+	}
+
+	w, err := r.r.Worktree()
+	if err != nil {
+		return fmt.Errorf("getting worktree: %w", err)
+	}
+	status, err := w.Status()
+	if err != nil {
+		return fmt.Errorf("checking worktree status: %w", err)
+	}
+	if !status.IsClean() {
+		return fmt.Errorf("cannot merge: uncommitted changes in your dotfiles repository — commit or stash them first")
+	}
+
+	return w.Reset(&git.ResetOptions{
+		Commit: remoteRef.Hash(),
+		Mode:   git.HardReset,
+	})
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.

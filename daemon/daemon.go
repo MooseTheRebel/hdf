@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hdf/config"
 	"hdf/link"
@@ -9,12 +10,42 @@ import (
 	"hdf/repo"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
+	git "github.com/go-git/go-git/v5"
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 const maxDiffFileSize = 1 << 20 // 1 MB
+
+// pendingWarnings holds warnings recorded by the daemon that have not yet
+// been surfaced to the user. Drained by PendingWarnings at changes-push/changes-pull time.
+var (
+	pendingMu      sync.Mutex
+	pendingWarnBuf []string
+)
+
+// addWarning logs msg at WARN level and appends it to the pending store so
+// it can be surfaced to the user the next time they run hdf changes-push or hdf changes-pull.
+func addWarning(msg string) {
+	notify.LogAndNotify(notify.LevelWarning, "hdf", msg)
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	pendingWarnBuf = append(pendingWarnBuf, msg)
+}
+
+// PendingWarnings returns and clears all warnings that the daemon has
+// recorded since the last call. Called by hdf changes-push/changes-pull (via promptPendingWarnings)
+// before proceeding so the user can be prompted to act.
+func PendingWarnings() []string {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	out := pendingWarnBuf
+	pendingWarnBuf = nil
+	return out
+}
 
 // Run starts the hdf sync daemon, which syncs on a configurable interval indefinitely.
 // The interval is read from SharedSettings on the main branch after each sync cycle;
@@ -40,9 +71,13 @@ func Run(ctx context.Context, cfgPath string) error {
 	fmt.Fprintf(os.Stderr, "hdf daemon started\n")
 	statePath := config.DefaultStatePath()
 	for {
-		interval, err := syncWithHome(cfgPath, statePath, nil, homeDir)
+		interval, err := syncWithHome(cfgPath, statePath, nil, nil, homeDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
+			// Sync errors are serious: fire a critical OS alert and record a warning
+			// so the user is notified at the next hdf changes-push/changes-pull even if they missed
+			// the alert.
+			notify.LogAndNotify(notify.LevelCritical, "hdf sync error", err.Error())
+			addWarning(fmt.Sprintf("sync error: %v", err))
 			interval = time.Duration(config.DefaultSyncIntervalMinutes) * time.Minute
 		}
 		fmt.Fprintf(os.Stderr, "next sync in %s\n", interval)
@@ -63,16 +98,20 @@ func Sync(cfgPath, statePath string, n notify.Notifier) error {
 	if err != nil {
 		return fmt.Errorf("getting home dir: %w", err)
 	}
-	_, err = syncWithHome(cfgPath, statePath, n, homeDir)
+	_, err = syncWithHome(cfgPath, statePath, n, nil, homeDir)
 	return err
 }
 
 // syncWithHome is the testable core of Sync with an injected homeDir.
-// It returns the next sync interval derived from SharedSettings so the caller
-// can reuse it without a redundant repo read.
-func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) (time.Duration, error) {
+// n is the standard notifier (drift/unpushed); cn is the critical notifier
+// (fetch failures, repo errors). Pass nil to use the package-level defaults.
+// Returns the next sync interval derived from SharedSettings.
+func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir string) (time.Duration, error) {
 	if n == nil {
 		n = notify.Default
+	}
+	if cn == nil {
+		cn = notify.Critical
 	}
 
 	cfg, err := config.Load(cfgPath)
@@ -91,6 +130,11 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 		return 0, fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
 	}
 	if err := r.Fetch(); err != nil {
+		// Fetch failure is serious: fire a critical OS alert (independent of wails)
+		// and record a warning for surfacing at the next changes-push/changes-pull.
+		msg := fmt.Sprintf("fetch from remote failed: %v", err)
+		_ = cn.Send("hdf: remote fetch failed", msg)
+		addWarning(msg)
 		return 0, fmt.Errorf("fetching from remote: %w", err)
 	}
 
@@ -115,16 +159,20 @@ func syncWithHome(cfgPath, statePath string, n notify.Notifier, homeDir string) 
 
 	if totalHunks >= threshold {
 		if state.LastNotifiedAt.IsZero() || time.Since(state.LastNotifiedAt) >= cooldown {
-			_ = n.Send("hdf",
-				fmt.Sprintf("%d uncommitted hunk(s) of local drift — run: hdf enroll <file> or manage as variant", totalHunks))
+			msg := fmt.Sprintf("%d uncommitted hunk(s) of local drift — run: hdf changes-push <file> or manage as variant", totalHunks)
+			_ = n.Send("hdf", msg)
+			// Also record as a warning so hdf changes-push/changes-pull can surface it.
+			addWarning(msg)
 			state.LastNotifiedAt = time.Now()
 		}
 	}
 
-	// 4. Check if the machine's branch has commits not in main.
-	unpushed, err := r.HasUnpushedCommits(cfg.Branch, "main")
-	if err == nil && unpushed {
-		_ = n.Send("hdf", "Unpushed changes — push your branch and merge into main")
+	// 4. Push the machine branch so changes-push keeps its name honest.
+	if err := r.Push(cfg.Branch); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		msg := fmt.Sprintf("push %s failed: %v", cfg.Branch, err)
+		_ = cn.Send("hdf: push failed", msg)
+		addWarning(msg)
+		return 0, fmt.Errorf("pushing branch %s: %w", cfg.Branch, err)
 	}
 
 	state.LastSync = time.Now()
@@ -153,7 +201,10 @@ func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
 // parsed result. A missing or empty file is treated as "not yet configured"
 // and returns defaults with no error. A malformed file is a hard error.
 func loadSharedSettings(r *repo.Repo) (*config.SharedSettings, error) {
-	ssBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
+	ssBytes, err := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading shared settings from origin/main: %w", err)
+	}
 	if len(ssBytes) == 0 {
 		return config.DefaultSharedSettings(), nil
 	}
@@ -225,6 +276,38 @@ func resolveHash(f config.ManagedFile, branch string) string {
 		}
 	}
 	return f.Hash
+}
+
+// GenerateUnifiedDiff returns a unified-diff-style representation of line-level
+// changes between committed and disk content. Uses the same diffmatchpatch
+// engine as countHunks. Returns "" when the content is identical.
+func GenerateUnifiedDiff(committed, disk string) string {
+	if committed == disk {
+		return ""
+	}
+	dmp := diffmatchpatch.New()
+	a, b, lines := dmp.DiffLinesToChars(committed, disk)
+	diffs := dmp.DiffMain(a, b, false)
+	diffs = dmp.DiffCharsToLines(diffs, lines)
+
+	var sb strings.Builder
+	for _, d := range diffs {
+		prefix := " "
+		switch d.Type {
+		case diffmatchpatch.DiffInsert:
+			prefix = "+"
+		case diffmatchpatch.DiffDelete:
+			prefix = "-"
+		case diffmatchpatch.DiffEqual:
+			// context lines keep the space prefix
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(d.Text, "\n"), "\n") {
+			sb.WriteString(prefix)
+			sb.WriteString(line)
+			sb.WriteRune('\n')
+		}
+	}
+	return sb.String()
 }
 
 // countHunks returns the number of contiguous non-Equal diff regions between
