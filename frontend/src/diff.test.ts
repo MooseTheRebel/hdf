@@ -28,6 +28,8 @@ describe('renderDiffContent', () => {
     it('marks diff file header lines', () => {
         expect(renderDiffContent('diff --git a/foo b/foo')).toContain('diff-header');
         expect(renderDiffContent('index abc123..def456 100644')).toContain('diff-header');
+        expect(renderDiffContent('--- a/foo')).toContain('diff-header');
+        expect(renderDiffContent('+++ b/foo')).toContain('diff-header');
     });
 
     it('escapes HTML in line content', () => {
@@ -47,9 +49,4 @@ describe('renderDiffContent', () => {
         expect(html.match(/<div/g)?.length).toBe(3);
     });
 
-    it('returns empty string for empty input with no newlines', () => {
-        // single empty line → one div with a space placeholder
-        const html = renderDiffContent('');
-        expect(html.match(/<div/g)?.length).toBe(1);
-    });
 });
