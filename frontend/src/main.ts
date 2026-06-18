@@ -2,6 +2,7 @@ import './style.css';
 import './app.css';
 
 import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow} from '../wailsjs/go/main/App';
+import {renderDiffContent} from './diff';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -126,25 +127,7 @@ function loadCurrentDiff() {
     GetDiffContent().then((content) => {
         if (loadingEl) loadingEl.style.display = 'none';
         if (diffEl) {
-            const lines = content.split('\n');
-            const htmlLines = lines.map(line => {
-                let className = 'diff-line';
-                if (line.startsWith('+')) {
-                    className += ' diff-addition';
-                } else if (line.startsWith('-')) {
-                    className += ' diff-deletion';
-                } else if (line.startsWith('@@')) {
-                    className += ' diff-hunk';
-                } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
-                    className += ' diff-header';
-                }
-                const escapedLine = line
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;');
-                return `<div class="${className}">${escapedLine || ' '}</div>`;
-            });
-            diffEl.innerHTML = htmlLines.join('');
+            diffEl.innerHTML = renderDiffContent(content);
             diffEl.style.display = 'block';
         }
         updateNavigationState();
