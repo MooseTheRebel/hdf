@@ -1,9 +1,11 @@
 package repo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -369,6 +371,19 @@ func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
 		return "", err
 	}
 	return ref.Hash().String(), nil
+}
+
+// MergeFromMain merges origin/main into the current branch using the system git binary.
+func (r *Repo) MergeFromMain() error {
+	out, err := exec.CommandContext(context.Background(), "git", "-C", r.path, "merge", "origin/main").CombinedOutput() //nolint:gosec // repo path is set by hdf config, validated at init time
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("merging origin/main: %s", msg)
+		}
+		return fmt.Errorf("merging origin/main: %w", err)
+	}
+	return nil
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.

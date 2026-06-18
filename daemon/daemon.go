@@ -9,6 +9,7 @@ import (
 	"hdf/repo"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
@@ -225,6 +226,41 @@ func resolveHash(f config.ManagedFile, branch string) string {
 		}
 	}
 	return f.Hash
+}
+
+// GenerateUnifiedDiff returns a unified-diff-style representation of line-level
+// changes between committed and disk content. Uses the same diffmatchpatch
+// engine as countHunks. Returns "" when the content is identical.
+func GenerateUnifiedDiff(committed, disk string) string {
+	if committed == disk {
+		return ""
+	}
+	dmp := diffmatchpatch.New()
+	a, b, lines := dmp.DiffLinesToChars(committed, disk)
+	diffs := dmp.DiffMain(a, b, false)
+	diffs = dmp.DiffCharsToLines(diffs, lines)
+
+	var sb strings.Builder
+	for _, d := range diffs {
+		prefix := " "
+		switch d.Type {
+		case diffmatchpatch.DiffInsert:
+			prefix = "+"
+		case diffmatchpatch.DiffDelete:
+			prefix = "-"
+		case diffmatchpatch.DiffEqual:
+			// context lines keep the space prefix
+		}
+		for _, line := range strings.Split(d.Text, "\n") {
+			if line == "" {
+				continue
+			}
+			sb.WriteString(prefix)
+			sb.WriteString(line)
+			sb.WriteRune('\n')
+		}
+	}
+	return sb.String()
 }
 
 // countHunks returns the number of contiguous non-Equal diff regions between

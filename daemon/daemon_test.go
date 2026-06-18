@@ -11,6 +11,59 @@ import (
 	"testing"
 )
 
+func TestGenerateUnifiedDiff(t *testing.T) {
+	cases := []struct {
+		name      string
+		committed string
+		disk      string
+		wantEmpty bool
+		wantPlus  string
+		wantMinus string
+	}{
+		{
+			name:      "identical content returns empty",
+			committed: "line one\nline two\n",
+			disk:      "line one\nline two\n",
+			wantEmpty: true,
+		},
+		{
+			name:      "added line appears with + prefix",
+			committed: "line one\n",
+			disk:      "line one\nnew line\n",
+			wantPlus:  "+new line",
+		},
+		{
+			name:      "removed line appears with - prefix",
+			committed: "line one\nold line\n",
+			disk:      "line one\n",
+			wantMinus: "-old line",
+		},
+		{
+			name:      "new file (empty committed) shows all lines as additions",
+			committed: "",
+			disk:      "brand new\n",
+			wantPlus:  "+brand new",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := GenerateUnifiedDiff(tc.committed, tc.disk)
+			if tc.wantEmpty {
+				if got != "" {
+					t.Errorf("expected empty diff, got %q", got)
+				}
+				return
+			}
+			if tc.wantPlus != "" && !strings.Contains(got, tc.wantPlus) {
+				t.Errorf("diff missing %q:\n%s", tc.wantPlus, got)
+			}
+			if tc.wantMinus != "" && !strings.Contains(got, tc.wantMinus) {
+				t.Errorf("diff missing %q:\n%s", tc.wantMinus, got)
+			}
+		})
+	}
+}
+
 const testHostBranch = "test-hostabc123"
 
 // fakeNotifier captures all notification messages for test assertions.

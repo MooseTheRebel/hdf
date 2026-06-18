@@ -532,36 +532,39 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 // branch, registers an empty stub in main, and pushes both branches.
 // homeDir is used as the home directory for path resolution; callers should
 // pass os.UserHomeDir() in production and a temp dir in tests.
-func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) error {
-	expanded, tildeFile, err := expandAndValidate(filePath, homeDir)
-	if err != nil {
-		return err
+// showEnrollDiff prints the diff between committed and disk content and
+// optionally prompts for confirmation. Returns an error when the user aborts.
+func showEnrollDiff(committed, disk []byte, filePath string, stdin io.Reader, yes bool) error {
+	if committed == nil {
+		fmt.Printf("new file: %s\n", filePath)
+		return nil
 	}
-
-	r, err := repo.Open(cfg.LocalDotfilesDir)
-	if err != nil {
-		return fmt.Errorf("opening repo: %w", err)
+	diff := daemon.GenerateUnifiedDiff(string(committed), string(disk))
+	if diff == "" {
+		return nil
 	}
-
-	if config.IsIgnored(tildeFile, ignoredPathsFromRemote(r)) {
-		return fmt.Errorf("%s matches an ignored path — edit %s on the main branch to override",
-			filePath, config.SharedSettingsFile)
+	fmt.Printf("changes to %s:\n", filePath)
+	printDiff(diff)
+	if yes {
+		return nil
 	}
+	fmt.Print("Enroll these changes? [Y/n]: ")
+	reader := bufio.NewReader(stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(answer)
+	if answer != "" && !isYes(answer) {
+		return fmt.Errorf("aborted")
+	}
+	return nil
+}
 
+// applyEnroll copies expanded into the repo, commits it, updates the main
+// registry, pushes, and records the new commit SHA in state.
+func applyEnroll(r *repo.Repo, expanded, tildeFile, relName, filePath, homeDir string, cfg *config.Config, statePath string) error {
 	hash, err := link.EnrollInHome(expanded, cfg.LocalDotfilesDir, homeDir)
 	if err != nil {
 		return fmt.Errorf("enrolling %s: %w", filePath, err)
 	}
-
-	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
-	if err != nil {
-		return fmt.Errorf("computing repo path: %w", err)
-	}
-	relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
-	if err != nil {
-		return fmt.Errorf("computing relative path: %w", err)
-	}
-
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
@@ -574,20 +577,16 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 	if err := config.SaveRegistry(cfg.LocalDotfilesDir, reg); err != nil {
 		return fmt.Errorf("saving registry: %w", err)
 	}
-
 	sha, err := stageAndCommit(r, relName, filePath)
 	if err != nil {
 		return err
 	}
-
 	if err := updateMainRegistry(r, tildeFile, filepath.ToSlash(relName), filePath); err != nil {
 		return err
 	}
-
 	if err := pushBranches(r, cfg); err != nil {
 		return err
 	}
-
 	state, err := config.LoadState(statePath)
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
@@ -600,10 +599,45 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 	return nil
 }
 
+func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, stdin io.Reader, yes bool) error {
+	expanded, tildeFile, err := expandAndValidate(filePath, homeDir)
+	if err != nil {
+		return err
+	}
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("opening repo: %w", err)
+	}
+	if config.IsIgnored(tildeFile, ignoredPathsFromRemote(r)) {
+		return fmt.Errorf("%s matches an ignored path — edit %s on the main branch to override",
+			filePath, config.SharedSettingsFile)
+	}
+
+	// Compute the repo-relative path early so we can show a diff before
+	// modifying anything on disk.
+	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	if err != nil {
+		return fmt.Errorf("computing repo path: %w", err)
+	}
+	relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
+	if err != nil {
+		return fmt.Errorf("computing relative path: %w", err)
+	}
+	committedBytes, _ := r.ReadFileFromBranch(cfg.Branch, filepath.ToSlash(relName))
+	diskBytes, err := os.ReadFile(expanded)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", expanded, err)
+	}
+	if err := showEnrollDiff(committedBytes, diskBytes, filePath, stdin, yes); err != nil {
+		return err
+	}
+	return applyEnroll(r, expanded, tildeFile, relName, filePath, homeDir, cfg, statePath)
+}
+
 var enrollCmd = &cobra.Command{
 	Use:   "enroll <path>",
 	Short: "Enroll a dot file under hdf management",
-	Long:  `Copies the file into the hdf repo, replaces it with a symlink, and commits.`,
+	Long:  `Shows a diff of changes, then copies the file into the hdf repo, replaces it with a symlink, and commits.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load(config.DefaultPath())
@@ -614,18 +648,84 @@ var enrollCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
-		return runEnroll(args[0], homeDir, cfg, config.DefaultStatePath())
+		return runEnroll(args[0], homeDir, cfg, config.DefaultStatePath(), os.Stdin, enrollYes)
 	},
 }
 
-// runLink re-creates symlinks for all managed files. homeDir is the user's
-// home directory used for path normalisation; callers should pass
-// os.UserHomeDir() in production and a temp dir in tests.
-func runLink(homeDir string, cfg *config.Config) error {
+// runLink fetches from remote, shows incoming diffs, merges main, and
+// re-creates symlinks for all managed files. Pass noFetch=true to skip the
+// network operations and only re-create symlinks (offline / test use).
+// homeDir is the user's home directory; pass os.UserHomeDir() in production
+// and a temp dir in tests.
+// fetchAndShowIncoming fetches from remote, prints a colored diff for every
+// managed file that differs between origin/main and the current branch, and
+// returns true when at least one file has incoming changes.
+func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry, homeDir string) (bool, error) {
+	if err := r.Fetch(); err != nil {
+		return false, fmt.Errorf("fetching from remote: %w", err)
+	}
+	anyIncoming := false
+	for _, f := range reg.Files {
+		expanded := config.ExpandPathIn(f.Path, homeDir)
+		var repoFile string
+		if len(f.Variants) > 0 {
+			repoFile, _ = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+		} else {
+			repoFile, _ = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		}
+		if repoFile == "" {
+			continue
+		}
+		relPath, err := filepath.Rel(cfg.LocalDotfilesDir, repoFile)
+		if err != nil {
+			continue
+		}
+		relPath = filepath.ToSlash(relPath)
+		mainBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", relPath)
+		branchBytes, _ := r.ReadFileFromBranch(cfg.Branch, relPath)
+		if string(mainBytes) == string(branchBytes) {
+			continue
+		}
+		if !anyIncoming {
+			fmt.Println("Incoming changes from main:")
+		}
+		anyIncoming = true
+		fmt.Printf("\n%s\n", f.Path)
+		printDiff(daemon.GenerateUnifiedDiff(string(branchBytes), string(mainBytes)))
+	}
+	return anyIncoming, nil
+}
+
+// runLink fetches from remote, shows incoming diffs, merges main, and
+// re-creates symlinks for all managed files. Pass noFetch=true to skip the
+// network operations and only re-create symlinks (offline / test use).
+// homeDir is the user's home directory; pass os.UserHomeDir() in production
+// and a temp dir in tests.
+func runLink(homeDir string, cfg *config.Config, noFetch bool) error {
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("opening repo: %w", err)
+	}
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
 	}
+	if !noFetch {
+		fmt.Println("Fetching from remote...")
+		anyIncoming, err := fetchAndShowIncoming(r, cfg, reg, homeDir)
+		if err != nil {
+			return err
+		}
+		if anyIncoming {
+			fmt.Println("\nMerging main into your branch...")
+			if err := r.MergeFromMain(); err != nil {
+				return fmt.Errorf("merging: %w", err)
+			}
+		} else {
+			fmt.Println("Already up to date.")
+		}
+	}
+
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
 		var repoFile string
@@ -655,7 +755,7 @@ func runLink(homeDir string, cfg *config.Config) error {
 
 var linkCmd = &cobra.Command{
 	Use:   "link",
-	Short: "Re-create symlinks for all managed files",
+	Short: "Fetch, show incoming diffs, merge main, and re-create symlinks",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
 		cfg, err := config.Load(cfgPath)
@@ -666,7 +766,7 @@ var linkCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
-		return runLink(homeDir, cfg)
+		return runLink(homeDir, cfg, linkNoFetch)
 	},
 }
 
@@ -736,8 +836,6 @@ var daemonCmd = &cobra.Command{
 	},
 }
 
-var printMode bool
-
 // printDiff writes ANSI-colored unified diff content to stdout.
 func printDiff(content string) {
 	const (
@@ -764,38 +862,6 @@ func printDiff(content string) {
 			fmt.Println(line)
 		}
 	}
-}
-
-var diffCmd = &cobra.Command{
-	Use:   "diff [url]",
-	Short: "Display a diff in a window",
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		diffURLs := []string{
-			"https://github.com/spf13/cobra/commit/10d4b48a79be3d4e89e6c45cb59f4d32a3d2ae19.diff",
-			"https://github.com/spf13/cobra/commit/88b30ab89da2d0d0abb153818746c5a2d30eccec.diff",
-			"https://github.com/spf13/cobra/commit/346d408fe7d4be00ff9481ea4d43c4abb5e5f77d.diff",
-		}
-		if len(args) > 0 {
-			diffURLs = []string{args[0]}
-		}
-		if !printMode {
-			launchGUI(diffURLs)
-			return nil
-		}
-		for i, url := range diffURLs {
-			if i > 0 {
-				fmt.Println(strings.Repeat("-", 72))
-			}
-			content, err := fetchDiff(cmd.Context(), url)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "diff %d: %v\n", i+1, err)
-				continue
-			}
-			printDiff(content)
-		}
-		return nil
-	},
 }
 
 func launchGUI(diffURLs []string) {
@@ -828,16 +894,24 @@ func main() {
 	}
 }
 
+var (
+	enrollYes   bool
+	linkNoFetch bool
+)
+
 func init() {
 	// Silence Cobra's built-in error/usage printing on RunE failures so we
 	// control the format ourselves and avoid duplicate output.
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
 
-	diffCmd.Flags().BoolVarP(&printMode, "print", "p", false, "Print diff to stdout instead of opening the GUI")
+	enrollCmd.Aliases = []string{"changes-push"}
+	enrollCmd.Flags().BoolVarP(&enrollYes, "yes", "y", false, "Skip the diff confirmation prompt")
+
+	linkCmd.Aliases = []string{"changes-pull"}
+	linkCmd.Flags().BoolVar(&linkNoFetch, "no-fetch", false, "Skip fetch and merge from remote; only re-create symlinks")
 
 	rootCmd.AddCommand(configCmd)
-	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(enrollCmd)
 	rootCmd.AddCommand(linkCmd)

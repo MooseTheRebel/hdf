@@ -794,7 +794,7 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
 		t.Fatalf("runEnroll: %v", err)
 	}
 
@@ -883,7 +883,7 @@ func TestRunLinkHermetic(t *testing.T) {
 	if err := os.WriteFile(dotfile, []byte("config\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
 		t.Fatalf("runEnroll: %v", err)
 	}
 
@@ -892,7 +892,7 @@ func TestRunLinkHermetic(t *testing.T) {
 		t.Fatalf("removing symlink: %v", err)
 	}
 
-	if err := runLink(homeDir, cfg); err != nil {
+	if err := runLink(homeDir, cfg, true); err != nil {
 		t.Fatalf("runLink: %v", err)
 	}
 
@@ -927,7 +927,7 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
 		t.Fatalf("first runEnroll: %v", err)
 	}
 
@@ -945,7 +945,7 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 	pr, pw, _ := os.Pipe()
 	os.Stdout = pw
 
-	err = runEnroll("~/.testrc", homeDir, cfg, statePath)
+	err = runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true)
 
 	_ = pw.Close()
 	os.Stdout = origStdout
@@ -966,6 +966,169 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 	if countAfter != countBefore {
 		t.Errorf("commit count went from %d to %d — empty commit was created", countBefore, countAfter)
 	}
+}
+
+// captureStdout runs f with os.Stdout redirected to a pipe and returns what
+// was written. Any error from io.Copy is intentionally ignored — tests that
+// care about the output assert on it directly.
+func captureStdout(f func()) string {
+	origStdout := os.Stdout
+	pr, pw, _ := os.Pipe()
+	os.Stdout = pw
+	f()
+	_ = pw.Close()
+	os.Stdout = origStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, pr)
+	return buf.String()
+}
+
+// setupEnrolledFile initialises hdf, enrolls a dotfile with initialContent,
+// and returns cfg plus the absolute path to the symlink in homeDir.
+func setupEnrolledFile(t *testing.T, initialContent string) (*config.Config, string, string) {
+	t.Helper()
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte(initialContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+		t.Fatalf("first runEnroll: %v", err)
+	}
+	return cfg, statePath, homeDir
+}
+
+// TestEnrollShowsDiffForChangedFile verifies that re-enrolling a file whose
+// content has changed prints a colored diff to stdout before committing.
+func TestEnrollShowsDiffForChangedFile(t *testing.T) {
+	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
+
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("original line\nnew line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(func() {
+		if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+			t.Errorf("runEnroll after change: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "+new line") {
+		t.Errorf("expected diff to contain '+new line', got:\n%s", out)
+	}
+	if !strings.Contains(out, "changes to") {
+		t.Errorf("expected diff header 'changes to', got:\n%s", out)
+	}
+}
+
+// TestEnrollAbortWhenUserDeclinesPrompt verifies that answering "n" at the
+// diff confirmation prompt aborts the enrollment without creating a commit.
+func TestEnrollAbortWhenUserDeclinesPrompt(t *testing.T) {
+	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatalf("opening repo: %v", err)
+	}
+	countBefore, err := r.CommitCount()
+	if err != nil {
+		t.Fatalf("CommitCount before: %v", err)
+	}
+
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("original line\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdout(func() {
+		err = runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader("n\n"), false)
+	})
+	if err == nil {
+		t.Fatal("expected error after declining prompt, got nil")
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Errorf("error = %q, want it to contain 'aborted'", err.Error())
+	}
+
+	countAfter, err := r.CommitCount()
+	if err != nil {
+		t.Fatalf("CommitCount after: %v", err)
+	}
+	if countAfter != countBefore {
+		t.Errorf("commit count changed from %d to %d after abort", countBefore, countAfter)
+	}
+}
+
+// TestEnrollProceedsOnDefaultPromptAnswer verifies that pressing Enter (empty
+// answer) at the confirmation prompt is treated as "yes" and enrollment proceeds.
+func TestEnrollProceedsOnDefaultPromptAnswer(t *testing.T) {
+	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
+
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("original line\nextra\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdout(func() {
+		if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader("\n"), false); err != nil {
+			t.Errorf("runEnroll with empty answer: %v", err)
+		}
+	})
+}
+
+// TestEnrollYesFlagSkipsPrompt verifies that --yes bypasses the interactive
+// prompt even when there are changes to review.
+func TestEnrollYesFlagSkipsPrompt(t *testing.T) {
+	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
+
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("original line\nyes-flag-line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdout(func() {
+		if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+			t.Errorf("runEnroll with yes=true: %v", err)
+		}
+	})
+}
+
+// TestCommandAliases verifies that the changes-push and changes-pull aliases
+// are registered so users can use them interchangeably with enroll and link.
+func TestCommandAliases(t *testing.T) {
+	aliases := map[string][]string{}
+	for _, cmd := range rootCmd.Commands() {
+		aliases[cmd.Use] = cmd.Aliases
+	}
+	if !contains(aliases["enroll <path>"], "changes-push") {
+		t.Errorf("enroll command missing changes-push alias; got %v", aliases["enroll <path>"])
+	}
+	if !contains(aliases["link"], "changes-pull") {
+		t.Errorf("link command missing changes-pull alias; got %v", aliases["link"])
+	}
+}
+
+func contains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRootCmdMigrationHook(t *testing.T) {
