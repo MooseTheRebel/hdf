@@ -736,11 +736,41 @@ var daemonCmd = &cobra.Command{
 	},
 }
 
+var printMode bool
+
+// printDiff writes ANSI-colored unified diff content to stdout.
+func printDiff(content string) {
+	const (
+		reset = "\033[0m"
+		bold  = "\033[1m"
+		red   = "\033[31m"
+		green = "\033[32m"
+		cyan  = "\033[36m"
+	)
+	for _, line := range strings.Split(content, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff "),
+			strings.HasPrefix(line, "index "),
+			strings.HasPrefix(line, "--- "),
+			strings.HasPrefix(line, "+++ "):
+			fmt.Printf("%s%s%s\n", bold, line, reset)
+		case strings.HasPrefix(line, "@@"):
+			fmt.Printf("%s%s%s\n", cyan, line, reset)
+		case strings.HasPrefix(line, "+"):
+			fmt.Printf("%s%s%s\n", green, line, reset)
+		case strings.HasPrefix(line, "-"):
+			fmt.Printf("%s%s%s\n", red, line, reset)
+		default:
+			fmt.Println(line)
+		}
+	}
+}
+
 var diffCmd = &cobra.Command{
 	Use:   "diff [url]",
 	Short: "Display a diff in a window",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		diffURLs := []string{
 			"https://github.com/spf13/cobra/commit/10d4b48a79be3d4e89e6c45cb59f4d32a3d2ae19.diff",
 			"https://github.com/spf13/cobra/commit/88b30ab89da2d0d0abb153818746c5a2d30eccec.diff",
@@ -749,7 +779,22 @@ var diffCmd = &cobra.Command{
 		if len(args) > 0 {
 			diffURLs = []string{args[0]}
 		}
-		launchGUI(diffURLs)
+		if !printMode {
+			launchGUI(diffURLs)
+			return nil
+		}
+		for i, url := range diffURLs {
+			if i > 0 {
+				fmt.Println(strings.Repeat("-", 72))
+			}
+			content, err := fetchDiff(cmd.Context(), url)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "diff %d: %v\n", i+1, err)
+				continue
+			}
+			printDiff(content)
+		}
+		return nil
 	},
 }
 
@@ -788,6 +833,8 @@ func init() {
 	// control the format ourselves and avoid duplicate output.
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
+
+	diffCmd.Flags().BoolVarP(&printMode, "print", "p", false, "Print diff to stdout instead of opening the GUI")
 
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(diffCmd)

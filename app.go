@@ -53,6 +53,29 @@ func isInitialized(path string) (bool, error) {
 	return false, err
 }
 
+// fetchDiff fetches raw unified-diff content from url.
+func fetchDiff(ctx context.Context, url string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetching diff: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("fetching diff from %s: HTTP %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading diff: %w", err)
+	}
+	return string(body), nil
+}
+
 // GetDiffContent returns the diff content to display
 func (a *App) GetDiffContent() (string, error) {
 	a.mu.Lock()
@@ -67,28 +90,7 @@ func (a *App) GetDiffContent() (string, error) {
 	if parentCtx == nil {
 		parentCtx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("fetching diff: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("fetching diff from %s: HTTP %d", currentURL, resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading diff: %w", err)
-	}
-
-	return string(body), nil
+	return fetchDiff(parentCtx, currentURL)
 }
 
 // HasDiff returns true if a diff URL is set
