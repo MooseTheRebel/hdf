@@ -1,11 +1,9 @@
 package repo
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -373,17 +371,59 @@ func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
 	return ref.Hash().String(), nil
 }
 
-// MergeFromMain merges origin/main into the current branch using the system git binary.
+// MergeFromMain fast-forwards the current branch to origin/main.
+// Returns an error if the branches have diverged (manual merge required).
 func (r *Repo) MergeFromMain() error {
-	out, err := exec.CommandContext(context.Background(), "git", "-C", r.path, "merge", "origin/main").CombinedOutput() //nolint:gosec // repo path is set by hdf config, validated at init time
+	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName("origin", "main"), true)
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg != "" {
-			return fmt.Errorf("merging origin/main: %s", msg)
-		}
-		return fmt.Errorf("merging origin/main: %w", err)
+		return fmt.Errorf("resolving origin/main: %w", err)
 	}
-	return nil
+
+	head, err := r.r.Head()
+	if err != nil {
+		return fmt.Errorf("resolving HEAD: %w", err)
+	}
+
+	if head.Hash() == remoteRef.Hash() {
+		return nil
+	}
+
+	headCommit, err := r.r.CommitObject(head.Hash())
+	if err != nil {
+		return fmt.Errorf("reading HEAD commit: %w", err)
+	}
+	remoteCommit, err := r.r.CommitObject(remoteRef.Hash())
+	if err != nil {
+		return fmt.Errorf("reading origin/main commit: %w", err)
+	}
+
+	bases, err := headCommit.MergeBase(remoteCommit)
+	if err != nil {
+		return fmt.Errorf("computing merge base: %w", err)
+	}
+	if len(bases) == 0 {
+		return fmt.Errorf("no common ancestor between HEAD and origin/main")
+	}
+	if bases[0].Hash == remoteRef.Hash() {
+		return nil // already at or ahead of origin/main
+	}
+	if bases[0].Hash != head.Hash() {
+		return fmt.Errorf("cannot fast-forward: HEAD and origin/main have diverged; run 'git merge' manually")
+	}
+
+	// Update the branch ref, then reset the index and working tree to match.
+	newRef := plumbing.NewHashReference(head.Name(), remoteRef.Hash())
+	if err := r.r.Storer.SetReference(newRef); err != nil {
+		return fmt.Errorf("updating branch ref: %w", err)
+	}
+	w, err := r.r.Worktree()
+	if err != nil {
+		return fmt.Errorf("getting worktree: %w", err)
+	}
+	return w.Reset(&git.ResetOptions{
+		Commit: remoteRef.Hash(),
+		Mode:   git.HardReset,
+	})
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.
