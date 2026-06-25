@@ -380,6 +380,41 @@ func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
 	return ref.Hash().String(), nil
 }
 
+// HasIncomingCommits returns true when origin/main has commits not yet in HEAD.
+func (r *Repo) HasIncomingCommits() (bool, error) {
+	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName("origin", "main"), true)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolving origin/main: %w", err)
+	}
+	head, err := r.r.Head()
+	if err != nil {
+		return false, fmt.Errorf("resolving HEAD: %w", err)
+	}
+	if head.Hash() == remoteRef.Hash() {
+		return false, nil
+	}
+	headCommit, err := r.r.CommitObject(head.Hash())
+	if err != nil {
+		return false, fmt.Errorf("reading HEAD commit: %w", err)
+	}
+	remoteCommit, err := r.r.CommitObject(remoteRef.Hash())
+	if err != nil {
+		return false, fmt.Errorf("reading origin/main commit: %w", err)
+	}
+	bases, err := headCommit.MergeBase(remoteCommit)
+	if err != nil {
+		return false, fmt.Errorf("computing merge base: %w", err)
+	}
+	if len(bases) == 0 {
+		return true, nil
+	}
+	// origin/main is the merge base → HEAD is ahead; no incoming commits.
+	return bases[0].Hash != remoteRef.Hash(), nil
+}
+
 // MergeFromMain fast-forwards the current branch to origin/main.
 // Returns an error if the branches have diverged (manual merge required).
 func (r *Repo) MergeFromMain() error {

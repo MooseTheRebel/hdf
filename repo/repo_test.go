@@ -424,3 +424,120 @@ func TestHasUnpushedCommits(t *testing.T) {
 		t.Error("should have unpushed commits after committing on hostname branch")
 	}
 }
+
+func TestHasIncomingCommits(t *testing.T) {
+	// seedBare creates a bare repo with an initial commit on main and returns
+	// the file:// URL and a seed Repo that pushes to it.
+	seedBare := func(t *testing.T) (bareURL string, seed *Repo) {
+		t.Helper()
+		bareDir := t.TempDir()
+		if _, _, err := InitOrOpenBare(bareDir); err != nil {
+			t.Fatalf("InitOrOpenBare: %v", err)
+		}
+		bareURL = "file://" + bareDir
+		seedDir := t.TempDir()
+		var err error
+		seed, err = Init(seedDir)
+		if err != nil {
+			t.Fatalf("seed Init: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(seedDir, "seed.txt"), []byte("seed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := seed.CommitFile("seed.txt", "initial"); err != nil {
+			t.Fatalf("seed CommitFile: %v", err)
+		}
+		if err := seed.AddRemote("origin", bareURL); err != nil {
+			t.Fatalf("seed AddRemote: %v", err)
+		}
+		if err := seed.Push("main"); err != nil {
+			t.Fatalf("seed Push: %v", err)
+		}
+		return bareURL, seed
+	}
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, local *Repo, localDir string, seed *Repo)
+		want  bool
+	}{
+		{
+			name:  "HEAD == origin/main (up to date)",
+			setup: func(t *testing.T, local *Repo, localDir string, seed *Repo) {},
+			want:  false,
+		},
+		{
+			name: "origin/main is ahead (incoming commits)",
+			setup: func(t *testing.T, local *Repo, localDir string, seed *Repo) {
+				if err := os.WriteFile(filepath.Join(seed.Path(), "extra.txt"), []byte("extra"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := seed.CommitFile("extra.txt", "main advances"); err != nil {
+					t.Fatal(err)
+				}
+				if err := seed.Push("main"); err != nil {
+					t.Fatal(err)
+				}
+				if err := local.Fetch(); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+		{
+			name: "HEAD is ahead of origin/main (local ahead)",
+			setup: func(t *testing.T, local *Repo, localDir string, seed *Repo) {
+				if err := os.WriteFile(filepath.Join(localDir, "local.txt"), []byte("local"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := local.CommitFile("local.txt", "local commit"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name: "diverged (both have new commits)",
+			setup: func(t *testing.T, local *Repo, localDir string, seed *Repo) {
+				if err := os.WriteFile(filepath.Join(localDir, "local.txt"), []byte("local"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := local.CommitFile("local.txt", "local commit"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(seed.Path(), "remote.txt"), []byte("remote"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := seed.CommitFile("remote.txt", "remote commit"); err != nil {
+					t.Fatal(err)
+				}
+				if err := seed.Push("main"); err != nil {
+					t.Fatal(err)
+				}
+				if err := local.Fetch(); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bareURL, seed := seedBare(t)
+			localDir := t.TempDir()
+			local, err := Clone(bareURL, localDir)
+			if err != nil {
+				t.Fatalf("Clone: %v", err)
+			}
+			tc.setup(t, local, localDir, seed)
+			got, err := local.HasIncomingCommits()
+			if err != nil {
+				t.Fatalf("HasIncomingCommits: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("want %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
