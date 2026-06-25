@@ -153,7 +153,8 @@ func resolveAndConfirmPath(reader *bufio.Reader, raw string) (string, error) {
 }
 
 func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
-	defaultPath := filepath.Join(os.Getenv("HOME"), ".local", "share", "hdf", "repo")
+	home, _ := os.UserHomeDir()
+	defaultPath := filepath.Join(home, ".local", "share", "hdf", "repo")
 	fmt.Printf("Local repo path [%s]: ", defaultPath)
 	pathStr, err := reader.ReadString('\n')
 	if err != nil {
@@ -220,7 +221,8 @@ func setupRemoteRepo(reader *bufio.Reader, cloneDir string) (*repo.Repo, string,
 
 	dest := cloneDir
 	if dest == "" {
-		dest = filepath.Join(os.Getenv("HOME"), ".local", "share", "hdf", "repo")
+		home, _ := os.UserHomeDir()
+		dest = filepath.Join(home, ".local", "share", "hdf", "repo")
 	}
 	fmt.Printf("Cloning %s into %s...\n", gitURL, dest)
 	r, err := repo.Clone(gitURL, dest)
@@ -608,6 +610,17 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 	if err := r.Fetch(); err != nil {
 		return false, fmt.Errorf("fetching from remote: %w", err)
 	}
+	// Short-circuit: if origin/main has no commits that aren't already in HEAD
+	// (e.g. HEAD is ahead of or equal to main), there is nothing to show.
+	// This also avoids false positives when the local branch has diverged and
+	// a per-file diff would compare stale main content against newer local content.
+	hasIncoming, err := r.HasIncomingCommits()
+	if err != nil {
+		return false, fmt.Errorf("checking incoming commits: %w", err)
+	}
+	if !hasIncoming {
+		return false, nil
+	}
 	anyIncoming := false
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
@@ -628,6 +641,13 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 		mainBytes, err := r.ReadFileFromRemoteBranch("origin", "main", relPath)
 		if err != nil {
 			return false, fmt.Errorf("reading %s from origin/main: %w", relPath, err)
+		}
+		// len==0 means main holds an enrollment placeholder committed by
+		// changes-push when the file was first registered. The real content
+		// lives only on the machine branch at this point, so there is nothing
+		// meaningful to diff against — skip to avoid a false "incoming change".
+		if len(mainBytes) == 0 {
+			continue
 		}
 		branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relPath)
 		if err != nil {
@@ -653,7 +673,7 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 // and a temp dir in tests.
 func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader) error {
 	// Surface any daemon warnings before proceeding.
-	if err := promptPendingWarnings(os.Stdin); err != nil {
+	if err := promptPendingWarnings(stdin); err != nil {
 		return err
 	}
 

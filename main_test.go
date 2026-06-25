@@ -1259,6 +1259,84 @@ func contains(slice []string, s string) bool {
 	return false
 }
 
+func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("seed Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	homePath := filepath.Join(homeDir, ".testrc")
+	relPath := filepath.Base(homePath)
+
+	// Machine branch has real dotfile content.
+	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("real content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(relPath, "machine: add dotfile"); err != nil {
+		t.Fatalf("CommitFile machine: %v", err)
+	}
+
+	// Main advances with an enrollment placeholder (empty) for the managed file.
+	// This makes HasIncomingCommits=true but mainBytes=[]byte{} for the managed file.
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: relPath, Content: []byte{}},
+	}, "hdf: enroll placeholder"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	reg := &config.Registry{
+		Files: []config.ManagedFile{{Path: homePath}},
+	}
+	cfg := &config.Config{
+		Branch:           "machine",
+		LocalDotfilesDir: workDir,
+	}
+
+	var anyIncoming bool
+	var callErr error
+	captureStdout(func() {
+		anyIncoming, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir)
+	})
+	if callErr != nil {
+		t.Fatalf("fetchAndShowIncoming: %v", callErr)
+	}
+	if anyIncoming {
+		t.Error("want anyIncoming=false (enrollment placeholder should be skipped), got true")
+	}
+}
+
 func TestRootCmdMigrationHook(t *testing.T) {
 	if rootCmd.PersistentPreRunE == nil {
 		t.Error("rootCmd.PersistentPreRunE must be set to wire up legacy config.toml migration")
