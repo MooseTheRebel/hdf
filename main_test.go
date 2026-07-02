@@ -11,6 +11,8 @@ import (
 	"testing"
 )
 
+const testBranch = "machine"
+
 // mustRel returns the relative path from base to target, fataling the test on error.
 func mustRel(t *testing.T, base, target string) string {
 	t.Helper()
@@ -1438,7 +1440,7 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
-	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatalf("CreateAndCheckoutBranch: %v", err)
 	}
 
@@ -1469,7 +1471,7 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 		Files: []config.ManagedFile{{Path: homePath}},
 	}
 	cfg := &config.Config{
-		Branch:           "machine",
+		Branch:           testBranch,
 		LocalDotfilesDir: workDir,
 	}
 
@@ -1501,5 +1503,103 @@ func TestRootCmdSilenceErrors(t *testing.T) {
 func TestRootCmdSilenceUsage(t *testing.T) {
 	if !rootCmd.SilenceUsage {
 		t.Error("rootCmd.SilenceUsage must be true to suppress usage output on runtime errors")
+	}
+}
+
+// TestRunEnrollDirectoryReturnsError verifies that passing a directory path to
+// changes-push returns a clear error rather than a generic "is a directory" OS error.
+func TestRunEnrollDirectoryReturnsError(t *testing.T) {
+	homeDir := t.TempDir()
+	dirPath := filepath.Join(homeDir, ".config", "nvim")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: managedTOMLPath, Content: []byte{}},
+	}, "hdf: init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	err = runEnroll(dirPath, homeDir, cfg, statePath, strings.NewReader(""), false)
+	if err == nil {
+		t.Fatal("expected error when enrolling a directory, got nil")
+	}
+	// Must be a clear, user-friendly message — not the raw OS "is a directory" error.
+	if !strings.Contains(err.Error(), "only supports managing individual files") {
+		t.Errorf("error = %q, want user-friendly message about individual files", err.Error())
+	}
+}
+
+// TestRunInitLocalSymlinkPushTargetRejected verifies that a symlink resolving to
+// the working-copy directory is rejected as a push target, even though the string
+// paths differ.
+func TestRunInitLocalSymlinkPushTargetRejected(t *testing.T) {
+	// Create a real directory for the working copy and a symlink alias for it.
+	realDir := t.TempDir()
+	symlinkPath := filepath.Join(t.TempDir(), "repo-link")
+	if err := os.Symlink(realDir, symlinkPath); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+
+	cfgPath, statePath := initPaths(t)
+	// Use realDir as working copy and symlinkPath (which resolves to realDir) as push target.
+	err := runInit(strings.NewReader(localInitStdin(realDir, symlinkPath)), cfgPath, statePath, "")
+	if err == nil {
+		t.Fatal("expected error when push target symlinks to working copy, got nil")
+	}
+	if !strings.Contains(err.Error(), "must differ") {
+		t.Errorf("error = %q, want it to contain 'must differ'", err.Error())
+	}
+}
+
+// TestRunLinkLocalOnlySkipsFetch verifies that changes-pull succeeds when no
+// remote is configured — it should re-create symlinks without attempting a fetch.
+func TestRunLinkLocalOnlySkipsFetch(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeDotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(homeDotfile, []byte("export PS1='$ '\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	relPath := filepath.Base(homeDotfile)
+	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("export PS1='$ '\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(relPath, "add .testrc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := &config.Registry{Files: []config.ManagedFile{{Path: "~/.testrc"}}}
+	if err := config.SaveRegistry(workDir, reg); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	// noFetch=false but no remote configured — should not fail on fetch.
+	err = runLink(homeDir, cfg, false, strings.NewReader(""), statePath)
+	if err != nil {
+		t.Fatalf("runLink with no remote: %v", err)
 	}
 }

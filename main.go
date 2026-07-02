@@ -195,7 +195,15 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 		if err != nil {
 			return nil, "", "", err
 		}
-		if pushPath == repoPath {
+		resolvedPush := pushPath
+		if rp, err := filepath.EvalSymlinks(pushPath); err == nil {
+			resolvedPush = rp
+		}
+		resolvedRepo := repoPath
+		if rr, err := filepath.EvalSymlinks(repoPath); err == nil {
+			resolvedRepo = rr
+		}
+		if pushPath == repoPath || resolvedPush == resolvedRepo {
 			return nil, "", "", fmt.Errorf("push target and working copy must differ")
 		}
 		if _, _, err := repo.InitOrOpenBare(pushPath); err != nil {
@@ -541,6 +549,9 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, s
 	if err != nil {
 		return err
 	}
+	if fi, err := os.Stat(expanded); err == nil && fi.IsDir() {
+		return fmt.Errorf("%s is a directory; hdf only supports managing individual files", filePath)
+	}
 
 	reader := bufio.NewReader(stdin)
 
@@ -692,25 +703,29 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 		return fmt.Errorf("loading registry: %w", err)
 	}
 	if !noFetch {
-		fmt.Println("Fetching from remote...")
-		anyIncoming, err := fetchAndShowIncoming(r, cfg, reg, homeDir)
-		if err != nil {
-			return err
-		}
-		if anyIncoming {
-			fmt.Print("\nMerge now? [y/N]: ")
-			answer, _ := reader.ReadString('\n')
-			answer = strings.TrimSpace(strings.ToLower(answer))
-			if answer == "y" {
-				fmt.Println("Merging main into your branch...")
-				if err := r.FastForwardFromMain(); err != nil {
-					return fmt.Errorf("merging: %w", err)
+		if r.RemoteURL() == "" {
+			fmt.Println("No remote configured; skipping fetch.")
+		} else {
+			fmt.Println("Fetching from remote...")
+			anyIncoming, err := fetchAndShowIncoming(r, cfg, reg, homeDir)
+			if err != nil {
+				return err
+			}
+			if anyIncoming {
+				fmt.Print("\nMerge now? [y/N]: ")
+				answer, _ := reader.ReadString('\n')
+				answer = strings.TrimSpace(strings.ToLower(answer))
+				if answer == "y" {
+					fmt.Println("Merging main into your branch...")
+					if err := r.FastForwardFromMain(); err != nil {
+						return fmt.Errorf("merging: %w", err)
+					}
+				} else {
+					fmt.Println("Merge delayed — run 'hdf changes-pull' again when ready.")
 				}
 			} else {
-				fmt.Println("Merge delayed — run 'hdf changes-pull' again when ready.")
+				fmt.Println("Already up to date.")
 			}
-		} else {
-			fmt.Println("Already up to date.")
 		}
 	}
 

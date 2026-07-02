@@ -693,6 +693,58 @@ func TestSyncAutosPushBranch(t *testing.T) {
 	}
 }
 
+// TestSyncFetchErrorUsesStandardNotifier verifies that a transient fetch failure
+// (e.g. offline) sends a standard notification rather than a critical OS alert.
+// The critical notifier (cn) must NOT be called; the warning notifier (n) must be.
+func TestSyncFetchErrorUsesStandardNotifier(t *testing.T) {
+	workDir := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	hdfDir := filepath.Join(workDir, ".hdf")
+	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
+		t.Fatal(err)
+	}
+	// Add a non-existent remote so Fetch fails.
+	if err := r.AddRemote("origin", "file:///nonexistent/bare"); err != nil {
+		t.Fatalf("AddRemote: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(cfgPath, &config.Config{
+		Branch:           "machine",
+		LocalDotfilesDir: workDir,
+		GitPushTarget:    "file:///nonexistent/bare",
+	}); err != nil {
+		t.Fatalf("Save config: %v", err)
+	}
+
+	n := &fakeNotifier{}
+	cn := &fakeNotifier{}
+	_, err = syncWithHome(cfgPath, statePath, n, cn, t.TempDir())
+
+	if err == nil {
+		t.Fatal("expected fetch error, got nil")
+	}
+	if len(cn.msgs) > 0 {
+		t.Errorf("critical notifier must NOT be called for a transient fetch error; got msgs: %v", cn.msgs)
+	}
+	if len(n.msgs) == 0 {
+		t.Error("standard notifier should have been called for the fetch error")
+	}
+}
+
 // TestAddWarningPersistedToState verifies that warnings written by addWarning
 // survive across process restarts (i.e. are stored in state.toml, not RAM).
 func TestAddWarningPersistedToState(t *testing.T) {

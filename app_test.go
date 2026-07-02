@@ -199,3 +199,34 @@ func TestHasDiff_FalseWhenEmpty(t *testing.T) {
 		t.Error("HasDiff() = false after adding a URL, want true")
 	}
 }
+
+// TestGetDiffContentLargeResponseTruncatedAt1MB verifies that a response body
+// larger than 1 MB is capped at exactly 1<<20 bytes, preventing OOM from
+// arbitrarily large remote files.
+func TestGetDiffContentLargeResponseTruncatedAt1MB(t *testing.T) {
+	const limit = 1 << 20 // 1 MB
+	large := make([]byte, limit+512)
+	for i := range large {
+		large[i] = 'x'
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(large)
+	}))
+	defer srv.Close()
+
+	app := &App{
+		diffURLs:     []string{srv.URL},
+		currentIndex: 0,
+		ctx:          context.Background(),
+	}
+
+	got, err := app.GetDiffContent()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) > limit {
+		t.Errorf("GetDiffContent() returned %d bytes, want at most %d", len(got), limit)
+	}
+}

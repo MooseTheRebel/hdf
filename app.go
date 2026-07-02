@@ -73,7 +73,7 @@ func fetchDiff(ctx context.Context, url string) (string, error) {
 		log.Printf("[WARN] fetchDiff: HTTP %d from %s", resp.StatusCode, url)
 		return "", fmt.Errorf("fetching diff from %s: HTTP %d", url, resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("reading diff: %w", err)
 	}

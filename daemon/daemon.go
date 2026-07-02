@@ -76,10 +76,9 @@ func Run(ctx context.Context, cfgPath string) error {
 	for {
 		interval, err := syncWithHome(cfgPath, statePath, nil, nil, homeDir)
 		if err != nil {
-			// Sync errors are serious: fire a critical OS alert and record a warning
-			// so the user is notified at the next hdf changes-push/changes-pull even if they missed
-			// the alert.
-			notify.LogAndNotify(notify.LevelCritical, "hdf sync error", err.Error())
+			// Sync errors include transient network issues; use LevelWarning to
+			// avoid modal OS alerts on every offline period.
+			notify.LogAndNotify(notify.LevelWarning, "hdf sync error", err.Error())
 			addWarning(fmt.Sprintf("sync error: %v", err), statePath)
 			interval = time.Duration(config.DefaultSyncIntervalMinutes) * time.Minute
 		}
@@ -133,10 +132,10 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 		return 0, fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
 	}
 	if err := r.Fetch(); err != nil {
-		// Fetch failure is serious: fire a critical OS alert (independent of wails)
-		// and record a warning for surfacing at the next changes-push/changes-pull.
+		// Fetch failures are often transient (offline). Use the standard notifier
+		// to avoid intrusive modal alerts on every network hiccup.
 		msg := fmt.Sprintf("fetch from remote failed: %v", err)
-		_ = cn.Send("hdf: remote fetch failed", msg)
+		_ = n.Send("hdf: remote fetch failed", msg)
 		addWarning(msg, statePath)
 		return 0, fmt.Errorf("fetching from remote: %w", err)
 	}
