@@ -88,6 +88,8 @@ func localPathToFileURL(absPath string) string {
 
 const branchNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
+const managedTOMLPath = ".hdf/managed.toml"
+
 // sanitizeBranchName replaces any character that is not an ASCII letter,
 // digit, or hyphen with a hyphen, then strips leading/trailing hyphens.
 func sanitizeBranchName(s string) string {
@@ -203,7 +205,7 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 	}
 
 	if err := r.AddRemote("origin", gitURL); err != nil {
-		fmt.Printf("Note: could not add remote: %v\n", err)
+		return nil, "", "", fmt.Errorf("adding remote: %w", err)
 	}
 	return r, repoPath, gitURL, nil
 }
@@ -352,7 +354,7 @@ func upsertRegistryEntry(reg *config.Registry, tildeFile, hash string) {
 // placeholder blob for slashRel) directly to main without touching the
 // working tree.
 func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) error {
-	mainRegBytes, err := r.ReadFileFromBranch("main", ".hdf/managed.toml")
+	mainRegBytes, err := r.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil {
 		return fmt.Errorf("reading main registry: %w", err)
 	}
@@ -374,7 +376,7 @@ func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) erro
 	}
 	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: slashRel, Content: []byte{}},
-		{RepoRelPath: ".hdf/managed.toml", Content: mainRegBytes},
+		{RepoRelPath: managedTOMLPath, Content: mainRegBytes},
 	}, fmt.Sprintf("hdf: register %s baseline", filePath)); err != nil {
 		return fmt.Errorf("registering main baseline: %w", err)
 	}
@@ -443,7 +445,7 @@ func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
 	if err := r.StageFile(relName); err != nil {
 		return "", fmt.Errorf("staging file: %w", err)
 	}
-	if err := r.StageFile(".hdf/managed.toml"); err != nil {
+	if err := r.StageFile(managedTOMLPath); err != nil {
 		return "", fmt.Errorf("staging registry: %w", err)
 	}
 	sha, err := r.CommitStaged(fmt.Sprintf("hdf: enroll %s", filePath))
@@ -469,7 +471,8 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 
 // showEnrollDiff prints the diff between committed and disk content and
 // optionally prompts for confirmation. Returns an error when the user aborts.
-func showEnrollDiff(committed, disk []byte, filePath string, stdin io.Reader, yes bool) error {
+// reader must be the single bufio.Reader for this command invocation.
+func showEnrollDiff(committed, disk []byte, filePath string, reader *bufio.Reader, yes bool) error {
 	if committed == nil {
 		fmt.Printf("new file: %s\n", filePath)
 		return nil
@@ -484,7 +487,6 @@ func showEnrollDiff(committed, disk []byte, filePath string, stdin io.Reader, ye
 		return nil
 	}
 	fmt.Print("Enroll these changes? [Y/n]: ")
-	reader := bufio.NewReader(stdin)
 	answer, _ := reader.ReadString('\n')
 	answer = strings.TrimSpace(answer)
 	if answer != "" && !isYes(answer) {
@@ -540,8 +542,10 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, s
 		return err
 	}
 
+	reader := bufio.NewReader(stdin)
+
 	// Surface any daemon warnings before proceeding.
-	if err := promptPendingWarnings(stdin); err != nil {
+	if err := promptPendingWarnings(statePath, reader); err != nil {
 		return err
 	}
 
@@ -576,7 +580,7 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, s
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", expanded, err)
 	}
-	if err := showEnrollDiff(committedBytes, diskBytes, filePath, stdin, yes); err != nil {
+	if err := showEnrollDiff(committedBytes, diskBytes, filePath, reader, yes); err != nil {
 		return err
 	}
 	return applyEnroll(r, expanded, tildeFile, relName, filePath, homeDir, cfg, statePath)
@@ -671,9 +675,11 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 // network operations and only re-create symlinks (offline / test use).
 // homeDir is the user's home directory; pass os.UserHomeDir() in production
 // and a temp dir in tests.
-func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader) error {
+func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, statePath string) error {
+	reader := bufio.NewReader(stdin)
+
 	// Surface any daemon warnings before proceeding.
-	if err := promptPendingWarnings(stdin); err != nil {
+	if err := promptPendingWarnings(statePath, reader); err != nil {
 		return err
 	}
 
@@ -693,12 +699,11 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader) 
 		}
 		if anyIncoming {
 			fmt.Print("\nMerge now? [y/N]: ")
-			reader := bufio.NewReader(stdin)
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
 			if answer == "y" {
 				fmt.Println("Merging main into your branch...")
-				if err := r.MergeFromMain(); err != nil {
+				if err := r.FastForwardFromMain(); err != nil {
 					return fmt.Errorf("merging: %w", err)
 				}
 			} else {
@@ -753,7 +758,7 @@ Delaying is an accepted workflow — run hdf changes-pull again when ready to me
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
-		return runLink(homeDir, cfg, linkNoFetch, os.Stdin)
+		return runLink(homeDir, cfg, linkNoFetch, os.Stdin, config.DefaultStatePath())
 	},
 }
 
@@ -851,11 +856,16 @@ func printDiff(content string) {
 	}
 }
 
-// promptPendingWarnings checks for daemon warnings recorded since the last
-// push/pull and prompts the user before continuing. Returns an error if the
-// user declines, which causes the calling command to abort cleanly.
-func promptPendingWarnings(stdin io.Reader) error {
-	warnings := daemon.PendingWarnings()
+// promptPendingWarnings checks for daemon warnings persisted to statePath since
+// the last push/pull and prompts the user before continuing. Returns an error
+// if the user declines, which causes the calling command to abort cleanly.
+// reader must be the single bufio.Reader for this command invocation so that
+// subsequent prompts in the same call chain read from the same buffer.
+func promptPendingWarnings(statePath string, reader *bufio.Reader) error {
+	warnings, err := daemon.PendingWarnings(statePath)
+	if err != nil {
+		return fmt.Errorf("reading pending warnings: %w", err)
+	}
 	if len(warnings) == 0 {
 		return nil
 	}
@@ -864,7 +874,6 @@ func promptPendingWarnings(stdin io.Reader) error {
 		fmt.Fprintf(os.Stderr, "   * %s\n", w)
 	}
 	fmt.Fprint(os.Stderr, "Continue anyway? [y/N]: ")
-	reader := bufio.NewReader(stdin)
 	answer, _ := reader.ReadString('\n')
 	if !isYes(strings.TrimSpace(answer)) {
 		return fmt.Errorf("aborted — address the warnings above before continuing")

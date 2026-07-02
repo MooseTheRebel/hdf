@@ -71,10 +71,13 @@ func Init(path string) (*Repo, error) {
 }
 
 // InitOrOpen initializes a non-bare repository at path, or opens it if it
-// already exists.
+// already exists. Missing intermediate directories are created automatically.
 func InitOrOpen(path string) (*Repo, error) {
 	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		return Open(path)
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return nil, fmt.Errorf("creating repo directory: %w", err)
 	}
 	return Init(path)
 }
@@ -411,13 +414,14 @@ func (r *Repo) HasIncomingCommits() (bool, error) {
 	if len(bases) == 0 {
 		return true, nil
 	}
-	// origin/main is the merge base → HEAD is ahead; no incoming commits.
+	// Only bases[0] is inspected. Multiple merge bases can occur in criss-cross
+	// merges, but the dotfiles repo always has linear history so this is safe.
 	return bases[0].Hash != remoteRef.Hash(), nil
 }
 
-// MergeFromMain fast-forwards the current branch to origin/main.
+// FastForwardFromMain advances the current branch to origin/main.
 // Returns an error if the branches have diverged (manual merge required).
-func (r *Repo) MergeFromMain() error {
+func (r *Repo) FastForwardFromMain() error {
 	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName("origin", "main"), true)
 	if err != nil {
 		return fmt.Errorf("resolving origin/main: %w", err)

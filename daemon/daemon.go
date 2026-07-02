@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
@@ -20,31 +19,35 @@ import (
 
 const maxDiffFileSize = 1 << 20 // 1 MB
 
-// pendingWarnings holds warnings recorded by the daemon that have not yet
-// been surfaced to the user. Drained by PendingWarnings at changes-push/changes-pull time.
-var (
-	pendingMu      sync.Mutex
-	pendingWarnBuf []string
-)
-
-// addWarning logs msg at WARN level and appends it to the pending store so
-// it can be surfaced to the user the next time they run hdf changes-push or hdf changes-pull.
-func addWarning(msg string) {
+// addWarning logs msg at WARN level and appends it to state.toml so that
+// warnings survive daemon restarts and are readable by the CLI process.
+func addWarning(msg, statePath string) {
 	notify.LogAndNotify(notify.LevelWarning, "hdf", msg)
-	pendingMu.Lock()
-	defer pendingMu.Unlock()
-	pendingWarnBuf = append(pendingWarnBuf, msg)
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		return
+	}
+	state.PendingWarnings = append(state.PendingWarnings, msg)
+	_ = config.SaveState(statePath, state)
 }
 
-// PendingWarnings returns and clears all warnings that the daemon has
-// recorded since the last call. Called by hdf changes-push/changes-pull (via promptPendingWarnings)
-// before proceeding so the user can be prompted to act.
-func PendingWarnings() []string {
-	pendingMu.Lock()
-	defer pendingMu.Unlock()
-	out := pendingWarnBuf
-	pendingWarnBuf = nil
-	return out
+// PendingWarnings returns and clears all warnings written to statePath by the
+// daemon since the last call. Called by hdf changes-push/changes-pull (via
+// promptPendingWarnings) before proceeding so the user can be prompted to act.
+func PendingWarnings(statePath string) ([]string, error) {
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		return nil, err
+	}
+	warnings := state.PendingWarnings
+	if len(warnings) == 0 {
+		return nil, nil
+	}
+	state.PendingWarnings = nil
+	if err := config.SaveState(statePath, state); err != nil {
+		return nil, err
+	}
+	return warnings, nil
 }
 
 // Run starts the hdf sync daemon, which syncs on a configurable interval indefinitely.
@@ -77,7 +80,7 @@ func Run(ctx context.Context, cfgPath string) error {
 			// so the user is notified at the next hdf changes-push/changes-pull even if they missed
 			// the alert.
 			notify.LogAndNotify(notify.LevelCritical, "hdf sync error", err.Error())
-			addWarning(fmt.Sprintf("sync error: %v", err))
+			addWarning(fmt.Sprintf("sync error: %v", err), statePath)
 			interval = time.Duration(config.DefaultSyncIntervalMinutes) * time.Minute
 		}
 		fmt.Fprintf(os.Stderr, "next sync in %s\n", interval)
@@ -134,7 +137,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 		// and record a warning for surfacing at the next changes-push/changes-pull.
 		msg := fmt.Sprintf("fetch from remote failed: %v", err)
 		_ = cn.Send("hdf: remote fetch failed", msg)
-		addWarning(msg)
+		addWarning(msg, statePath)
 		return 0, fmt.Errorf("fetching from remote: %w", err)
 	}
 
@@ -162,7 +165,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 			msg := fmt.Sprintf("%d uncommitted hunk(s) of local drift — run: hdf changes-push <file> or manage as variant", totalHunks)
 			_ = n.Send("hdf", msg)
 			// Also record as a warning so hdf changes-push/changes-pull can surface it.
-			addWarning(msg)
+			addWarning(msg, statePath)
 			state.LastNotifiedAt = time.Now()
 		}
 	}
@@ -171,7 +174,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	if err := r.Push(cfg.Branch); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		msg := fmt.Sprintf("push %s failed: %v", cfg.Branch, err)
 		_ = cn.Send("hdf: push failed", msg)
-		addWarning(msg)
+		addWarning(msg, statePath)
 		return 0, fmt.Errorf("pushing branch %s: %w", cfg.Branch, err)
 	}
 
@@ -278,34 +281,104 @@ func resolveHash(f config.ManagedFile, branch string) string {
 	return f.Hash
 }
 
-// GenerateUnifiedDiff returns a unified-diff-style representation of line-level
-// changes between committed and disk content. Uses the same diffmatchpatch
-// engine as countHunks. Returns "" when the content is identical.
+const contextLines = 3
+
+type diffEntry struct {
+	op   diffmatchpatch.Operation
+	text string
+}
+
+func diffToEntries(diffs []diffmatchpatch.Diff) []diffEntry {
+	var entries []diffEntry
+	for _, d := range diffs {
+		for _, text := range strings.Split(strings.TrimSuffix(d.Text, "\n"), "\n") {
+			entries = append(entries, diffEntry{d.Type, text})
+		}
+	}
+	return entries
+}
+
+func markIncluded(entries []diffEntry) []bool {
+	n := len(entries)
+	include := make([]bool, n)
+	for i, e := range entries {
+		if e.op != diffmatchpatch.DiffEqual {
+			for j := max(0, i-contextLines); j < min(n, i+contextLines+1); j++ {
+				include[j] = true
+			}
+		}
+	}
+	return include
+}
+
+func hunkLineCounts(entries []diffEntry, start, end int) (oldCount, newCount int) {
+	for k := start; k < end; k++ {
+		if entries[k].op != diffmatchpatch.DiffInsert {
+			oldCount++
+		}
+		if entries[k].op != diffmatchpatch.DiffDelete {
+			newCount++
+		}
+	}
+	return oldCount, newCount
+}
+
+func writeHunk(sb *strings.Builder, entries []diffEntry, start, end int, oldLine, newLine *int) {
+	oldCount, newCount := hunkLineCounts(entries, start, end)
+	fmt.Fprintf(sb, "@@ -%d,%d +%d,%d @@\n", *oldLine, oldCount, *newLine, newCount)
+	for k := start; k < end; k++ {
+		switch entries[k].op {
+		case diffmatchpatch.DiffInsert:
+			sb.WriteByte('+')
+			*newLine++
+		case diffmatchpatch.DiffDelete:
+			sb.WriteByte('-')
+			*oldLine++
+		case diffmatchpatch.DiffEqual:
+			sb.WriteByte(' ')
+			*oldLine++
+			*newLine++
+		}
+		sb.WriteString(entries[k].text)
+		sb.WriteByte('\n')
+	}
+}
+
+// GenerateUnifiedDiff returns a unified diff between committed and disk content
+// with @@ hunk headers and at most contextLines lines of surrounding context.
+// Uses the diffmatchpatch engine. Returns "" when the content is identical.
 func GenerateUnifiedDiff(committed, disk string) string {
 	if committed == disk {
 		return ""
 	}
 	dmp := diffmatchpatch.New()
-	a, b, lines := dmp.DiffLinesToChars(committed, disk)
+	a, b, lineMap := dmp.DiffLinesToChars(committed, disk)
 	diffs := dmp.DiffMain(a, b, false)
-	diffs = dmp.DiffCharsToLines(diffs, lines)
+	diffs = dmp.DiffCharsToLines(diffs, lineMap)
+
+	entries := diffToEntries(diffs)
+	include := markIncluded(entries)
+	n := len(entries)
 
 	var sb strings.Builder
-	for _, d := range diffs {
-		prefix := " "
-		switch d.Type {
-		case diffmatchpatch.DiffInsert:
-			prefix = "+"
-		case diffmatchpatch.DiffDelete:
-			prefix = "-"
-		case diffmatchpatch.DiffEqual:
-			// context lines keep the space prefix
+	oldLine, newLine := 1, 1
+	i := 0
+	for i < n {
+		if !include[i] {
+			if entries[i].op != diffmatchpatch.DiffInsert {
+				oldLine++
+			}
+			if entries[i].op != diffmatchpatch.DiffDelete {
+				newLine++
+			}
+			i++
+			continue
 		}
-		for _, line := range strings.Split(strings.TrimSuffix(d.Text, "\n"), "\n") {
-			sb.WriteString(prefix)
-			sb.WriteString(line)
-			sb.WriteRune('\n')
+		hunkStart := i
+		for i < n && include[i] {
+			i++
 		}
+		writeHunk(&sb, entries, hunkStart, i, &oldLine, &newLine)
 	}
 	return sb.String()
 }

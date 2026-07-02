@@ -816,7 +816,7 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 	}
 
 	// main branch must have managed.toml listing the file with an empty hash.
-	regBytes, err := r.ReadFileFromBranch("main", ".hdf/managed.toml")
+	regBytes, err := r.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch registry: %v", err)
 	}
@@ -892,7 +892,7 @@ func TestRunLinkHermetic(t *testing.T) {
 		t.Fatalf("removing symlink: %v", err)
 	}
 
-	if err := runLink(homeDir, cfg, true, strings.NewReader("")); err != nil {
+	if err := runLink(homeDir, cfg, true, strings.NewReader(""), statePath); err != nil {
 		t.Fatalf("runLink: %v", err)
 	}
 
@@ -1183,7 +1183,7 @@ func TestRunLinkMergePrompt(t *testing.T) {
 				t.Fatalf("RegistryToBytes: %v", err)
 			}
 			if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
-				{RepoRelPath: ".hdf/managed.toml", Content: regBytes},
+				{RepoRelPath: managedTOMLPath, Content: regBytes},
 			}, "hdf: write registry"); err != nil {
 				t.Fatalf("CommitFilesToBranch registry: %v", err)
 			}
@@ -1225,8 +1225,9 @@ func TestRunLinkMergePrompt(t *testing.T) {
 				GitPushTarget:    bareURL,
 			}
 
+			statePath := filepath.Join(t.TempDir(), "state.toml")
 			captureStdout(func() {
-				if err := runLink(homeDir, cfg, false, strings.NewReader(tc.answer)); err != nil {
+				if err := runLink(homeDir, cfg, false, strings.NewReader(tc.answer), statePath); err != nil {
 					t.Errorf("runLink: %v", err)
 				}
 			})
@@ -1247,6 +1248,154 @@ func TestRunLinkMergePrompt(t *testing.T) {
 				t.Errorf("merge delayed: want HEAD to stay on branch, but it advanced to main SHA")
 			}
 		})
+	}
+}
+
+// TestRunLinkMergeAcceptedWithPendingWarning verifies that a "y" answering the
+// daemon-warning prompt and a "y" answering the merge prompt are both consumed
+// correctly when both prompts appear in the same runLink invocation. The bug
+// was that two separate bufio.NewReader(stdin) calls caused the second "y" to
+// be lost inside the first reader's buffer, so the merge prompt received EOF
+// and defaulted to "N".
+func TestRunLinkMergeAcceptedWithPendingWarning(t *testing.T) {
+	const branch = "test-host"
+
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("Init seed: %v", err)
+	}
+	hdfDir := filepath.Join(seedDir, ".hdf")
+	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push main: %v", err)
+	}
+
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+	homePath := filepath.Join(homeDir, ".testrc")
+
+	reg := &config.Registry{Files: []config.ManagedFile{{Path: homePath}}}
+	regBytes, err := config.RegistryToBytes(reg)
+	if err != nil {
+		t.Fatalf("RegistryToBytes: %v", err)
+	}
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: managedTOMLPath, Content: regBytes},
+	}, "hdf: write registry"); err != nil {
+		t.Fatalf("CommitFilesToBranch registry: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push main (registry): %v", err)
+	}
+
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(branch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: filepath.Base(homePath), Content: []byte("updated-by-main\n")},
+	}, "hdf: update file on main"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push main (file): %v", err)
+	}
+
+	mainSHABefore, err := seed.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA main: %v", err)
+	}
+
+	cfg := &config.Config{
+		Branch:           branch,
+		LocalDotfilesDir: workDir,
+		GitPushTarget:    bareURL,
+	}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	// Plant a pending warning so promptPendingWarnings fires before the merge prompt.
+	if err := config.SaveState(statePath, &config.State{
+		PendingWarnings: []string{"test warning: please review"},
+	}); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	// "y\ny\n": first "y" accepts the warning, second "y" accepts the merge.
+	// With the stdin double-buffering bug the second "y" is silently discarded
+	// and the merge prompt receives EOF, defaulting to "N" (no merge).
+	captureStdout(func() {
+		if err := runLink(homeDir, cfg, false, strings.NewReader("y\ny\n"), statePath); err != nil {
+			t.Fatalf("runLink: %v", err)
+		}
+	})
+
+	freshR, err := repo.Open(workDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	headSHA, err := freshR.BranchSHA(branch)
+	if err != nil {
+		t.Fatalf("BranchSHA: %v", err)
+	}
+	if headSHA != mainSHABefore {
+		t.Errorf("merge did not happen: HEAD=%s, want main SHA %s\n(hint: stdin double-buffering discarded the merge 'y')", headSHA, mainSHABefore)
+	}
+}
+
+// TestRunInitLocalAddRemoteErrorPropagated verifies that when AddRemote fails
+// (e.g. origin already points to a different URL), setupLocalRepo propagates
+// the error rather than silently swallowing it.
+func TestRunInitLocalAddRemoteErrorPropagated(t *testing.T) {
+	repoDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	// Pre-init the repo with a commit and "origin" pointing to URL A so:
+	// - InitOrOpen takes the fast Open path (no write needed)
+	// - ensureInitialCommit finds an existing HEAD and returns early
+	// - AddRemote("origin", urlB) hits the ErrRemoteExists → different-URL error
+	r, err := repo.Init(repoDir)
+	if err != nil {
+		t.Fatalf("pre-init: %v", err)
+	}
+	seedFile := filepath.Join(repoDir, "seed.txt")
+	if err := os.WriteFile(seedFile, []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("seed.txt", "initial"); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+	if err := r.AddRemote("origin", "https://example.com/old.git"); err != nil {
+		t.Fatalf("pre-add remote: %v", err)
+	}
+
+	// Provide a *different* HTTPS push URL so isRemoteURL returns true and the
+	// code calls r.AddRemote, which returns "already points to a different URL".
+	stdin := "1\n" + repoDir + "\nhttps://example.com/new.git\n"
+	err = runInit(strings.NewReader(stdin), cfgPath, statePath, "")
+	if err == nil {
+		t.Fatal("expected error when origin already points to a different URL, got nil")
 	}
 }
 

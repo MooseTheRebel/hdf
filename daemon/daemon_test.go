@@ -64,6 +64,38 @@ func TestGenerateUnifiedDiff(t *testing.T) {
 	}
 }
 
+// TestGenerateUnifiedDiffContextLines verifies that diffs for large files include
+// @@ hunk headers and limit context to 3 lines on each side of each change, so
+// that a change at line 5 of a 10-line file does not output line 1 or lines 9-10.
+func TestGenerateUnifiedDiffContextLines(t *testing.T) {
+	committed := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
+	disk := "line1\nline2\nline3\nline4\nCHANGED\nline6\nline7\nline8\nline9\nline10\n"
+
+	got := GenerateUnifiedDiff(committed, disk)
+
+	if !strings.Contains(got, "@@ ") {
+		t.Errorf("diff missing hunk header (@@ ...):\n%s", got)
+	}
+	if strings.Contains(got, "line1") {
+		t.Errorf("diff should omit line1 (>3 lines from change), but contains it:\n%s", got)
+	}
+	if !strings.Contains(got, " line2") {
+		t.Errorf("diff should include line2 as context (3 lines before change):\n%s", got)
+	}
+	if !strings.Contains(got, "-line5") {
+		t.Errorf("diff should show deleted line5:\n%s", got)
+	}
+	if !strings.Contains(got, "+CHANGED") {
+		t.Errorf("diff should show inserted CHANGED:\n%s", got)
+	}
+	if !strings.Contains(got, " line8") {
+		t.Errorf("diff should include line8 as context (3 lines after change):\n%s", got)
+	}
+	if strings.Contains(got, "line9") {
+		t.Errorf("diff should omit line9 (>3 lines from change), but contains it:\n%s", got)
+	}
+}
+
 const testHostBranch = "test-hostabc123"
 
 // fakeNotifier captures all notification messages for test assertions.
@@ -573,9 +605,6 @@ func TestSyncAutosPushBranch(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Drain any warnings left by earlier tests before asserting.
-			PendingWarnings()
-
 			bareURL, bareDir := setupBare(t)
 
 			workDir := t.TempDir()
@@ -653,7 +682,7 @@ func TestSyncAutosPushBranch(t *testing.T) {
 				}
 			}
 
-			warnings := PendingWarnings()
+			warnings, _ := PendingWarnings(statePath)
 			if tc.wantWarning && len(warnings) == 0 {
 				t.Error("want pending warning, got none")
 			}
@@ -661,5 +690,35 @@ func TestSyncAutosPushBranch(t *testing.T) {
 				t.Errorf("want no pending warning, got: %v", warnings)
 			}
 		})
+	}
+}
+
+// TestAddWarningPersistedToState verifies that warnings written by addWarning
+// survive across process restarts (i.e. are stored in state.toml, not RAM).
+func TestAddWarningPersistedToState(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	addWarning("disk full", statePath)
+	addWarning("push failed", statePath)
+
+	// First drain: should return both warnings.
+	got, err := PendingWarnings(statePath)
+	if err != nil {
+		t.Fatalf("PendingWarnings: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 warnings, got %d: %v", len(got), got)
+	}
+	if got[0] != "disk full" || got[1] != "push failed" {
+		t.Errorf("wrong warnings: %v", got)
+	}
+
+	// Second drain: warnings must have been cleared.
+	got2, err := PendingWarnings(statePath)
+	if err != nil {
+		t.Fatalf("second PendingWarnings: %v", err)
+	}
+	if len(got2) != 0 {
+		t.Errorf("want 0 warnings after drain, got: %v", got2)
 	}
 }
