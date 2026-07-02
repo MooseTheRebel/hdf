@@ -621,7 +621,7 @@ Does not merge into main — that is a deliberate step done via hdf changes-pull
 // fetchAndShowIncoming fetches from remote, prints a colored diff for every
 // managed file that differs between origin/main and the current branch, and
 // returns true when at least one file has incoming changes.
-func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry, homeDir string) (bool, error) {
+func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry, homeDir string, reader *bufio.Reader) (bool, error) {
 	if err := r.Fetch(); err != nil {
 		return false, fmt.Errorf("fetching from remote: %w", err)
 	}
@@ -671,14 +671,36 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 		if string(mainBytes) == string(branchBytes) {
 			continue
 		}
-		if !anyIncoming {
-			fmt.Println("Incoming changes from main:")
-		}
 		anyIncoming = true
-		fmt.Printf("\n%s\n", f.Path)
+		fmt.Printf("\n--- %s ---\n", f.Path)
 		printDiff(daemon.GenerateUnifiedDiff(string(branchBytes), string(mainBytes)))
+		fmt.Printf("Accept main's version of %s? [y/N]: ", f.Path)
+		ans, _ := reader.ReadString('\n')
+		if isYes(strings.TrimSpace(ans)) {
+			if err := acceptPromotedFile(r, cfg, relPath, mainBytes); err != nil {
+				fmt.Fprintf(os.Stderr, "accepting %s: %v\n", f.Path, err)
+			} else {
+				fmt.Printf("Accepted %s from main.\n", f.Path)
+			}
+		} else {
+			fmt.Printf("Skipped %s — keeping local version.\n", f.Path)
+		}
 	}
 	return anyIncoming, nil
+}
+
+func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte) error {
+	fullPath := filepath.Join(cfg.LocalDotfilesDir, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return fmt.Errorf("creating directory: %w", err)
+	}
+	if err := os.WriteFile(fullPath, mainBytes, 0o644); err != nil {
+		return fmt.Errorf("writing file: %w", err)
+	}
+	if _, err := r.CommitFile(relPath, fmt.Sprintf("hdf: accept %s from main", relPath)); err != nil {
+		return fmt.Errorf("committing: %w", err)
+	}
+	return nil
 }
 
 // runLink fetches from remote, shows incoming diffs, merges main, and
@@ -707,23 +729,11 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 			fmt.Println("No remote configured; skipping fetch.")
 		} else {
 			fmt.Println("Fetching from remote...")
-			anyIncoming, err := fetchAndShowIncoming(r, cfg, reg, homeDir)
+			anyIncoming, err := fetchAndShowIncoming(r, cfg, reg, homeDir, reader)
 			if err != nil {
 				return err
 			}
-			if anyIncoming {
-				fmt.Print("\nMerge now? [y/N]: ")
-				answer, _ := reader.ReadString('\n')
-				answer = strings.TrimSpace(strings.ToLower(answer))
-				if answer == "y" {
-					fmt.Println("Merging main into your branch...")
-					if err := r.FastForwardFromMain(); err != nil {
-						return fmt.Errorf("merging: %w", err)
-					}
-				} else {
-					fmt.Println("Merge delayed — run 'hdf changes-pull' again when ready.")
-				}
-			} else {
+			if !anyIncoming {
 				fmt.Println("Already up to date.")
 			}
 		}
@@ -754,6 +764,47 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 		fmt.Printf("linked %s\n", f.Path)
 	}
 	return nil
+}
+
+func runPromote(cfg *config.Config) error {
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("opening repo: %w", err)
+	}
+	clean, err := r.IsCleanForPromote()
+	if err != nil {
+		return fmt.Errorf("checking status: %w", err)
+	}
+	if !clean {
+		return fmt.Errorf("uncommitted changes in the dotfiles repository — run 'hdf changes-push <file>' first")
+	}
+	hasIncoming, err := r.HasIncomingCommits()
+	if err == nil && hasIncoming {
+		fmt.Fprintln(os.Stderr, "warning: main has commits you haven't pulled — promoting anyway")
+	}
+	fmt.Printf("Merging %s into main...\n", cfg.Branch)
+	if err := r.MergeIntoBranch("main"); err != nil {
+		return fmt.Errorf("promoting: %w", err)
+	}
+	if err := pushBranches(r, cfg); err != nil {
+		return err
+	}
+	fmt.Printf("Promoted %s → main and pushed.\n", cfg.Branch)
+	return nil
+}
+
+var promoteCmd = &cobra.Command{
+	Use:   "promote",
+	Short: "Merge your machine branch into main and push",
+	Long:  "Merges the current machine branch into main (fast-forward) and pushes both to origin.\nRun 'hdf changes-pull' first if main has diverged.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := config.DefaultPath()
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
+		}
+		return runPromote(cfg)
+	},
 }
 
 var linkCmd = &cobra.Command{
@@ -957,4 +1008,5 @@ func init() {
 	rootCmd.AddCommand(linkCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(daemonCmd)
+	rootCmd.AddCommand(promoteCmd)
 }

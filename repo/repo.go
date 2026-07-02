@@ -477,6 +477,61 @@ func (r *Repo) FastForwardFromMain() error {
 	})
 }
 
+// IsCleanForPromote returns true when the worktree has no uncommitted changes.
+func (r *Repo) IsCleanForPromote() (bool, error) {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("getting worktree: %w", err)
+	}
+	status, err := w.Status()
+	if err != nil {
+		return false, fmt.Errorf("checking status: %w", err)
+	}
+	return status.IsClean(), nil
+}
+
+// MergeIntoBranch fast-forwards targetBranch to the current HEAD.
+// Returns an error if the branches have diverged — run 'hdf changes-pull'
+// to merge targetBranch into the current branch first, then retry.
+func (r *Repo) MergeIntoBranch(targetBranch string) error {
+	targetRefName := plumbing.NewBranchReferenceName(targetBranch)
+	targetRef, err := r.r.Reference(targetRefName, true)
+	if err != nil {
+		return fmt.Errorf("resolving %s: %w", targetBranch, err)
+	}
+	head, err := r.r.Head()
+	if err != nil {
+		return fmt.Errorf("resolving HEAD: %w", err)
+	}
+	if head.Hash() == targetRef.Hash() {
+		return nil
+	}
+	headCommit, err := r.r.CommitObject(head.Hash())
+	if err != nil {
+		return fmt.Errorf("reading HEAD commit: %w", err)
+	}
+	targetCommit, err := r.r.CommitObject(targetRef.Hash())
+	if err != nil {
+		return fmt.Errorf("reading %s commit: %w", targetBranch, err)
+	}
+	bases, err := headCommit.MergeBase(targetCommit)
+	if err != nil {
+		return fmt.Errorf("computing merge base: %w", err)
+	}
+	if len(bases) == 0 {
+		return fmt.Errorf("no common ancestor between HEAD and %s", targetBranch)
+	}
+	// targetBranch is already at or ahead of HEAD — nothing to do or already merged.
+	if bases[0].Hash == head.Hash() {
+		return fmt.Errorf("%s is already ahead of the current branch; run 'hdf changes-pull' first", targetBranch)
+	}
+	// Fast-forward possible: targetBranch is an ancestor of HEAD.
+	if bases[0].Hash == targetRef.Hash() {
+		return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, head.Hash()))
+	}
+	return fmt.Errorf("branches have diverged; run 'hdf changes-pull' to merge %s into your branch first, then re-run promote", targetBranch)
+}
+
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.
 func (r *Repo) HasUnpushedCommits(branch, base string) (bool, error) {
 	branchRef, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)

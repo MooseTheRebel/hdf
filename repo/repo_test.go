@@ -618,3 +618,132 @@ func TestFastForwardFromMain(t *testing.T) {
 		t.Errorf("HEAD = %s, want %s", head, mainSHA)
 	}
 }
+
+func TestIsCleanForPromote(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(dir, "dot.txt")
+	if err := os.WriteFile(f, []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("dot.txt", "add"); err != nil {
+		t.Fatal(err)
+	}
+
+	// No uncommitted changes — should be clean.
+	clean, err := r.IsCleanForPromote()
+	if err != nil {
+		t.Fatalf("IsCleanForPromote: %v", err)
+	}
+	if !clean {
+		t.Error("want clean after commit, got dirty")
+	}
+
+	// Modify the file without committing — should be dirty.
+	if err := os.WriteFile(f, []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err := r.IsCleanForPromote()
+	if err != nil {
+		t.Fatalf("IsCleanForPromote: %v", err)
+	}
+	if dirty {
+		t.Error("want dirty after uncommitted change, got clean")
+	}
+}
+
+func TestMergeIntoBranch(t *testing.T) {
+	// Set up a repo with a commit on main, then create a machine branch with
+	// one more commit. MergeIntoBranch("main") should fast-forward main.
+	bareDir := t.TempDir()
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("base.txt", "base commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AddRemote("origin", bareURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "extra.txt"), []byte("extra\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := r.CommitFile("extra.txt", "machine commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// machine branch is ahead of main — MergeIntoBranch should fast-forward main.
+	if err := r.MergeIntoBranch("main"); err != nil {
+		t.Fatalf("MergeIntoBranch: %v", err)
+	}
+
+	mainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA: %v", err)
+	}
+	if mainSHA != sha {
+		t.Errorf("main SHA = %s, want %s", mainSHA, sha)
+	}
+}
+
+func TestMergeIntoBranchDivergedReturnsError(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Commit on main
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("a.txt", "main commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Commit on machine branch
+	if err := os.WriteFile(filepath.Join(workDir, "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("b.txt", "machine commit"); err != nil {
+		t.Fatal(err)
+	}
+	// Commit on main independently (diverge)
+	if err := os.WriteFile(filepath.Join(workDir, "c.txt"), []byte("c\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "c.txt", Content: []byte("c\n")},
+	}, "main-only commit"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = r.MergeIntoBranch("main")
+	if err == nil {
+		t.Fatal("expected error for diverged branches, got nil")
+	}
+	if !strings.Contains(err.Error(), "diverged") {
+		t.Errorf("error = %q, want it to mention 'diverged'", err.Error())
+	}
+}
