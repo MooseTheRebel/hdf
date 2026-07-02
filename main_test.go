@@ -11,6 +11,8 @@ import (
 	"testing"
 )
 
+const testBranch = "machine"
+
 // mustRel returns the relative path from base to target, fataling the test on error.
 func mustRel(t *testing.T, base, target string) string {
 	t.Helper()
@@ -794,7 +796,7 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
 		t.Fatalf("runEnroll: %v", err)
 	}
 
@@ -816,7 +818,7 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 	}
 
 	// main branch must have managed.toml listing the file with an empty hash.
-	regBytes, err := r.ReadFileFromBranch("main", ".hdf/managed.toml")
+	regBytes, err := r.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch registry: %v", err)
 	}
@@ -883,7 +885,7 @@ func TestRunLinkHermetic(t *testing.T) {
 	if err := os.WriteFile(dotfile, []byte("config\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
 		t.Fatalf("runEnroll: %v", err)
 	}
 
@@ -892,7 +894,7 @@ func TestRunLinkHermetic(t *testing.T) {
 		t.Fatalf("removing symlink: %v", err)
 	}
 
-	if err := runLink(homeDir, cfg); err != nil {
+	if err := runLink(homeDir, cfg, true, strings.NewReader(""), statePath); err != nil {
 		t.Fatalf("runLink: %v", err)
 	}
 
@@ -927,7 +929,7 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runEnroll("~/.testrc", homeDir, cfg, statePath); err != nil {
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
 		t.Fatalf("first runEnroll: %v", err)
 	}
 
@@ -945,7 +947,7 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 	pr, pw, _ := os.Pipe()
 	os.Stdout = pw
 
-	err = runEnroll("~/.testrc", homeDir, cfg, statePath)
+	err = runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true)
 
 	_ = pw.Close()
 	os.Stdout = origStdout
@@ -968,6 +970,524 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 	}
 }
 
+// captureStdout runs f with os.Stdout redirected to a pipe and returns what
+// was written. Any error from io.Copy is intentionally ignored — tests that
+// care about the output assert on it directly.
+func captureStdout(f func()) string {
+	origStdout := os.Stdout
+	pr, pw, _ := os.Pipe()
+	os.Stdout = pw
+	f()
+	_ = pw.Close()
+	os.Stdout = origStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, pr)
+	return buf.String()
+}
+
+// setupEnrolledFile initialises hdf, enrolls a dotfile with initialContent,
+// and returns cfg plus the absolute path to the symlink in homeDir.
+func setupEnrolledFile(t *testing.T, initialContent string) (*config.Config, string, string) {
+	t.Helper()
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	homeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte(initialContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+		t.Fatalf("first runEnroll: %v", err)
+	}
+	return cfg, statePath, homeDir
+}
+
+// TestEnrollShowsDiffForChangedFile verifies that re-enrolling a file whose
+// content has changed prints a colored diff to stdout before committing.
+func TestEnrollShowsDiffForChangedFile(t *testing.T) {
+	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
+
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("original line\nnew line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(func() {
+		if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+			t.Errorf("runEnroll after change: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "+new line") {
+		t.Errorf("expected diff to contain '+new line', got:\n%s", out)
+	}
+	if !strings.Contains(out, "changes to") {
+		t.Errorf("expected diff header 'changes to', got:\n%s", out)
+	}
+}
+
+// TestEnrollAbortWhenUserDeclinesPrompt verifies that answering "n" at the
+// diff confirmation prompt aborts the enrollment without creating a commit.
+func TestEnrollAbortWhenUserDeclinesPrompt(t *testing.T) {
+	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatalf("opening repo: %v", err)
+	}
+	countBefore, err := r.CommitCount()
+	if err != nil {
+		t.Fatalf("CommitCount before: %v", err)
+	}
+
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("original line\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdout(func() {
+		err = runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader("n\n"), false)
+	})
+	if err == nil {
+		t.Fatal("expected error after declining prompt, got nil")
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Errorf("error = %q, want it to contain 'aborted'", err.Error())
+	}
+
+	countAfter, err := r.CommitCount()
+	if err != nil {
+		t.Fatalf("CommitCount after: %v", err)
+	}
+	if countAfter != countBefore {
+		t.Errorf("commit count changed from %d to %d after abort", countBefore, countAfter)
+	}
+}
+
+// TestEnrollProceedsOnDefaultPromptAnswer verifies that pressing Enter (empty
+// answer) at the confirmation prompt is treated as "yes" and enrollment proceeds.
+func TestEnrollProceedsOnDefaultPromptAnswer(t *testing.T) {
+	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
+
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("original line\nextra\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdout(func() {
+		if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader("\n"), false); err != nil {
+			t.Errorf("runEnroll with empty answer: %v", err)
+		}
+	})
+}
+
+// TestEnrollYesFlagSkipsPrompt verifies that --yes bypasses the interactive
+// prompt even when there are changes to review.
+func TestEnrollYesFlagSkipsPrompt(t *testing.T) {
+	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
+
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("original line\nyes-flag-line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdout(func() {
+		if err := runEnroll("~/.testrc", homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+			t.Errorf("runEnroll with yes=true: %v", err)
+		}
+	})
+}
+
+// TestCommandAliases verifies that enroll and link are registered as aliases
+// so users can still use them interchangeably with changes-push and changes-pull.
+func TestCommandAliases(t *testing.T) {
+	aliases := map[string][]string{}
+	for _, cmd := range rootCmd.Commands() {
+		aliases[cmd.Use] = cmd.Aliases
+	}
+	if !contains(aliases["changes-push <path>"], "enroll") {
+		t.Errorf("changes-push command missing enroll alias; got %v", aliases["changes-push <path>"])
+	}
+	if !contains(aliases["changes-pull"], "link") {
+		t.Errorf("changes-pull command missing link alias; got %v", aliases["changes-pull"])
+	}
+}
+
+func TestRunLinkMergePrompt(t *testing.T) {
+	const branch = "test-host"
+
+	cases := []struct {
+		name       string
+		answer     string
+		wantMerged bool
+	}{
+		{name: "accepts merge", answer: "y\n", wantMerged: true},
+		{name: "delays merge", answer: "n\n", wantMerged: false},
+		{name: "default delays (empty answer)", answer: "\n", wantMerged: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Each sub-test gets its own isolated bare repo so there is no
+			// state pollution from machine-branch commits or main advances
+			// made by other sub-tests.
+			bareDir := t.TempDir()
+			if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+				t.Fatalf("InitOrOpenBare: %v", err)
+			}
+			bareURL := "file://" + bareDir
+
+			seedDir := t.TempDir()
+			seed, err := repo.Init(seedDir)
+			if err != nil {
+				t.Fatalf("seed Init: %v", err)
+			}
+			hdfDir := filepath.Join(seedDir, ".hdf")
+			if err := os.MkdirAll(hdfDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
+				t.Fatalf("seed CommitFile: %v", err)
+			}
+			if err := seed.AddRemote("origin", bareURL); err != nil {
+				t.Fatalf("seed AddRemote: %v", err)
+			}
+			if err := seed.Push("main"); err != nil {
+				t.Fatalf("seed Push main: %v", err)
+			}
+
+			workDir := t.TempDir()
+			homeDir := t.TempDir()
+			homePath := filepath.Join(homeDir, ".testrc")
+
+			// Commit the registry to main so the machine branch inherits it
+			// already committed after cloning. This keeps the machine worktree
+			// clean, which MergeFromMain requires.
+			reg := &config.Registry{
+				Files: []config.ManagedFile{{Path: homePath}},
+			}
+			regBytes, err := config.RegistryToBytes(reg)
+			if err != nil {
+				t.Fatalf("RegistryToBytes: %v", err)
+			}
+			if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+				{RepoRelPath: managedTOMLPath, Content: regBytes},
+			}, "hdf: write registry"); err != nil {
+				t.Fatalf("CommitFilesToBranch registry: %v", err)
+			}
+			if err := seed.Push("main"); err != nil {
+				t.Fatalf("seed Push main (registry): %v", err)
+			}
+
+			// Clone AFTER the registry commit so the machine branch starts with
+			// the registry already in place (no uncommitted files in workDir).
+			r, err := repo.Clone(bareURL, workDir)
+			if err != nil {
+				t.Fatalf("Clone: %v", err)
+			}
+			if err := r.CreateAndCheckoutBranch(branch); err != nil {
+				t.Fatalf("CreateAndCheckoutBranch: %v", err)
+			}
+
+			// Advance main with a file change only — machine branch does not
+			// have this file, so fetchAndShowIncoming detects an incoming diff.
+			// Machine branch is now a strict ancestor of main, so MergeFromMain
+			// can fast-forward cleanly.
+			if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+				{RepoRelPath: filepath.Base(homePath), Content: []byte("updated-by-main\n")},
+			}, "hdf: update file on main"); err != nil {
+				t.Fatalf("CommitFilesToBranch: %v", err)
+			}
+			if err := seed.Push("main"); err != nil {
+				t.Fatalf("seed Push main: %v", err)
+			}
+
+			mainSHABefore, err := seed.BranchSHA("main")
+			if err != nil {
+				t.Fatalf("BranchSHA main: %v", err)
+			}
+
+			cfg := &config.Config{
+				Branch:           branch,
+				LocalDotfilesDir: workDir,
+				GitPushTarget:    bareURL,
+			}
+
+			statePath := filepath.Join(t.TempDir(), "state.toml")
+			captureStdout(func() {
+				if err := runLink(homeDir, cfg, false, strings.NewReader(tc.answer), statePath); err != nil {
+					t.Errorf("runLink: %v", err)
+				}
+			})
+
+			freshR, err := repo.Open(workDir)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			headSHA, err := freshR.BranchSHA(branch)
+			if err != nil {
+				t.Fatalf("BranchSHA: %v", err)
+			}
+
+			if tc.wantMerged && headSHA != mainSHABefore {
+				t.Errorf("merge accepted: want HEAD=%s (main SHA), got %s", mainSHABefore, headSHA)
+			}
+			if !tc.wantMerged && headSHA == mainSHABefore {
+				t.Errorf("merge delayed: want HEAD to stay on branch, but it advanced to main SHA")
+			}
+		})
+	}
+}
+
+// TestRunLinkMergeAcceptedWithPendingWarning verifies that a "y" answering the
+// daemon-warning prompt and a "y" answering the merge prompt are both consumed
+// correctly when both prompts appear in the same runLink invocation. The bug
+// was that two separate bufio.NewReader(stdin) calls caused the second "y" to
+// be lost inside the first reader's buffer, so the merge prompt received EOF
+// and defaulted to "N".
+func TestRunLinkMergeAcceptedWithPendingWarning(t *testing.T) {
+	const branch = "test-host"
+
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("Init seed: %v", err)
+	}
+	hdfDir := filepath.Join(seedDir, ".hdf")
+	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push main: %v", err)
+	}
+
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+	homePath := filepath.Join(homeDir, ".testrc")
+
+	reg := &config.Registry{Files: []config.ManagedFile{{Path: homePath}}}
+	regBytes, err := config.RegistryToBytes(reg)
+	if err != nil {
+		t.Fatalf("RegistryToBytes: %v", err)
+	}
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: managedTOMLPath, Content: regBytes},
+	}, "hdf: write registry"); err != nil {
+		t.Fatalf("CommitFilesToBranch registry: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push main (registry): %v", err)
+	}
+
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(branch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: filepath.Base(homePath), Content: []byte("updated-by-main\n")},
+	}, "hdf: update file on main"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push main (file): %v", err)
+	}
+
+	mainSHABefore, err := seed.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA main: %v", err)
+	}
+
+	cfg := &config.Config{
+		Branch:           branch,
+		LocalDotfilesDir: workDir,
+		GitPushTarget:    bareURL,
+	}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	// Plant a pending warning so promptPendingWarnings fires before the merge prompt.
+	if err := config.SaveState(statePath, &config.State{
+		PendingWarnings: []string{"test warning: please review"},
+	}); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	// "y\ny\n": first "y" accepts the warning, second "y" accepts the merge.
+	// With the stdin double-buffering bug the second "y" is silently discarded
+	// and the merge prompt receives EOF, defaulting to "N" (no merge).
+	captureStdout(func() {
+		if err := runLink(homeDir, cfg, false, strings.NewReader("y\ny\n"), statePath); err != nil {
+			t.Fatalf("runLink: %v", err)
+		}
+	})
+
+	freshR, err := repo.Open(workDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	headSHA, err := freshR.BranchSHA(branch)
+	if err != nil {
+		t.Fatalf("BranchSHA: %v", err)
+	}
+	if headSHA != mainSHABefore {
+		t.Errorf("merge did not happen: HEAD=%s, want main SHA %s\n(hint: stdin double-buffering discarded the merge 'y')", headSHA, mainSHABefore)
+	}
+}
+
+// TestRunInitLocalAddRemoteErrorPropagated verifies that when AddRemote fails
+// (e.g. origin already points to a different URL), setupLocalRepo propagates
+// the error rather than silently swallowing it.
+func TestRunInitLocalAddRemoteErrorPropagated(t *testing.T) {
+	repoDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	// Pre-init the repo with a commit and "origin" pointing to URL A so:
+	// - InitOrOpen takes the fast Open path (no write needed)
+	// - ensureInitialCommit finds an existing HEAD and returns early
+	// - AddRemote("origin", urlB) hits the ErrRemoteExists → different-URL error
+	r, err := repo.Init(repoDir)
+	if err != nil {
+		t.Fatalf("pre-init: %v", err)
+	}
+	seedFile := filepath.Join(repoDir, "seed.txt")
+	if err := os.WriteFile(seedFile, []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("seed.txt", "initial"); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+	if err := r.AddRemote("origin", "https://example.com/old.git"); err != nil {
+		t.Fatalf("pre-add remote: %v", err)
+	}
+
+	// Provide a *different* HTTPS push URL so isRemoteURL returns true and the
+	// code calls r.AddRemote, which returns "already points to a different URL".
+	stdin := "1\n" + repoDir + "\nhttps://example.com/new.git\n"
+	err = runInit(strings.NewReader(stdin), cfgPath, statePath, "")
+	if err == nil {
+		t.Fatal("expected error when origin already points to a different URL, got nil")
+	}
+}
+
+func contains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("seed Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	homePath := filepath.Join(homeDir, ".testrc")
+	relPath := filepath.Base(homePath)
+
+	// Machine branch has real dotfile content.
+	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("real content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(relPath, "machine: add dotfile"); err != nil {
+		t.Fatalf("CommitFile machine: %v", err)
+	}
+
+	// Main advances with an enrollment placeholder (empty) for the managed file.
+	// This makes HasIncomingCommits=true but mainBytes=[]byte{} for the managed file.
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: relPath, Content: []byte{}},
+	}, "hdf: enroll placeholder"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	reg := &config.Registry{
+		Files: []config.ManagedFile{{Path: homePath}},
+	}
+	cfg := &config.Config{
+		Branch:           testBranch,
+		LocalDotfilesDir: workDir,
+	}
+
+	var anyIncoming bool
+	var callErr error
+	captureStdout(func() {
+		anyIncoming, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir)
+	})
+	if callErr != nil {
+		t.Fatalf("fetchAndShowIncoming: %v", callErr)
+	}
+	if anyIncoming {
+		t.Error("want anyIncoming=false (enrollment placeholder should be skipped), got true")
+	}
+}
+
 func TestRootCmdMigrationHook(t *testing.T) {
 	if rootCmd.PersistentPreRunE == nil {
 		t.Error("rootCmd.PersistentPreRunE must be set to wire up legacy config.toml migration")
@@ -983,5 +1503,103 @@ func TestRootCmdSilenceErrors(t *testing.T) {
 func TestRootCmdSilenceUsage(t *testing.T) {
 	if !rootCmd.SilenceUsage {
 		t.Error("rootCmd.SilenceUsage must be true to suppress usage output on runtime errors")
+	}
+}
+
+// TestRunEnrollDirectoryReturnsError verifies that passing a directory path to
+// changes-push returns a clear error rather than a generic "is a directory" OS error.
+func TestRunEnrollDirectoryReturnsError(t *testing.T) {
+	homeDir := t.TempDir()
+	dirPath := filepath.Join(homeDir, ".config", "nvim")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: managedTOMLPath, Content: []byte{}},
+	}, "hdf: init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	err = runEnroll(dirPath, homeDir, cfg, statePath, strings.NewReader(""), false)
+	if err == nil {
+		t.Fatal("expected error when enrolling a directory, got nil")
+	}
+	// Must be a clear, user-friendly message — not the raw OS "is a directory" error.
+	if !strings.Contains(err.Error(), "only supports managing individual files") {
+		t.Errorf("error = %q, want user-friendly message about individual files", err.Error())
+	}
+}
+
+// TestRunInitLocalSymlinkPushTargetRejected verifies that a symlink resolving to
+// the working-copy directory is rejected as a push target, even though the string
+// paths differ.
+func TestRunInitLocalSymlinkPushTargetRejected(t *testing.T) {
+	// Create a real directory for the working copy and a symlink alias for it.
+	realDir := t.TempDir()
+	symlinkPath := filepath.Join(t.TempDir(), "repo-link")
+	if err := os.Symlink(realDir, symlinkPath); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+
+	cfgPath, statePath := initPaths(t)
+	// Use realDir as working copy and symlinkPath (which resolves to realDir) as push target.
+	err := runInit(strings.NewReader(localInitStdin(realDir, symlinkPath)), cfgPath, statePath, "")
+	if err == nil {
+		t.Fatal("expected error when push target symlinks to working copy, got nil")
+	}
+	if !strings.Contains(err.Error(), "must differ") {
+		t.Errorf("error = %q, want it to contain 'must differ'", err.Error())
+	}
+}
+
+// TestRunLinkLocalOnlySkipsFetch verifies that changes-pull succeeds when no
+// remote is configured — it should re-create symlinks without attempting a fetch.
+func TestRunLinkLocalOnlySkipsFetch(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeDotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(homeDotfile, []byte("export PS1='$ '\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	relPath := filepath.Base(homeDotfile)
+	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("export PS1='$ '\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(relPath, "add .testrc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := &config.Registry{Files: []config.ManagedFile{{Path: "~/.testrc"}}}
+	if err := config.SaveRegistry(workDir, reg); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	// noFetch=false but no remote configured — should not fail on fetch.
+	err = runLink(homeDir, cfg, false, strings.NewReader(""), statePath)
+	if err != nil {
+		t.Fatalf("runLink with no remote: %v", err)
 	}
 }

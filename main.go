@@ -63,8 +63,16 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize hdf and set up your dot file repository",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runInit(cmd.InOrStdin(), config.DefaultPath(), config.DefaultStatePath(), "")
+		cfgPath := config.DefaultPath()
+		statePath := config.DefaultStatePath()
+		return runInit(os.Stdin, cfgPath, statePath, "")
 	},
+}
+
+// isYes reports whether s is an affirmative response.
+func isYes(s string) bool {
+	l := strings.ToLower(strings.TrimSpace(s))
+	return l == "y" || l == "yes"
 }
 
 // localPathToFileURL converts an absolute local path to a git-compatible
@@ -78,38 +86,9 @@ func localPathToFileURL(absPath string) string {
 	return "file://" + p
 }
 
-// resolveRepoPath returns the absolute repo file path for a managed file on
-// the current branch. For variant files it looks up the matching variant;
-// returns "" (no error) when the file has variants but none match the branch.
-func resolveRepoPath(f config.ManagedFile, branch, repoDir, expandedPath string) (string, error) {
-	if len(f.Variants) > 0 {
-		for _, v := range f.Variants {
-			if v.Branch == branch {
-				return filepath.Join(repoDir, v.RepoPath), nil
-			}
-		}
-		return "", nil // variant file, no match for this branch
-	}
-	return link.RepoPathFor(expandedPath, repoDir)
-}
-
-// isRemoteURL reports whether s looks like a remote git URL.
-// "file://" is intentionally excluded — users never type it; hdf adds it.
-func isRemoteURL(s string) bool {
-	return strings.HasPrefix(s, "https://") ||
-		strings.HasPrefix(s, "http://") ||
-		strings.HasPrefix(s, "git@") ||
-		strings.HasPrefix(s, "ssh://") ||
-		strings.HasPrefix(s, "git://")
-}
-
 const branchNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-// isYes returns true when the user typed "y" or "yes" (case-insensitive).
-func isYes(s string) bool {
-	c := strings.ToLower(strings.TrimSpace(s))
-	return c == "y" || c == "yes"
-}
+const managedTOMLPath = ".hdf/managed.toml"
 
 // sanitizeBranchName replaces any character that is not an ASCII letter,
 // digit, or hyphen with a hyphen, then strips leading/trailing hyphens.
@@ -123,8 +102,7 @@ func sanitizeBranchName(s string) string {
 	return strings.Trim(s, "-")
 }
 
-// branchName returns the sanitized machine hostname, falling back to
-// "host-<4 random ASCII letters>" if the hostname is unavailable or empty.
+// branchName returns a sanitised hostname suitable for use as a git branch name.
 func branchName() string {
 	h, err := os.Hostname()
 	if err == nil && h != "" {
@@ -142,8 +120,19 @@ func branchName() string {
 	return "host-" + string(b)
 }
 
-// resolveAndConfirmPath expands a raw path string, and if it is relative,
-// resolves it to absolute and asks the user to confirm.
+// isRemoteURL reports whether s looks like a remote git URL.
+// "file://" is intentionally excluded — users never type it; hdf adds it.
+func isRemoteURL(s string) bool {
+	return strings.HasPrefix(s, "https://") ||
+		strings.HasPrefix(s, "http://") ||
+		strings.HasPrefix(s, "git@") ||
+		strings.HasPrefix(s, "ssh://") ||
+		strings.HasPrefix(s, "git://")
+}
+
+// resolveAndConfirmPath expands raw to an absolute path and, when it was
+// relative, asks the user to confirm. Returns an error containing "aborted"
+// when the user declines.
 func resolveAndConfirmPath(reader *bufio.Reader, raw string) (string, error) {
 	expanded := config.ExpandPath(raw)
 	if filepath.IsAbs(expanded) {
@@ -155,147 +144,104 @@ func resolveAndConfirmPath(reader *bufio.Reader, raw string) (string, error) {
 	}
 	fmt.Printf("  → Resolved to: %s\n", abs)
 	fmt.Print("  Confirm? [y/N]: ")
-	confirm, err := reader.ReadString('\n')
+	answer, err := reader.ReadString('\n')
 	if err != nil {
 		return "", fmt.Errorf("reading confirmation: %w", err)
 	}
-	if !isYes(confirm) {
+	if !isYes(strings.TrimSpace(answer)) {
 		return "", fmt.Errorf("aborted")
 	}
 	return abs, nil
 }
 
-// readAndResolvePath reads a path from reader (applying defaultVal when blank)
-// then delegates to resolveAndConfirmPath.
-func readAndResolvePath(reader *bufio.Reader, defaultVal string) (string, error) {
-	raw, err := reader.ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("reading input: %w", err)
-	}
-	input := strings.TrimSpace(raw)
-	if input == "" {
-		input = defaultVal
-	}
-	return resolveAndConfirmPath(reader, input)
-}
-
-// openOrInitRepo opens an existing git repository at path, or initialises a
-// new one if none exists.
-func openOrInitRepo(path string) (*repo.Repo, error) {
-	r, err := repo.Open(path)
-	if err != nil {
-		r, err = repo.Init(path)
-		if err != nil {
-			return nil, fmt.Errorf("initializing repo: %w", err)
-		}
-		fmt.Printf("Initialized new git repository at %s\n", path)
-		return r, nil
-	}
-	fmt.Printf("Opened existing repository at %s\n", path)
-	return r, nil
-}
-
-// setupBareTarget interactively reads the push target (URL or local path) and
-// initialises a bare repository when a local path is given.
-func setupBareTarget(reader *bufio.Reader, repoPath string) (string, error) {
-	const defaultBarePath = "~/.local/share/hdf/repo-bare"
-	fmt.Println()
-	fmt.Println("Where should changes be pushed?")
-	fmt.Println("  Enter a remote URL (e.g. git@github.com:you/dotfiles.git)")
-	fmt.Println("  or a local path for a bare repo (e.g. ~/dotfiles-bare)")
-	fmt.Printf("Push target [%s]: ", defaultBarePath)
-	pushInput, err := reader.ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("reading push target: %w", err)
-	}
-	pushRaw := strings.TrimSpace(pushInput)
-	if pushRaw == "" {
-		pushRaw = defaultBarePath
-	}
-	if isRemoteURL(pushRaw) {
-		return pushRaw, nil
-	}
-	pushExpanded, err := resolveAndConfirmPath(reader, pushRaw)
-	if err != nil {
-		return "", err
-	}
-	if pushExpanded == repoPath {
-		return "", fmt.Errorf("push target must differ from working copy (%s)", repoPath)
-	}
-	if err := os.MkdirAll(pushExpanded, 0o755); err != nil {
-		return "", fmt.Errorf("creating bare repo directory: %w", err)
-	}
-	_, created, err := repo.InitOrOpenBare(pushExpanded)
-	if err != nil {
-		return "", fmt.Errorf("initializing bare repo: %w", err)
-	}
-	if created {
-		fmt.Printf("Initialized bare repository at %s\n", pushExpanded)
-	} else {
-		fmt.Printf("Opened existing bare repository at %s\n", pushExpanded)
-	}
-	return localPathToFileURL(pushExpanded), nil
-}
-
-// setupLocalRepo runs the two-stage local wizard (working copy + push target).
-// Returns the opened repo, resolved paths, and the git push URL.
 func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
-	const defaultLocalPath = "~/.local/share/hdf/repo"
-	fmt.Printf("Local working copy path [%s]: ", defaultLocalPath)
-	repoPath, err := readAndResolvePath(reader, defaultLocalPath)
-	if err != nil {
-		return nil, "", "", err
-	}
-	if err := os.MkdirAll(repoPath, 0o755); err != nil {
-		return nil, "", "", fmt.Errorf("creating repo directory: %w", err)
-	}
-	r, err := openOrInitRepo(repoPath)
-	if err != nil {
-		return nil, "", "", err
-	}
-	gitURL, err := setupBareTarget(reader, repoPath)
-	if err != nil {
-		return nil, "", "", err
-	}
-	if err := r.AddRemote("origin", gitURL); err != nil {
-		return nil, "", "", fmt.Errorf("wiring origin remote: %w", err)
-	}
-	return r, repoPath, gitURL, nil
-}
-
-// setupRemoteRepo clones a remote repository into cloneDir (or the default
-// path when cloneDir is empty). Returns the cloned repo, local path, and URL.
-func setupRemoteRepo(reader *bufio.Reader, cloneDir string) (*repo.Repo, string, string, error) {
-	fmt.Print("Remote git URL: ")
-	urlInput, err := reader.ReadString('\n')
+	home, _ := os.UserHomeDir()
+	defaultPath := filepath.Join(home, ".local", "share", "hdf", "repo")
+	fmt.Printf("Local repo path [%s]: ", defaultPath)
+	pathStr, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, "", "", fmt.Errorf("reading input: %w", err)
 	}
-	gitURL := strings.TrimSpace(urlInput)
-	if gitURL == "" {
-		return nil, "", "", fmt.Errorf("remote git URL cannot be empty")
+	raw := strings.TrimSpace(pathStr)
+	if raw == "" {
+		raw = defaultPath
 	}
-	repoPath := cloneDir
-	if repoPath == "" {
-		home, err := os.UserHomeDir()
+	repoPath, err := resolveAndConfirmPath(reader, raw)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	fmt.Print("Push target path or remote URL (leave blank to skip): ")
+	pushStr, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, "", "", fmt.Errorf("reading push target: %w", err)
+	}
+	pushRaw := strings.TrimSpace(pushStr)
+
+	r, err := repo.InitOrOpen(repoPath)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("initialising repo at %s: %w", repoPath, err)
+	}
+
+	if pushRaw == "" {
+		return r, repoPath, "", nil
+	}
+
+	var gitURL string
+	if isRemoteURL(pushRaw) {
+		gitURL = pushRaw
+	} else {
+		pushPath, err := resolveAndConfirmPath(reader, pushRaw)
 		if err != nil {
 			return nil, "", "", err
 		}
-		repoPath = filepath.Join(home, ".local", "share", "hdf", "repo")
+		resolvedPush := pushPath
+		if rp, err := filepath.EvalSymlinks(pushPath); err == nil {
+			resolvedPush = rp
+		}
+		resolvedRepo := repoPath
+		if rr, err := filepath.EvalSymlinks(repoPath); err == nil {
+			resolvedRepo = rr
+		}
+		if pushPath == repoPath || resolvedPush == resolvedRepo {
+			return nil, "", "", fmt.Errorf("push target and working copy must differ")
+		}
+		if _, _, err := repo.InitOrOpenBare(pushPath); err != nil {
+			return nil, "", "", fmt.Errorf("initialising bare repo at %s: %w", pushPath, err)
+		}
+		gitURL = localPathToFileURL(pushPath)
 	}
-	if err := os.MkdirAll(repoPath, 0o755); err != nil {
-		return nil, "", "", fmt.Errorf("creating local repo directory: %w", err)
+
+	if err := r.AddRemote("origin", gitURL); err != nil {
+		return nil, "", "", fmt.Errorf("adding remote: %w", err)
 	}
-	r, err := repo.Clone(gitURL, repoPath)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("cloning repo: %w", err)
-	}
-	fmt.Printf("Cloned repository to %s\n", repoPath)
 	return r, repoPath, gitURL, nil
 }
 
-// ensureInitialCommit returns the HEAD SHA of r. If the repo has no commits
-// yet it creates a minimal .hdf/.gitkeep commit first.
+func setupRemoteRepo(reader *bufio.Reader, cloneDir string) (*repo.Repo, string, string, error) {
+	fmt.Print("Remote repository URL: ")
+	urlStr, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, "", "", fmt.Errorf("reading input: %w", err)
+	}
+	gitURL := strings.TrimSpace(urlStr)
+	if gitURL == "" {
+		return nil, "", "", fmt.Errorf("remote git URL cannot be empty")
+	}
+
+	dest := cloneDir
+	if dest == "" {
+		home, _ := os.UserHomeDir()
+		dest = filepath.Join(home, ".local", "share", "hdf", "repo")
+	}
+	fmt.Printf("Cloning %s into %s...\n", gitURL, dest)
+	r, err := repo.Clone(gitURL, dest)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("cloning %s: %w", gitURL, err)
+	}
+	return r, dest, gitURL, nil
+}
+
 func ensureInitialCommit(r *repo.Repo, repoPath string) (string, error) {
 	headSHA, err := r.HeadSHA()
 	if err == nil {
@@ -316,7 +262,7 @@ func ensureInitialCommit(r *repo.Repo, repoPath string) (string, error) {
 }
 
 // runInit runs the interactive init wizard.
-// cloneDir overrides the destination for remote clones (empty → ~/.local/share/hdf/repo).
+// cloneDir overrides the destination for remote clones (empty -> ~/.local/share/hdf/repo).
 func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	reader := bufio.NewReader(stdin)
 
@@ -384,7 +330,7 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 		return fmt.Errorf("saving state: %w", err)
 	}
 	fmt.Printf("Config saved to %s\n", cfgPath)
-	fmt.Println("\nhdf initialized. Use 'hdf enroll <path>' to start managing dot files.")
+	fmt.Println("\nhdf initialized. Use 'hdf changes-push <path>' to start managing dot files.")
 	return nil
 }
 
@@ -416,7 +362,7 @@ func upsertRegistryEntry(reg *config.Registry, tildeFile, hash string) {
 // placeholder blob for slashRel) directly to main without touching the
 // working tree.
 func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) error {
-	mainRegBytes, err := r.ReadFileFromBranch("main", ".hdf/managed.toml")
+	mainRegBytes, err := r.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil {
 		return fmt.Errorf("reading main registry: %w", err)
 	}
@@ -438,7 +384,7 @@ func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) erro
 	}
 	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: slashRel, Content: []byte{}},
-		{RepoRelPath: ".hdf/managed.toml", Content: mainRegBytes},
+		{RepoRelPath: managedTOMLPath, Content: mainRegBytes},
 	}, fmt.Sprintf("hdf: register %s baseline", filePath)); err != nil {
 		return fmt.Errorf("registering main baseline: %w", err)
 	}
@@ -485,18 +431,21 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 }
 
 // ignoredPathsFromRemote returns the fleet-wide ignored-paths list from
-// SharedSettings on origin/main, or the package defaults when unavailable.
-func ignoredPathsFromRemote(r *repo.Repo) []string {
-	ssBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
+// SharedSettings on origin/main, or the package defaults when the file is absent.
+func ignoredPathsFromRemote(r *repo.Repo) ([]string, error) {
+	ssBytes, err := r.ReadFileFromRemoteBranch("origin", "main", config.SharedSettingsFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading shared settings from origin/main: %w", err)
+	}
 	if len(ssBytes) == 0 {
-		return config.DefaultIgnoredPaths
+		return config.DefaultIgnoredPaths, nil
 	}
 	ss, err := config.SharedSettingsFromBytes(ssBytes)
 	if err != nil {
-		return config.DefaultIgnoredPaths
+		return nil, fmt.Errorf("parsing shared settings: %w", err)
 	}
 	ss.ApplyDefaults()
-	return ss.IgnoredPaths
+	return ss.IgnoredPaths, nil
 }
 
 // stageAndCommit stages relName and the managed registry, then commits.
@@ -504,7 +453,7 @@ func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
 	if err := r.StageFile(relName); err != nil {
 		return "", fmt.Errorf("staging file: %w", err)
 	}
-	if err := r.StageFile(".hdf/managed.toml"); err != nil {
+	if err := r.StageFile(managedTOMLPath); err != nil {
 		return "", fmt.Errorf("staging registry: %w", err)
 	}
 	sha, err := r.CommitStaged(fmt.Sprintf("hdf: enroll %s", filePath))
@@ -528,40 +477,39 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 	return nil
 }
 
-// runEnroll copies filePath into the hdf repo, commits it to the hostname
-// branch, registers an empty stub in main, and pushes both branches.
-// homeDir is used as the home directory for path resolution; callers should
-// pass os.UserHomeDir() in production and a temp dir in tests.
-func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) error {
-	expanded, tildeFile, err := expandAndValidate(filePath, homeDir)
-	if err != nil {
-		return err
+// showEnrollDiff prints the diff between committed and disk content and
+// optionally prompts for confirmation. Returns an error when the user aborts.
+// reader must be the single bufio.Reader for this command invocation.
+func showEnrollDiff(committed, disk []byte, filePath string, reader *bufio.Reader, yes bool) error {
+	if committed == nil {
+		fmt.Printf("new file: %s\n", filePath)
+		return nil
 	}
-
-	r, err := repo.Open(cfg.LocalDotfilesDir)
-	if err != nil {
-		return fmt.Errorf("opening repo: %w", err)
+	diff := daemon.GenerateUnifiedDiff(string(committed), string(disk))
+	if diff == "" {
+		return nil
 	}
-
-	if config.IsIgnored(tildeFile, ignoredPathsFromRemote(r)) {
-		return fmt.Errorf("%s matches an ignored path — edit %s on the main branch to override",
-			filePath, config.SharedSettingsFile)
+	fmt.Printf("changes to %s:\n", filePath)
+	printDiff(diff)
+	if yes {
+		return nil
 	}
+	fmt.Print("Enroll these changes? [Y/n]: ")
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(answer)
+	if answer != "" && !isYes(answer) {
+		return fmt.Errorf("aborted")
+	}
+	return nil
+}
 
+// applyEnroll copies expanded into the repo, commits it, updates the main
+// registry, pushes, and records the new commit SHA in state.
+func applyEnroll(r *repo.Repo, expanded, tildeFile, relName, filePath, homeDir string, cfg *config.Config, statePath string) error {
 	hash, err := link.EnrollInHome(expanded, cfg.LocalDotfilesDir, homeDir)
 	if err != nil {
 		return fmt.Errorf("enrolling %s: %w", filePath, err)
 	}
-
-	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
-	if err != nil {
-		return fmt.Errorf("computing repo path: %w", err)
-	}
-	relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
-	if err != nil {
-		return fmt.Errorf("computing relative path: %w", err)
-	}
-
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
@@ -574,20 +522,16 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 	if err := config.SaveRegistry(cfg.LocalDotfilesDir, reg); err != nil {
 		return fmt.Errorf("saving registry: %w", err)
 	}
-
 	sha, err := stageAndCommit(r, relName, filePath)
 	if err != nil {
 		return err
 	}
-
 	if err := updateMainRegistry(r, tildeFile, filepath.ToSlash(relName), filePath); err != nil {
 		return err
 	}
-
 	if err := pushBranches(r, cfg); err != nil {
 		return err
 	}
-
 	state, err := config.LoadState(statePath)
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
@@ -600,11 +544,67 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string) e
 	return nil
 }
 
+func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, stdin io.Reader, yes bool) error {
+	expanded, tildeFile, err := expandAndValidate(filePath, homeDir)
+	if err != nil {
+		return err
+	}
+	if fi, err := os.Stat(expanded); err == nil && fi.IsDir() {
+		return fmt.Errorf("%s is a directory; hdf only supports managing individual files", filePath)
+	}
+
+	reader := bufio.NewReader(stdin)
+
+	// Surface any daemon warnings before proceeding.
+	if err := promptPendingWarnings(statePath, reader); err != nil {
+		return err
+	}
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("opening repo: %w", err)
+	}
+	ignoredPaths, err := ignoredPathsFromRemote(r)
+	if err != nil {
+		return err
+	}
+	if config.IsIgnored(tildeFile, ignoredPaths) {
+		return fmt.Errorf("%s matches an ignored path — edit %s on the main branch to override",
+			filePath, config.SharedSettingsFile)
+	}
+
+	// Compute the repo-relative path early so we can show a diff before
+	// modifying anything on disk.
+	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	if err != nil {
+		return fmt.Errorf("computing repo path: %w", err)
+	}
+	relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
+	if err != nil {
+		return fmt.Errorf("computing relative path: %w", err)
+	}
+	committedBytes, err := r.ReadFileFromBranch(cfg.Branch, filepath.ToSlash(relName))
+	if err != nil {
+		return fmt.Errorf("reading committed version of %s: %w", relName, err)
+	}
+	diskBytes, err := os.ReadFile(expanded)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", expanded, err)
+	}
+	if err := showEnrollDiff(committedBytes, diskBytes, filePath, reader, yes); err != nil {
+		return err
+	}
+	return applyEnroll(r, expanded, tildeFile, relName, filePath, homeDir, cfg, statePath)
+}
+
 var enrollCmd = &cobra.Command{
-	Use:   "enroll <path>",
-	Short: "Enroll a dot file under hdf management",
-	Long:  `Copies the file into the hdf repo, replaces it with a symlink, and commits.`,
-	Args:  cobra.ExactArgs(1),
+	Use:   "changes-push <path>",
+	Short: "Commit a dot file to your machine branch and push to remote",
+	Long: `Shows a diff of changes, copies the file into the hdf repo, replaces it with a symlink,
+commits to your machine branch, and pushes that branch to the remote.
+Does not merge into main — that is a deliberate step done via hdf changes-pull after review.`,
+	Args:    cobra.ExactArgs(1),
+	Aliases: []string{"enroll"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load(config.DefaultPath())
 		if err != nil {
@@ -614,18 +614,121 @@ var enrollCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
-		return runEnroll(args[0], homeDir, cfg, config.DefaultStatePath())
+		return runEnroll(args[0], homeDir, cfg, config.DefaultStatePath(), os.Stdin, enrollYes)
 	},
 }
 
-// runLink re-creates symlinks for all managed files. homeDir is the user's
-// home directory used for path normalisation; callers should pass
-// os.UserHomeDir() in production and a temp dir in tests.
-func runLink(homeDir string, cfg *config.Config) error {
+// fetchAndShowIncoming fetches from remote, prints a colored diff for every
+// managed file that differs between origin/main and the current branch, and
+// returns true when at least one file has incoming changes.
+func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry, homeDir string) (bool, error) {
+	if err := r.Fetch(); err != nil {
+		return false, fmt.Errorf("fetching from remote: %w", err)
+	}
+	// Short-circuit: if origin/main has no commits that aren't already in HEAD
+	// (e.g. HEAD is ahead of or equal to main), there is nothing to show.
+	// This also avoids false positives when the local branch has diverged and
+	// a per-file diff would compare stale main content against newer local content.
+	hasIncoming, err := r.HasIncomingCommits()
+	if err != nil {
+		return false, fmt.Errorf("checking incoming commits: %w", err)
+	}
+	if !hasIncoming {
+		return false, nil
+	}
+	anyIncoming := false
+	for _, f := range reg.Files {
+		expanded := config.ExpandPathIn(f.Path, homeDir)
+		var repoFile string
+		if len(f.Variants) > 0 {
+			repoFile, _ = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+		} else {
+			repoFile, _ = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		}
+		if repoFile == "" {
+			continue
+		}
+		relPath, err := filepath.Rel(cfg.LocalDotfilesDir, repoFile)
+		if err != nil {
+			continue
+		}
+		relPath = filepath.ToSlash(relPath)
+		mainBytes, err := r.ReadFileFromRemoteBranch("origin", "main", relPath)
+		if err != nil {
+			return false, fmt.Errorf("reading %s from origin/main: %w", relPath, err)
+		}
+		// len==0 means main holds an enrollment placeholder committed by
+		// changes-push when the file was first registered. The real content
+		// lives only on the machine branch at this point, so there is nothing
+		// meaningful to diff against — skip to avoid a false "incoming change".
+		if len(mainBytes) == 0 {
+			continue
+		}
+		branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relPath)
+		if err != nil {
+			return false, fmt.Errorf("reading %s from branch %s: %w", relPath, cfg.Branch, err)
+		}
+		if string(mainBytes) == string(branchBytes) {
+			continue
+		}
+		if !anyIncoming {
+			fmt.Println("Incoming changes from main:")
+		}
+		anyIncoming = true
+		fmt.Printf("\n%s\n", f.Path)
+		printDiff(daemon.GenerateUnifiedDiff(string(branchBytes), string(mainBytes)))
+	}
+	return anyIncoming, nil
+}
+
+// runLink fetches from remote, shows incoming diffs, merges main, and
+// re-creates symlinks for all managed files. Pass noFetch=true to skip the
+// network operations and only re-create symlinks (offline / test use).
+// homeDir is the user's home directory; pass os.UserHomeDir() in production
+// and a temp dir in tests.
+func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, statePath string) error {
+	reader := bufio.NewReader(stdin)
+
+	// Surface any daemon warnings before proceeding.
+	if err := promptPendingWarnings(statePath, reader); err != nil {
+		return err
+	}
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("opening repo: %w", err)
+	}
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
 	}
+	if !noFetch {
+		if r.RemoteURL() == "" {
+			fmt.Println("No remote configured; skipping fetch.")
+		} else {
+			fmt.Println("Fetching from remote...")
+			anyIncoming, err := fetchAndShowIncoming(r, cfg, reg, homeDir)
+			if err != nil {
+				return err
+			}
+			if anyIncoming {
+				fmt.Print("\nMerge now? [y/N]: ")
+				answer, _ := reader.ReadString('\n')
+				answer = strings.TrimSpace(strings.ToLower(answer))
+				if answer == "y" {
+					fmt.Println("Merging main into your branch...")
+					if err := r.FastForwardFromMain(); err != nil {
+						return fmt.Errorf("merging: %w", err)
+					}
+				} else {
+					fmt.Println("Merge delayed — run 'hdf changes-pull' again when ready.")
+				}
+			} else {
+				fmt.Println("Already up to date.")
+			}
+		}
+	}
+
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
 		var repoFile string
@@ -640,7 +743,7 @@ func runLink(homeDir string, cfg *config.Config) error {
 			continue
 		}
 		if repoFile == "" {
-			fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — run: hdf enroll --variant %s\n",
+			fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — run: hdf changes-push --variant %s\n",
 				f.Path, cfg.Branch, f.Path)
 			continue
 		}
@@ -654,8 +757,12 @@ func runLink(homeDir string, cfg *config.Config) error {
 }
 
 var linkCmd = &cobra.Command{
-	Use:   "link",
-	Short: "Re-create symlinks for all managed files",
+	Use:   "changes-pull",
+	Short: "Fetch main, show incoming diffs, optionally merge, and re-create symlinks",
+	Long: `Fetches origin/main, shows an incoming diff, then prompts to merge now or delay.
+Symlinks are always re-created from the current branch state regardless of the choice.
+Delaying is an accepted workflow — run hdf changes-pull again when ready to merge.`,
+	Aliases: []string{"link"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
 		cfg, err := config.Load(cfgPath)
@@ -666,7 +773,7 @@ var linkCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
-		return runLink(homeDir, cfg)
+		return runLink(homeDir, cfg, linkNoFetch, os.Stdin, config.DefaultStatePath())
 	},
 }
 
@@ -736,21 +843,68 @@ var daemonCmd = &cobra.Command{
 	},
 }
 
-var diffCmd = &cobra.Command{
-	Use:   "diff [url]",
-	Short: "Display a diff in a window",
-	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		diffURLs := []string{
-			"https://github.com/spf13/cobra/commit/10d4b48a79be3d4e89e6c45cb59f4d32a3d2ae19.diff",
-			"https://github.com/spf13/cobra/commit/88b30ab89da2d0d0abb153818746c5a2d30eccec.diff",
-			"https://github.com/spf13/cobra/commit/346d408fe7d4be00ff9481ea4d43c4abb5e5f77d.diff",
+// printDiff writes ANSI-colored unified diff content to stdout.
+func printDiff(content string) {
+	const (
+		reset = "\033[0m"
+		bold  = "\033[1m"
+		red   = "\033[31m"
+		green = "\033[32m"
+		cyan  = "\033[36m"
+	)
+	for _, line := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff "),
+			strings.HasPrefix(line, "index "),
+			strings.HasPrefix(line, "--- "),
+			strings.HasPrefix(line, "+++ "):
+			fmt.Printf("%s%s%s\n", bold, line, reset)
+		case strings.HasPrefix(line, "@@"):
+			fmt.Printf("%s%s%s\n", cyan, line, reset)
+		case strings.HasPrefix(line, "+"):
+			fmt.Printf("%s%s%s\n", green, line, reset)
+		case strings.HasPrefix(line, "-"):
+			fmt.Printf("%s%s%s\n", red, line, reset)
+		default:
+			fmt.Println(line)
 		}
-		if len(args) > 0 {
-			diffURLs = []string{args[0]}
+	}
+}
+
+// promptPendingWarnings checks for daemon warnings persisted to statePath since
+// the last push/pull and prompts the user before continuing. Returns an error
+// if the user declines, which causes the calling command to abort cleanly.
+// reader must be the single bufio.Reader for this command invocation so that
+// subsequent prompts in the same call chain read from the same buffer.
+func promptPendingWarnings(statePath string, reader *bufio.Reader) error {
+	warnings, err := daemon.PendingWarnings(statePath)
+	if err != nil {
+		return fmt.Errorf("reading pending warnings: %w", err)
+	}
+	if len(warnings) == 0 {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "Warning: The hdf daemon has recorded the following warnings:")
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "   * %s\n", w)
+	}
+	fmt.Fprint(os.Stderr, "Continue anyway? [y/N]: ")
+	answer, _ := reader.ReadString('\n')
+	if !isYes(strings.TrimSpace(answer)) {
+		return fmt.Errorf("aborted — address the warnings above before continuing")
+	}
+	return nil
+}
+
+// resolveRepoPath returns the repo file path for a managed file with variants,
+// choosing the variant matching branch, or empty string if no variant matches.
+func resolveRepoPath(f config.ManagedFile, branch, localDotfilesDir, expanded string) (string, error) {
+	for _, v := range f.Variants {
+		if v.Branch == branch {
+			return filepath.Join(localDotfilesDir, v.RepoPath), nil
 		}
-		launchGUI(diffURLs)
-	},
+	}
+	return "", nil
 }
 
 func launchGUI(diffURLs []string) {
@@ -783,14 +937,21 @@ func main() {
 	}
 }
 
+var (
+	enrollYes   bool
+	linkNoFetch bool
+)
+
 func init() {
 	// Silence Cobra's built-in error/usage printing on RunE failures so we
 	// control the format ourselves and avoid duplicate output.
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
 
+	enrollCmd.Flags().BoolVarP(&enrollYes, "yes", "y", false, "Skip the diff confirmation prompt")
+	linkCmd.Flags().BoolVar(&linkNoFetch, "no-fetch", false, "Skip fetch and merge from remote; only re-create symlinks")
+
 	rootCmd.AddCommand(configCmd)
-	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(enrollCmd)
 	rootCmd.AddCommand(linkCmd)
