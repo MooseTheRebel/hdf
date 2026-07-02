@@ -345,14 +345,18 @@ func (r *Repo) Fetch() error {
 	return err
 }
 
-// Push pushes the named branch to the remote.
+// Push pushes the named branch to the remote. Returns nil when already up to date.
 func (r *Repo) Push(branch string) error {
-	return r.r.Push(&git.PushOptions{
+	err := r.r.Push(&git.PushOptions{
 		Auth: authForURL(r.RemoteURL()),
 		RefSpecs: []gitconfig.RefSpec{
 			gitconfig.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)),
 		},
 	})
+	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	return err
 }
 
 // HasNewCommitsOnMain returns true if the main branch HEAD differs from lastCommitSHA.
@@ -529,7 +533,26 @@ func (r *Repo) MergeIntoBranch(targetBranch string) error {
 	if bases[0].Hash == targetRef.Hash() {
 		return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, head.Hash()))
 	}
-	return fmt.Errorf("branches have diverged; run 'hdf changes-pull' to merge %s into your branch first, then re-run promote", targetBranch)
+	// Branches have diverged. Create a merge commit that uses HEAD's tree so the
+	// machine branch content wins. This is equivalent to `git merge -X theirs`
+	// but operates entirely on git objects without touching the working tree.
+	author := gitAuthor()
+	mergeCommit := &object.Commit{
+		Author:       *author,
+		Committer:    *author,
+		Message:      fmt.Sprintf("hdf: promote %s into %s\n", head.Name().Short(), targetBranch),
+		TreeHash:     headCommit.TreeHash,
+		ParentHashes: []plumbing.Hash{head.Hash(), targetRef.Hash()},
+	}
+	obj := r.r.Storer.NewEncodedObject()
+	if err := mergeCommit.Encode(obj); err != nil {
+		return fmt.Errorf("encoding merge commit: %w", err)
+	}
+	commitHash, err := r.r.Storer.SetEncodedObject(obj)
+	if err != nil {
+		return fmt.Errorf("storing merge commit: %w", err)
+	}
+	return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, commitHash))
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.

@@ -103,7 +103,14 @@ func sanitizeBranchName(s string) string {
 }
 
 // branchName returns a sanitised hostname suitable for use as a git branch name.
+// HDF_BRANCH overrides the hostname — used in e2e tests to assign unique
+// branch names to nodes running on the same machine.
 func branchName() string {
+	if override := os.Getenv("HDF_BRANCH"); override != "" {
+		if sanitized := sanitizeBranchName(override); sanitized != "" {
+			return sanitized
+		}
+	}
 	h, err := os.Hostname()
 	if err == nil && h != "" {
 		if sanitized := sanitizeBranchName(h); sanitized != "" {
@@ -358,10 +365,9 @@ func upsertRegistryEntry(reg *config.Registry, tildeFile, hash string) {
 }
 
 // updateMainRegistry reads the registry from the main branch, upserts an
-// empty stub for tildeFile, and commits the updated registry (plus an empty
-// placeholder blob for slashRel) directly to main without touching the
-// working tree.
-func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) error {
+// entry for tildeFile, and commits the updated registry directly to main
+// without touching the working tree. File content reaches main only via promote.
+func updateMainRegistry(r *repo.Repo, tildeFile, filePath string) error {
 	mainRegBytes, err := r.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil {
 		return fmt.Errorf("reading main registry: %w", err)
@@ -383,7 +389,6 @@ func updateMainRegistry(r *repo.Repo, tildeFile, slashRel, filePath string) erro
 		return fmt.Errorf("serialising main registry: %w", err)
 	}
 	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
-		{RepoRelPath: slashRel, Content: []byte{}},
 		{RepoRelPath: managedTOMLPath, Content: mainRegBytes},
 	}, fmt.Sprintf("hdf: register %s baseline", filePath)); err != nil {
 		return fmt.Errorf("registering main baseline: %w", err)
@@ -464,6 +469,9 @@ func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
 }
 
 // pushBranches pushes the hostname branch and main when a remote is configured.
+// A non-fast-forward rejection on main is silently ignored: it means another
+// node promoted since our local main was last synced; the machine branch push
+// still lands, and the caller can fetch + promote to catch up.
 func pushBranches(r *repo.Repo, cfg *config.Config) error {
 	if cfg.GitPushTarget == "" {
 		return nil
@@ -471,7 +479,7 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 	if err := r.Push(cfg.Branch); err != nil {
 		return fmt.Errorf("pushing hostname branch: %w", err)
 	}
-	if err := r.Push("main"); err != nil {
+	if err := r.Push("main"); err != nil && !strings.Contains(err.Error(), "non-fast-forward update") {
 		return fmt.Errorf("pushing main: %w", err)
 	}
 	return nil
@@ -526,7 +534,7 @@ func applyEnroll(r *repo.Repo, expanded, tildeFile, relName, filePath, homeDir s
 	if err != nil {
 		return err
 	}
-	if err := updateMainRegistry(r, tildeFile, filepath.ToSlash(relName), filePath); err != nil {
+	if err := updateMainRegistry(r, tildeFile, filePath); err != nil {
 		return err
 	}
 	if err := pushBranches(r, cfg); err != nil {
@@ -618,6 +626,20 @@ Does not merge into main — that is a deliberate step done via hdf changes-pull
 	},
 }
 
+// remoteRegistry returns origin/main's registry when it contains files, falling
+// back to fallback otherwise.
+func remoteRegistry(r *repo.Repo, fallback *config.Registry) *config.Registry {
+	b, _ := r.ReadFileFromRemoteBranch("origin", "main", managedTOMLPath)
+	if len(b) == 0 {
+		return fallback
+	}
+	reg, err := config.RegistryFromBytes(b)
+	if err != nil || len(reg.Files) == 0 {
+		return fallback
+	}
+	return reg
+}
+
 // fetchAndShowIncoming fetches from remote, prints a colored diff for every
 // managed file that differs between origin/main and the current branch, and
 // returns true when at least one file has incoming changes.
@@ -636,6 +658,9 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 	if !hasIncoming {
 		return false, nil
 	}
+	// Prefer the registry from origin/main so files enrolled on other machines
+	// are visible even when this machine branch was created before enrollment.
+	reg = remoteRegistry(r, reg)
 	anyIncoming := false
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)

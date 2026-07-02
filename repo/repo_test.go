@@ -706,13 +706,16 @@ func TestMergeIntoBranch(t *testing.T) {
 	}
 }
 
-func TestMergeIntoBranchDivergedReturnsError(t *testing.T) {
+// TestMergeIntoBranchDivergedCreatesMergeCommit verifies that when branches have
+// diverged, MergeIntoBranch creates a merge commit using the machine branch's tree
+// (equivalent to `git merge -X theirs`) without touching the working tree.
+func TestMergeIntoBranchDivergedCreatesMergeCommit(t *testing.T) {
 	workDir := t.TempDir()
 	r, err := Init(workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Commit on main
+	// Initial commit on main.
 	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -722,28 +725,57 @@ func TestMergeIntoBranchDivergedReturnsError(t *testing.T) {
 	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
 		t.Fatal(err)
 	}
-	// Commit on machine branch
-	if err := os.WriteFile(filepath.Join(workDir, "b.txt"), []byte("b\n"), 0o644); err != nil {
+	// Commit on machine branch with real content for b.txt.
+	if err := os.WriteFile(filepath.Join(workDir, "b.txt"), []byte("b-real\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.CommitFile("b.txt", "machine commit"); err != nil {
+	machineSHA, err := r.CommitFile("b.txt", "machine commit")
+	if err != nil {
 		t.Fatal(err)
 	}
-	// Commit on main independently (diverge)
-	if err := os.WriteFile(filepath.Join(workDir, "c.txt"), []byte("c\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Commit on main independently (diverge) with a placeholder for b.txt.
 	if _, err := r.CommitFilesToBranch("main", []BranchFile{
-		{RepoRelPath: "c.txt", Content: []byte("c\n")},
+		{RepoRelPath: "b.txt", Content: []byte("")},
 	}, "main-only commit"); err != nil {
 		t.Fatal(err)
 	}
 
-	err = r.MergeIntoBranch("main")
-	if err == nil {
-		t.Fatal("expected error for diverged branches, got nil")
+	// MergeIntoBranch should succeed and create a merge commit.
+	if err := r.MergeIntoBranch("main"); err != nil {
+		t.Fatalf("MergeIntoBranch diverged: %v", err)
 	}
-	if !strings.Contains(err.Error(), "diverged") {
-		t.Errorf("error = %q, want it to mention 'diverged'", err.Error())
+
+	// main should now point to a new merge commit descended from both branches.
+	mainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA main: %v", err)
+	}
+	if mainSHA == machineSHA {
+		t.Error("main should be a new merge commit, not just the machine branch tip")
+	}
+
+	// The merge commit's tree should reflect the machine branch content (b-real).
+	mainCommit, err := r.r.CommitObject(plumbing.NewHash(mainSHA))
+	if err != nil {
+		t.Fatalf("CommitObject: %v", err)
+	}
+	if len(mainCommit.ParentHashes) != 2 {
+		t.Errorf("merge commit should have 2 parents, got %d", len(mainCommit.ParentHashes))
+	}
+	// Tree should have b.txt with machine-branch content.
+	tree, err := mainCommit.Tree()
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	f, err := tree.File("b.txt")
+	if err != nil {
+		t.Fatalf("tree.File b.txt: %v", err)
+	}
+	content, err := f.Contents()
+	if err != nil {
+		t.Fatalf("file contents: %v", err)
+	}
+	if content != "b-real\n" {
+		t.Errorf("b.txt content = %q, want %q", content, "b-real\n")
 	}
 }

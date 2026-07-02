@@ -780,7 +780,7 @@ func TestExpandAndValidateRelativePath(t *testing.T) {
 	}
 }
 
-func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
+func TestEnrollRegistersFileInMainRegistry(t *testing.T) {
 	// Set up a local repo with a bare push target.
 	workDir := t.TempDir()
 	bareDir := t.TempDir()
@@ -810,16 +810,11 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 		t.Fatalf("opening repo: %v", err)
 	}
 
-	// main branch must have an empty stub at the file's repo-relative path.
-	stubBytes, err := r.ReadFileFromBranch("main", ".testrc")
-	if err != nil {
-		t.Fatalf("ReadFileFromBranch stub: %v", err)
-	}
-	if stubBytes == nil {
-		t.Fatal("expected empty stub in main, got nil")
-	}
+	// main must NOT have a file blob for .testrc — only the registry entry.
+	// File content reaches main only when promote runs.
+	stubBytes, _ := r.ReadFileFromBranch("main", ".testrc")
 	if len(stubBytes) != 0 {
-		t.Errorf("expected empty stub, got %q", stubBytes)
+		t.Errorf("main must not have .testrc blob after enroll, got %q", stubBytes)
 	}
 
 	// main branch must have managed.toml listing the file with an empty hash.
@@ -849,19 +844,19 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening bare repo: %v", err)
 	}
-	hostStub, err := bare.ReadFileFromBranch(cfg.Branch, ".testrc")
+	hostFile, err := bare.ReadFileFromBranch(cfg.Branch, ".testrc")
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch on bare (hostname): %v", err)
 	}
-	if hostStub == nil {
+	if hostFile == nil {
 		t.Error("hostname branch not pushed to bare remote")
 	}
-	mainStub, err := bare.ReadFileFromBranch("main", ".testrc")
+	mainReg2, err := bare.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil {
-		t.Fatalf("ReadFileFromBranch on bare (main): %v", err)
+		t.Fatalf("ReadFileFromBranch on bare (main registry): %v", err)
 	}
-	if mainStub == nil {
-		t.Error("main branch not pushed to bare remote")
+	if mainReg2 == nil {
+		t.Error("main registry not pushed to bare remote")
 	}
 }
 
