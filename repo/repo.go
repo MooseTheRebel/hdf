@@ -21,6 +21,10 @@ import (
 
 var errStop = errors.New("stop")
 
+// ErrNonFastForwardUpdate is returned by Push when the remote rejects the push
+// because it is not a fast-forward update. Callers can test for this with errors.Is.
+var ErrNonFastForwardUpdate = errors.New("non-fast-forward update")
+
 // authForURL returns an appropriate go-git auth method for rawURL, or nil for
 // public / unauthenticated access.
 //
@@ -345,14 +349,24 @@ func (r *Repo) Fetch() error {
 	return err
 }
 
-// Push pushes the named branch to the remote.
+// Push pushes the named branch to the remote. Returns nil when already up to date.
+// Returns ErrNonFastForwardUpdate when the remote rejects the push as non-fast-forward.
 func (r *Repo) Push(branch string) error {
-	return r.r.Push(&git.PushOptions{
+	err := r.r.Push(&git.PushOptions{
 		Auth: authForURL(r.RemoteURL()),
 		RefSpecs: []gitconfig.RefSpec{
 			gitconfig.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)),
 		},
 	})
+	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	// go-git does not expose a sentinel for push non-fast-forward errors; detect
+	// by message and wrap in our own sentinel so callers can use errors.Is.
+	if err != nil && strings.HasPrefix(err.Error(), "non-fast-forward update") {
+		return fmt.Errorf("%w: %w", ErrNonFastForwardUpdate, err)
+	}
+	return err
 }
 
 // HasNewCommitsOnMain returns true if the main branch HEAD differs from lastCommitSHA.
@@ -529,7 +543,163 @@ func (r *Repo) MergeIntoBranch(targetBranch string) error {
 	if bases[0].Hash == targetRef.Hash() {
 		return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, head.Hash()))
 	}
-	return fmt.Errorf("branches have diverged; run 'hdf changes-pull' to merge %s into your branch first, then re-run promote", targetBranch)
+	// Branches have diverged. Refuse if the machine branch deleted any file
+	// that still exists on targetBranch — the user must pull first and decide.
+	deleted, err := filesMissingFromHeadStillInTarget(r.r, bases[0].TreeHash, headCommit.TreeHash, targetCommit.TreeHash)
+	if err != nil {
+		return fmt.Errorf("checking for deletions: %w", err)
+	}
+	if len(deleted) > 0 {
+		return fmt.Errorf(
+			"cannot promote: %s deleted file(s) that still exist on %s (%s) — run 'hdf changes-pull' first",
+			head.Name().Short(), targetBranch, strings.Join(deleted, ", "),
+		)
+	}
+	// Merge the two trees so files promoted by other machines (present in
+	// targetBranch but not HEAD) are preserved, while HEAD's versions win.
+	mergedTreeHash, err := mergeTrees(r.r, headCommit.TreeHash, targetCommit.TreeHash)
+	if err != nil {
+		return fmt.Errorf("merging trees: %w", err)
+	}
+	author := gitAuthor()
+	mergeCommit := &object.Commit{
+		Author:    *author,
+		Committer: *author,
+		Message:   fmt.Sprintf("hdf: promote %s into %s\n", head.Name().Short(), targetBranch),
+		TreeHash:  mergedTreeHash,
+		// parent[0] is targetBranch's previous HEAD so git log --first-parent
+		// follows targetBranch's own lineage, not the machine branch.
+		ParentHashes: []plumbing.Hash{targetRef.Hash(), head.Hash()},
+	}
+	obj := r.r.Storer.NewEncodedObject()
+	if err := mergeCommit.Encode(obj); err != nil {
+		return fmt.Errorf("encoding merge commit: %w", err)
+	}
+	commitHash, err := r.r.Storer.SetEncodedObject(obj)
+	if err != nil {
+		return fmt.Errorf("storing merge commit: %w", err)
+	}
+	return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, commitHash))
+}
+
+// mergeTrees recursively merges two git trees. Entries in treeA win when both
+// trees contain the same name; entries only in treeB are preserved.
+//
+// This is a two-way merge (no merge base). The potential resurrection problem —
+// where a file deleted in treeA but present in treeB gets silently re-added —
+// is prevented upstream: MergeIntoBranch calls filesMissingFromHeadStillInTarget
+// and refuses to proceed whenever treeA deleted something that is still in treeB.
+// By the time mergeTrees runs, all treeB-only entries are genuinely new files
+// added by other machines, and preserving them is the correct behaviour.
+func mergeTrees(r *git.Repository, treeA, treeB plumbing.Hash) (plumbing.Hash, error) {
+	if treeA == treeB || treeB.IsZero() {
+		return treeA, nil
+	}
+	if treeA.IsZero() {
+		return treeB, nil
+	}
+
+	a, err := r.TreeObject(treeA)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	b, err := r.TreeObject(treeB)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	bEntries := make(map[string]object.TreeEntry, len(b.Entries))
+	for _, e := range b.Entries {
+		bEntries[e.Name] = e
+	}
+
+	merged := make([]object.TreeEntry, 0, len(a.Entries)+len(b.Entries))
+	aNames := make(map[string]struct{}, len(a.Entries))
+
+	for _, ea := range a.Entries {
+		aNames[ea.Name] = struct{}{}
+		entry, err := mergeEntry(r, ea, bEntries)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		merged = append(merged, entry)
+	}
+
+	for _, eb := range b.Entries {
+		if _, inA := aNames[eb.Name]; !inA {
+			merged = append(merged, eb)
+		}
+	}
+
+	sort.Sort(object.TreeEntrySorter(merged))
+	newTree := &object.Tree{Entries: merged}
+	obj := r.Storer.NewEncodedObject()
+	if err := newTree.Encode(obj); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return r.Storer.SetEncodedObject(obj)
+}
+
+// mergeEntry resolves a single tree entry from treeA against the entries of
+// treeB. treeA wins on conflict; directories are merged recursively.
+func mergeEntry(r *git.Repository, ea object.TreeEntry, bEntries map[string]object.TreeEntry) (object.TreeEntry, error) {
+	eb, exists := bEntries[ea.Name]
+	if !exists || ea.Hash == eb.Hash {
+		return ea, nil
+	}
+	if ea.Mode == filemode.Dir && eb.Mode == filemode.Dir {
+		h, err := mergeTrees(r, ea.Hash, eb.Hash)
+		if err != nil {
+			return ea, err
+		}
+		ea.Hash = h
+	}
+	return ea, nil
+}
+
+// filesMissingFromHeadStillInTarget returns the repo-relative paths of files
+// that existed in baseTree, were removed in headTree, but are still present in
+// targetTree. These are files the machine branch intentionally deleted that
+// the target branch (main) still holds — a signal to pull first and decide.
+func filesMissingFromHeadStillInTarget(r *git.Repository, baseHash, headHash, targetHash plumbing.Hash) ([]string, error) {
+	collectPaths := func(hash plumbing.Hash) (map[string]struct{}, error) {
+		tree, err := r.TreeObject(hash)
+		if err != nil {
+			return nil, err
+		}
+		iter := tree.Files()
+		paths := make(map[string]struct{})
+		err = iter.ForEach(func(f *object.File) error {
+			paths[f.Name] = struct{}{}
+			return nil
+		})
+		return paths, err
+	}
+
+	inBase, err := collectPaths(baseHash)
+	if err != nil {
+		return nil, err
+	}
+	inHead, err := collectPaths(headHash)
+	if err != nil {
+		return nil, err
+	}
+	inTarget, err := collectPaths(targetHash)
+	if err != nil {
+		return nil, err
+	}
+
+	var deleted []string
+	for path := range inBase {
+		if _, ok := inHead[path]; ok {
+			continue
+		}
+		if _, ok := inTarget[path]; ok {
+			deleted = append(deleted, path)
+		}
+	}
+	sort.Strings(deleted)
+	return deleted, nil
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.

@@ -780,7 +780,7 @@ func TestExpandAndValidateRelativePath(t *testing.T) {
 	}
 }
 
-func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
+func TestEnrollRegistersFileInMainRegistry(t *testing.T) {
 	// Set up a local repo with a bare push target.
 	workDir := t.TempDir()
 	bareDir := t.TempDir()
@@ -810,16 +810,11 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 		t.Fatalf("opening repo: %v", err)
 	}
 
-	// main branch must have an empty stub at the file's repo-relative path.
-	stubBytes, err := r.ReadFileFromBranch("main", ".testrc")
-	if err != nil {
-		t.Fatalf("ReadFileFromBranch stub: %v", err)
-	}
-	if stubBytes == nil {
-		t.Fatal("expected empty stub in main, got nil")
-	}
+	// main must NOT have a file blob for .testrc — only the registry entry.
+	// File content reaches main only when promote runs.
+	stubBytes, _ := r.ReadFileFromBranch("main", ".testrc")
 	if len(stubBytes) != 0 {
-		t.Errorf("expected empty stub, got %q", stubBytes)
+		t.Errorf("main must not have .testrc blob after enroll, got %q", stubBytes)
 	}
 
 	// main branch must have managed.toml listing the file with an empty hash.
@@ -849,19 +844,19 @@ func TestEnrollCreatesEmptyBaselineInMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening bare repo: %v", err)
 	}
-	hostStub, err := bare.ReadFileFromBranch(cfg.Branch, ".testrc")
+	hostFile, err := bare.ReadFileFromBranch(cfg.Branch, ".testrc")
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch on bare (hostname): %v", err)
 	}
-	if hostStub == nil {
+	if hostFile == nil {
 		t.Error("hostname branch not pushed to bare remote")
 	}
-	mainStub, err := bare.ReadFileFromBranch("main", ".testrc")
+	mainReg2, err := bare.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil {
-		t.Fatalf("ReadFileFromBranch on bare (main): %v", err)
+		t.Fatalf("ReadFileFromBranch on bare (main registry): %v", err)
 	}
-	if mainStub == nil {
-		t.Error("main branch not pushed to bare remote")
+	if mainReg2 == nil {
+		t.Error("main registry not pushed to bare remote")
 	}
 }
 
@@ -1575,6 +1570,78 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	}
 }
 
+// TestFetchAndShowIncoming_EOFAborts verifies that fetchAndShowIncoming returns
+// an error when stdin is closed (EOF) while prompting for an incoming diff,
+// rather than silently skipping all remaining files.
+func TestFetchAndShowIncoming_EOFAborts(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("seed Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	homePath := filepath.Join(homeDir, ".testrc")
+	relPath := filepath.Base(homePath)
+
+	// Machine branch has one version of the file.
+	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("machine content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(relPath, "machine: add dotfile"); err != nil {
+		t.Fatalf("CommitFile machine: %v", err)
+	}
+
+	// Main has a DIFFERENT version — this creates a real incoming diff that triggers a prompt.
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: relPath, Content: []byte("main content\n")},
+	}, "main: add dotfile"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	reg := &config.Registry{Files: []config.ManagedFile{{Path: homePath}}}
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+
+	// Empty reader — simulates closed stdin.
+	var callErr error
+	captureStdout(func() {
+		_, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir, bufio.NewReader(strings.NewReader("")))
+	})
+	if callErr == nil {
+		t.Error("expected error when stdin is closed during prompt, got nil")
+	}
+}
+
 func TestRootCmdMigrationHook(t *testing.T) {
 	if rootCmd.PersistentPreRunE == nil {
 		t.Error("rootCmd.PersistentPreRunE must be set to wire up legacy config.toml migration")
@@ -1762,5 +1829,179 @@ func TestRunPromoteDirtyReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "uncommitted") {
 		t.Errorf("error = %q, want mention of 'uncommitted'", err.Error())
+	}
+}
+
+// TestAcceptedFileUpdatesLocalRegistry verifies that when the user accepts an
+// incoming file during changes-pull, the local managed.toml is updated with the
+// file's registry entry (Fix 2).
+func TestAcceptedFileUpdatesLocalRegistry(t *testing.T) {
+	const branch = "test-host"
+	const knownHash = "deadbeef"
+
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("Init seed: %v", err)
+	}
+	hdfDir := filepath.Join(seedDir, ".hdf")
+	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	// Clone before main gets the file so the machine branch starts without it.
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(branch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	homePath := filepath.Join(homeDir, ".foorc")
+
+	// Push the enrolled file to main after the machine branch was created.
+	remoteReg := &config.Registry{Files: []config.ManagedFile{{Path: homePath, Hash: knownHash}}}
+	regBytes, err := config.RegistryToBytes(remoteReg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: managedTOMLPath, Content: regBytes},
+		{RepoRelPath: ".foorc", Content: []byte("from-main\n")},
+	}, "hdf: enroll .foorc from another machine"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	cfg := &config.Config{Branch: branch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	captureStdout(func() {
+		if err := runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath); err != nil {
+			t.Errorf("runLink: %v", err)
+		}
+	})
+
+	localReg, err := config.LoadRegistry(workDir)
+	if err != nil {
+		t.Fatalf("LoadRegistry after accept: %v", err)
+	}
+	var found bool
+	for _, f := range localReg.Files {
+		if f.Path == homePath {
+			found = true
+			if f.Hash != knownHash {
+				t.Errorf("registry hash = %q, want %q", f.Hash, knownHash)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("accepted file %q not found in local registry", homePath)
+	}
+}
+
+// TestRunLinkSymlinksNewlyAcceptedFile verifies that a file accepted during
+// changes-pull is symlinked in the same runLink invocation (Fix 4): the
+// registry must be reloaded after fetchAndShowIncoming so newly added entries
+// are not missed by the symlinking loop.
+func TestRunLinkSymlinksNewlyAcceptedFile(t *testing.T) {
+	const branch = "test-host"
+
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("Init seed: %v", err)
+	}
+	hdfDir := filepath.Join(seedDir, ".hdf")
+	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	// Clone BEFORE main gets the file so local registry starts empty.
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(branch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	homePath := filepath.Join(homeDir, ".barrc")
+
+	// Push the enrolled file to main after the clone.
+	remoteReg := &config.Registry{Files: []config.ManagedFile{{Path: homePath, Hash: "abc"}}}
+	regBytes, err := config.RegistryToBytes(remoteReg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: managedTOMLPath, Content: regBytes},
+		{RepoRelPath: ".barrc", Content: []byte("bar-content\n")},
+	}, "hdf: enroll .barrc from another machine"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	cfg := &config.Config{Branch: branch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	captureStdout(func() {
+		if err := runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath); err != nil {
+			t.Errorf("runLink: %v", err)
+		}
+	})
+
+	// The accepted file must be symlinked — requires Fix 4 (registry reload).
+	fi, err := os.Lstat(homePath)
+	if err != nil {
+		t.Fatalf("Lstat %s: %v — symlink should exist after accepting", homePath, err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected %s to be a symlink, got mode %v", homePath, fi.Mode())
 	}
 }
