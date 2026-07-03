@@ -135,6 +135,8 @@ func prMerge(t *testing.T, node Node, bareURL string) {
 		}
 	}
 	run("clone", bareURL, ".")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test User")
 	run("merge", "--no-ff", "-X", "theirs", "origin/"+cfg.Branch, "-m", "Merge "+cfg.Branch+" into main")
 	run("push", "origin", "main")
 }
