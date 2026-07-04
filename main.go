@@ -702,7 +702,7 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 		fmt.Printf("Accept main's version of %s? [y/N]: ", f.Path)
 		ans, _ := reader.ReadString('\n')
 		if isYes(strings.TrimSpace(ans)) {
-			if err := acceptPromotedFile(r, cfg, relPath, mainBytes); err != nil {
+			if err := acceptPromotedFile(r, cfg, relPath, mainBytes, f.Path, f.Hash); err != nil {
 				fmt.Fprintf(os.Stderr, "accepting %s: %v\n", f.Path, err)
 			} else {
 				fmt.Printf("Accepted %s from main.\n", f.Path)
@@ -714,7 +714,7 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 	return anyIncoming, nil
 }
 
-func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte) error {
+func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte, tildePath, hash string) error {
 	fullPath := filepath.Join(cfg.LocalDotfilesDir, filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
@@ -722,7 +722,21 @@ func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBy
 	if err := os.WriteFile(fullPath, mainBytes, 0o644); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
-	if _, err := r.CommitFile(relPath, fmt.Sprintf("hdf: accept %s from main", relPath)); err != nil {
+	localReg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+	if err != nil {
+		return fmt.Errorf("loading registry: %w", err)
+	}
+	upsertRegistryEntry(localReg, tildePath, hash)
+	if err := config.SaveRegistry(cfg.LocalDotfilesDir, localReg); err != nil {
+		return fmt.Errorf("saving registry: %w", err)
+	}
+	if err := r.StageFile(relPath); err != nil {
+		return fmt.Errorf("staging file: %w", err)
+	}
+	if err := r.StageFile(managedTOMLPath); err != nil {
+		return fmt.Errorf("staging registry: %w", err)
+	}
+	if _, err := r.CommitStaged(fmt.Sprintf("hdf: accept %s from main", relPath)); err != nil {
 		return fmt.Errorf("committing: %w", err)
 	}
 	return nil
@@ -758,7 +772,11 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 			if err != nil {
 				return err
 			}
-			if !anyIncoming {
+			if anyIncoming {
+				if reloaded, err := config.LoadRegistry(cfg.LocalDotfilesDir); err == nil {
+					reg = reloaded
+				}
+			} else {
 				fmt.Println("Already up to date.")
 			}
 		}

@@ -779,3 +779,60 @@ func TestMergeIntoBranchDivergedCreatesMergeCommit(t *testing.T) {
 		t.Errorf("b.txt content = %q, want %q", content, "b-real\n")
 	}
 }
+
+// TestMergeIntoBranchPreservesMainOnlyFiles verifies that when branches have
+// diverged, MergeIntoBranch keeps files that exist only on main (e.g. dotfiles
+// promoted by other machines) instead of silently deleting them.
+func TestMergeIntoBranchPreservesMainOnlyFiles(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Initial commit on main: shared.txt
+	if err := os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("shared\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("shared.txt", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	// Create machine branch from main.
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Machine adds machine-only.txt (diverges from main).
+	if err := os.WriteFile(filepath.Join(workDir, "machine-only.txt"), []byte("machine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("machine-only.txt", "machine adds file"); err != nil {
+		t.Fatal(err)
+	}
+	// Main independently adds main-only.txt (another machine promoted it).
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "main-only.txt", Content: []byte("main-only\n")},
+	}, "other machine promotes file"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.MergeIntoBranch("main"); err != nil {
+		t.Fatalf("MergeIntoBranch: %v", err)
+	}
+
+	// machine-only.txt must be present with machine content.
+	got, err := r.ReadFileFromBranch("main", "machine-only.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch machine-only.txt: %v", err)
+	}
+	if string(got) != "machine\n" {
+		t.Errorf("machine-only.txt = %q, want %q", string(got), "machine\n")
+	}
+
+	// main-only.txt must survive — this is the regression this test guards.
+	got, err = r.ReadFileFromBranch("main", "main-only.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch main-only.txt: %v", err)
+	}
+	if string(got) != "main-only\n" {
+		t.Errorf("main-only.txt = %q, want %q (must be preserved from main)", string(got), "main-only\n")
+	}
+}

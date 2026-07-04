@@ -533,15 +533,19 @@ func (r *Repo) MergeIntoBranch(targetBranch string) error {
 	if bases[0].Hash == targetRef.Hash() {
 		return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, head.Hash()))
 	}
-	// Branches have diverged. Create a merge commit that uses HEAD's tree so the
-	// machine branch content wins. This is equivalent to `git merge -X theirs`
-	// but operates entirely on git objects without touching the working tree.
+	// Branches have diverged. Merge the two trees so files promoted by other
+	// machines (present in targetBranch but not HEAD) are preserved, while
+	// HEAD's versions win when both branches have the same file.
+	mergedTreeHash, err := mergeTrees(r.r, headCommit.TreeHash, targetCommit.TreeHash)
+	if err != nil {
+		return fmt.Errorf("merging trees: %w", err)
+	}
 	author := gitAuthor()
 	mergeCommit := &object.Commit{
 		Author:       *author,
 		Committer:    *author,
 		Message:      fmt.Sprintf("hdf: promote %s into %s\n", head.Name().Short(), targetBranch),
-		TreeHash:     headCommit.TreeHash,
+		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{head.Hash(), targetRef.Hash()},
 	}
 	obj := r.r.Storer.NewEncodedObject()
@@ -553,6 +557,74 @@ func (r *Repo) MergeIntoBranch(targetBranch string) error {
 		return fmt.Errorf("storing merge commit: %w", err)
 	}
 	return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, commitHash))
+}
+
+// mergeTrees recursively merges two git trees. Entries in treeA win when both
+// trees contain the same name; entries only in treeB are preserved.
+func mergeTrees(r *git.Repository, treeA, treeB plumbing.Hash) (plumbing.Hash, error) {
+	if treeA == treeB || treeB.IsZero() {
+		return treeA, nil
+	}
+	if treeA.IsZero() {
+		return treeB, nil
+	}
+
+	a, err := r.TreeObject(treeA)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	b, err := r.TreeObject(treeB)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	bEntries := make(map[string]object.TreeEntry, len(b.Entries))
+	for _, e := range b.Entries {
+		bEntries[e.Name] = e
+	}
+
+	merged := make([]object.TreeEntry, 0, len(a.Entries)+len(b.Entries))
+	aNames := make(map[string]struct{}, len(a.Entries))
+
+	for _, ea := range a.Entries {
+		aNames[ea.Name] = struct{}{}
+		entry, err := mergeEntry(r, ea, bEntries)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		merged = append(merged, entry)
+	}
+
+	for _, eb := range b.Entries {
+		if _, inA := aNames[eb.Name]; !inA {
+			merged = append(merged, eb)
+		}
+	}
+
+	sort.Sort(object.TreeEntrySorter(merged))
+	newTree := &object.Tree{Entries: merged}
+	obj := r.Storer.NewEncodedObject()
+	if err := newTree.Encode(obj); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return r.Storer.SetEncodedObject(obj)
+}
+
+// mergeEntry resolves a single tree entry from treeA against the entries of
+// treeB. treeA wins on conflict; directories are merged recursively.
+func mergeEntry(r *git.Repository, ea object.TreeEntry, bEntries map[string]object.TreeEntry) (object.TreeEntry, error) {
+	eb, exists := bEntries[ea.Name]
+	if !exists || ea.Hash == eb.Hash {
+		return ea, nil
+	}
+	if ea.Mode == filemode.Dir && eb.Mode == filemode.Dir {
+		h, err := mergeTrees(r, ea.Hash, eb.Hash)
+		if err != nil {
+			return ea, err
+		}
+		ea.Hash = h
+	}
+	return ea, nil
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.
