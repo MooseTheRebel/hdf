@@ -836,3 +836,109 @@ func TestMergeIntoBranchPreservesMainOnlyFiles(t *testing.T) {
 		t.Errorf("main-only.txt = %q, want %q (must be preserved from main)", string(got), "main-only\n")
 	}
 }
+
+// TestMergeIntoBranchDivergedParentOrder verifies that when a diverged merge
+// commit is written to main, main's previous HEAD is parent[0] so that
+// git log --first-parent traces main's own history, not the machine branch.
+func TestMergeIntoBranchDivergedParentOrder(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("a.txt", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("b.txt", "machine commit"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "c.txt", Content: []byte("c\n")},
+	}, "main-only commit"); err != nil {
+		t.Fatal(err)
+	}
+
+	prevMainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA before merge: %v", err)
+	}
+
+	if err := r.MergeIntoBranch("main"); err != nil {
+		t.Fatalf("MergeIntoBranch: %v", err)
+	}
+
+	mainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA after merge: %v", err)
+	}
+	mergeCommit, err := r.r.CommitObject(plumbing.NewHash(mainSHA))
+	if err != nil {
+		t.Fatalf("CommitObject: %v", err)
+	}
+	if len(mergeCommit.ParentHashes) != 2 {
+		t.Fatalf("expected 2 parents, got %d", len(mergeCommit.ParentHashes))
+	}
+	// parent[0] must be main's previous HEAD so git log --first-parent
+	// follows main's own lineage, not the machine branch.
+	if mergeCommit.ParentHashes[0].String() != prevMainSHA {
+		t.Errorf("parent[0] = %s, want main's prev HEAD %s",
+			mergeCommit.ParentHashes[0].String(), prevMainSHA)
+	}
+}
+
+// TestMergeIntoBranchRefusesWhenMachineDeletedFile verifies that MergeIntoBranch
+// returns an error when the machine branch deleted a file that still exists on
+// main, rather than silently merging and losing the deletion signal.
+func TestMergeIntoBranchRefusesWhenMachineDeletedFile(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Initial commit: both files present on main.
+	for _, name := range []string{"shared.txt", "to-unenroll.txt"} {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte(name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.CommitFile(name, "add "+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Machine unenrolls to-unenroll.txt — deletes it from the branch.
+	w, err := r.r.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Remove("to-unenroll.txt"); err != nil {
+		t.Fatalf("w.Remove: %v", err)
+	}
+	if _, err := r.CommitStaged("machine: unenroll to-unenroll.txt"); err != nil {
+		t.Fatalf("CommitStaged: %v", err)
+	}
+	// Main diverges independently (to-unenroll.txt still exists there).
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "shared.txt", Content: []byte("updated\n")},
+	}, "main: update shared"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = r.MergeIntoBranch("main")
+	if err == nil {
+		t.Fatal("expected error when machine deleted a file that still exists on main, got nil")
+	}
+	if !strings.Contains(err.Error(), "to-unenroll.txt") {
+		t.Errorf("error = %q, want mention of deleted file", err.Error())
+	}
+}

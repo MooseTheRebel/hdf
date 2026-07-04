@@ -533,20 +533,33 @@ func (r *Repo) MergeIntoBranch(targetBranch string) error {
 	if bases[0].Hash == targetRef.Hash() {
 		return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, head.Hash()))
 	}
-	// Branches have diverged. Merge the two trees so files promoted by other
-	// machines (present in targetBranch but not HEAD) are preserved, while
-	// HEAD's versions win when both branches have the same file.
+	// Branches have diverged. Refuse if the machine branch deleted any file
+	// that still exists on targetBranch — the user must pull first and decide.
+	deleted, err := filesMissingFromHeadStillInTarget(r.r, bases[0].TreeHash, headCommit.TreeHash, targetCommit.TreeHash)
+	if err != nil {
+		return fmt.Errorf("checking for deletions: %w", err)
+	}
+	if len(deleted) > 0 {
+		return fmt.Errorf(
+			"cannot promote: %s deleted file(s) that still exist on %s (%s) — run 'hdf changes-pull' first",
+			head.Name().Short(), targetBranch, strings.Join(deleted, ", "),
+		)
+	}
+	// Merge the two trees so files promoted by other machines (present in
+	// targetBranch but not HEAD) are preserved, while HEAD's versions win.
 	mergedTreeHash, err := mergeTrees(r.r, headCommit.TreeHash, targetCommit.TreeHash)
 	if err != nil {
 		return fmt.Errorf("merging trees: %w", err)
 	}
 	author := gitAuthor()
 	mergeCommit := &object.Commit{
-		Author:       *author,
-		Committer:    *author,
-		Message:      fmt.Sprintf("hdf: promote %s into %s\n", head.Name().Short(), targetBranch),
-		TreeHash:     mergedTreeHash,
-		ParentHashes: []plumbing.Hash{head.Hash(), targetRef.Hash()},
+		Author:    *author,
+		Committer: *author,
+		Message:   fmt.Sprintf("hdf: promote %s into %s\n", head.Name().Short(), targetBranch),
+		TreeHash:  mergedTreeHash,
+		// parent[0] is targetBranch's previous HEAD so git log --first-parent
+		// follows targetBranch's own lineage, not the machine branch.
+		ParentHashes: []plumbing.Hash{targetRef.Hash(), head.Hash()},
 	}
 	obj := r.r.Storer.NewEncodedObject()
 	if err := mergeCommit.Encode(obj); err != nil {
@@ -625,6 +638,51 @@ func mergeEntry(r *git.Repository, ea object.TreeEntry, bEntries map[string]obje
 		ea.Hash = h
 	}
 	return ea, nil
+}
+
+// filesMissingFromHeadStillInTarget returns the repo-relative paths of files
+// that existed in baseTree, were removed in headTree, but are still present in
+// targetTree. These are files the machine branch intentionally deleted that
+// the target branch (main) still holds — a signal to pull first and decide.
+func filesMissingFromHeadStillInTarget(r *git.Repository, baseHash, headHash, targetHash plumbing.Hash) ([]string, error) {
+	collectPaths := func(hash plumbing.Hash) (map[string]struct{}, error) {
+		tree, err := r.TreeObject(hash)
+		if err != nil {
+			return nil, err
+		}
+		iter := tree.Files()
+		paths := make(map[string]struct{})
+		err = iter.ForEach(func(f *object.File) error {
+			paths[f.Name] = struct{}{}
+			return nil
+		})
+		return paths, err
+	}
+
+	inBase, err := collectPaths(baseHash)
+	if err != nil {
+		return nil, err
+	}
+	inHead, err := collectPaths(headHash)
+	if err != nil {
+		return nil, err
+	}
+	inTarget, err := collectPaths(targetHash)
+	if err != nil {
+		return nil, err
+	}
+
+	var deleted []string
+	for path := range inBase {
+		if _, ok := inHead[path]; ok {
+			continue
+		}
+		if _, ok := inTarget[path]; ok {
+			deleted = append(deleted, path)
+		}
+	}
+	sort.Strings(deleted)
+	return deleted, nil
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.
