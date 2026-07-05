@@ -888,10 +888,25 @@ func runPromote(cfg *config.Config, homeDir string) error {
 	if err := r.MergeIntoBranch("main"); err != nil {
 		return fmt.Errorf("promoting: %w", err)
 	}
-	if err := pushBranches(r, cfg); err != nil {
-		return err
+	if err := r.Push(cfg.Branch); err != nil {
+		return fmt.Errorf("pushing %s: %w", cfg.Branch, err)
 	}
-	fmt.Printf("Promoted %s → main and pushed.\n", cfg.Branch)
+	// TODO(future): make this atomic — push the merge commit object directly to
+	// origin/main using a compare-and-swap refspec so local main is never
+	// advanced until the remote accepts. See design doc 2026-07-05.
+	if err := r.Push("main"); err != nil {
+		if errors.Is(err, repo.ErrNonFastForwardUpdate) {
+			// Guard 3: another machine promoted between Guard 2's fetch and now.
+			// Reset local main back to origin/main (MergeIntoBranch only moves a
+			// ref, so no working-tree changes need to be undone).
+			if rollbackErr := r.ResetBranchToRemote("main", "origin"); rollbackErr != nil {
+				return fmt.Errorf("promote failed and rollback of local main failed: %w (original: %w)", rollbackErr, err)
+			}
+			return fmt.Errorf("cannot promote: another machine promoted while you were working — run 'hdf changes-pull' and try again")
+		}
+		return fmt.Errorf("pushing main: %w", err)
+	}
+	fmt.Printf("Promoted %s → main and pushed to origin.\n", cfg.Branch)
 	return nil
 }
 
