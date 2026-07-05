@@ -826,7 +826,10 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 	return nil
 }
 
-func runPromote(cfg *config.Config) error {
+func runPromote(cfg *config.Config, homeDir string) error {
+	if cfg.GitPushTarget == "" {
+		return fmt.Errorf("cannot promote: no remote configured — promotion has no effect without a shared repository")
+	}
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
@@ -863,7 +866,11 @@ var promoteCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
 		}
-		return runPromote(cfg)
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("getting home directory: %w", err)
+		}
+		return runPromote(cfg, homeDir)
 	},
 }
 
