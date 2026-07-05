@@ -469,6 +469,39 @@ func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
 	return sha, nil
 }
 
+// hasUnreviewedPromotions returns true when origin/main has content for any
+// registered file that the machine branch has no content for (Promoted state).
+// This indicates another machine promoted files this machine hasn't reviewed
+// via changes-pull. Diverged files (machine has its own content) are allowed.
+func hasUnreviewedPromotions(r *repo.Repo, cfg *config.Config, homeDir string) (bool, error) {
+	regBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", ".hdf/managed.toml")
+	if len(regBytes) == 0 {
+		return false, nil
+	}
+	reg, _ := config.RegistryFromBytes(regBytes)
+	if reg == nil {
+		return false, nil
+	}
+	for _, f := range reg.Files {
+		expanded := config.ExpandPathIn(f.Path, homeDir)
+		repoPath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoPath)
+		if err != nil {
+			continue
+		}
+		relSlash := filepath.ToSlash(rel)
+		mainBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", relSlash)
+		branchBytes, _ := r.ReadFileFromBranch(cfg.Branch, relSlash)
+		if len(mainBytes) > 0 && len(branchBytes) == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // pushBranches pushes the hostname branch and main when a remote is configured.
 // A non-fast-forward rejection on main is silently ignored: it means another
 // node promoted since our local main was last synced; the machine branch push
@@ -826,7 +859,10 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 	return nil
 }
 
-func runPromote(cfg *config.Config) error {
+func runPromote(cfg *config.Config, homeDir string) error {
+	if cfg.GitPushTarget == "" {
+		return fmt.Errorf("cannot promote: no remote configured — promotion has no effect without a shared repository")
+	}
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
@@ -838,18 +874,39 @@ func runPromote(cfg *config.Config) error {
 	if !clean {
 		return fmt.Errorf("uncommitted changes in the dotfiles repository — run 'hdf changes-push <file>' first")
 	}
-	hasIncoming, err := r.HasIncomingCommits()
-	if err == nil && hasIncoming {
-		fmt.Fprintln(os.Stderr, "warning: main has commits you haven't pulled — promoting anyway")
+	if err := r.Fetch(); err != nil {
+		return fmt.Errorf("fetching before promote: %w", err)
+	}
+	hasUnreviewed, err := hasUnreviewedPromotions(r, cfg, homeDir)
+	if err != nil {
+		return fmt.Errorf("checking incoming: %w", err)
+	}
+	if hasUnreviewed {
+		return fmt.Errorf("cannot promote: main has changes you haven't reviewed — run 'hdf changes-pull' first")
 	}
 	fmt.Printf("Merging %s into main...\n", cfg.Branch)
 	if err := r.MergeIntoBranch("main"); err != nil {
 		return fmt.Errorf("promoting: %w", err)
 	}
-	if err := pushBranches(r, cfg); err != nil {
-		return err
+	if err := r.Push(cfg.Branch); err != nil {
+		return fmt.Errorf("pushing %s: %w", cfg.Branch, err)
 	}
-	fmt.Printf("Promoted %s → main and pushed.\n", cfg.Branch)
+	// TODO(future): make this atomic — push the merge commit object directly to
+	// origin/main using a compare-and-swap refspec so local main is never
+	// advanced until the remote accepts. See design doc 2026-07-05.
+	if err := r.Push("main"); err != nil {
+		if errors.Is(err, repo.ErrNonFastForwardUpdate) {
+			// Guard 3: another machine promoted between Guard 2's fetch and now.
+			// Reset local main back to origin/main (MergeIntoBranch only moves a
+			// ref, so no working-tree changes need to be undone).
+			if rollbackErr := r.ResetBranchToRemote("main", "origin"); rollbackErr != nil {
+				return fmt.Errorf("promote failed and rollback of local main failed: %w (original: %w)", rollbackErr, err)
+			}
+			return fmt.Errorf("cannot promote: another machine promoted while you were working — run 'hdf changes-pull' and try again")
+		}
+		return fmt.Errorf("pushing main: %w", err)
+	}
+	fmt.Printf("Promoted %s → main and pushed to origin.\n", cfg.Branch)
 	return nil
 }
 
@@ -863,7 +920,11 @@ var promoteCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
 		}
-		return runPromote(cfg)
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("getting home directory: %w", err)
+		}
+		return runPromote(cfg, homeDir)
 	},
 }
 
