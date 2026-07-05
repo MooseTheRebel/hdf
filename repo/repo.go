@@ -21,6 +21,10 @@ import (
 
 var errStop = errors.New("stop")
 
+// ErrNonFastForwardUpdate is returned by Push when the remote rejects the push
+// because it is not a fast-forward update. Callers can test for this with errors.Is.
+var ErrNonFastForwardUpdate = errors.New("non-fast-forward update")
+
 // authForURL returns an appropriate go-git auth method for rawURL, or nil for
 // public / unauthenticated access.
 //
@@ -346,6 +350,7 @@ func (r *Repo) Fetch() error {
 }
 
 // Push pushes the named branch to the remote. Returns nil when already up to date.
+// Returns ErrNonFastForwardUpdate when the remote rejects the push as non-fast-forward.
 func (r *Repo) Push(branch string) error {
 	err := r.r.Push(&git.PushOptions{
 		Auth: authForURL(r.RemoteURL()),
@@ -355,6 +360,11 @@ func (r *Repo) Push(branch string) error {
 	})
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
+	}
+	// go-git does not expose a sentinel for push non-fast-forward errors; detect
+	// by message and wrap in our own sentinel so callers can use errors.Is.
+	if err != nil && strings.HasPrefix(err.Error(), "non-fast-forward update") {
+		return fmt.Errorf("%w: %w", ErrNonFastForwardUpdate, err)
 	}
 	return err
 }
@@ -574,6 +584,13 @@ func (r *Repo) MergeIntoBranch(targetBranch string) error {
 
 // mergeTrees recursively merges two git trees. Entries in treeA win when both
 // trees contain the same name; entries only in treeB are preserved.
+//
+// This is a two-way merge (no merge base). The potential resurrection problem —
+// where a file deleted in treeA but present in treeB gets silently re-added —
+// is prevented upstream: MergeIntoBranch calls filesMissingFromHeadStillInTarget
+// and refuses to proceed whenever treeA deleted something that is still in treeB.
+// By the time mergeTrees runs, all treeB-only entries are genuinely new files
+// added by other machines, and preserving them is the correct behaviour.
 func mergeTrees(r *git.Repository, treeA, treeB plumbing.Hash) (plumbing.Hash, error) {
 	if treeA == treeB || treeB.IsZero() {
 		return treeA, nil

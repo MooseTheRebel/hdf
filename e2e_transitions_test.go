@@ -17,6 +17,11 @@ type Transition struct {
 
 // validTransitions is the contract table for the state machine.
 // Each entry must have a corresponding exercising scenario in TestTransitionContractCoverage.
+//
+// Known gap: RegistryOnly has no outgoing transitions here. It is reachable in
+// deriveFileState (registry entry exists but both branches have no content) but
+// no hdf command currently produces it in a normal workflow. If an unenroll/remove
+// command is added, it will need entries here.
 var validTransitions = []Transition{
 	{"enroll", Untracked, "changes-push", Enrolled},
 	{"promote", Enrolled, "hdf promote", Synced},
@@ -85,7 +90,10 @@ func TestTransitionContractCoverage(t *testing.T) {
 					t.Fatalf("A changes-push: %s", stderr)
 				}
 				hdfPromote(t, nodeA)
-				// Fetch, then assert From state, then skip.
+				// Fetch so B sees the promoted content before asserting From state.
+				runHDFNode(t, nodeB, "n\n", "changes-pull") //nolint:errcheck
+				assertFileState(t, nodeB, "~/.bashrc", Promoted)
+				// Skip (decline to accept main's content); state stays Promoted.
 				if _, _, code := runHDFNode(t, nodeB, "n\n", "changes-pull"); code != 0 {
 					t.Fatalf("B changes-pull skip failed")
 				}

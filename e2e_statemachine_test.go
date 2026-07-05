@@ -137,6 +137,10 @@ func prMerge(t *testing.T, node Node, bareURL string) {
 	run("clone", bareURL, ".")
 	run("config", "user.email", "test@example.com")
 	run("config", "user.name", "Test User")
+	// -X theirs auto-resolves conflicts in favour of the machine branch, which
+	// matches the assumption that the machine branch content is authoritative when
+	// a PR is accepted. Real GitHub merges don't use -X theirs, so this won't catch
+	// bugs where the machine branch accidentally clobbers unrelated main content.
 	run("merge", "--no-ff", "-X", "theirs", "origin/"+cfg.Branch, "-m", "Merge "+cfg.Branch+" into main")
 	run("push", "origin", "main")
 }
@@ -203,6 +207,10 @@ func deriveFileState(t *testing.T, node Node, tildeFile string) FileState {
 	branchBytes, _ := r.ReadFileFromBranch(cfg.Branch, relSlash)
 	fi, lerr := os.Lstat(expanded)
 	symlinkExists := lerr == nil && fi.Mode()&os.ModeSymlink != 0
+	// symlinkExists is intentionally excluded from state derivation. The state
+	// machine tracks content alignment between branches; whether the symlink is
+	// present on disk is a runtime concern (fixed by re-running hdf) separate
+	// from the sync state.
 	_ = symlinkExists
 
 	switch {

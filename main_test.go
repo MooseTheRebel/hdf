@@ -1570,6 +1570,78 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	}
 }
 
+// TestFetchAndShowIncoming_EOFAborts verifies that fetchAndShowIncoming returns
+// an error when stdin is closed (EOF) while prompting for an incoming diff,
+// rather than silently skipping all remaining files.
+func TestFetchAndShowIncoming_EOFAborts(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("seed Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	homePath := filepath.Join(homeDir, ".testrc")
+	relPath := filepath.Base(homePath)
+
+	// Machine branch has one version of the file.
+	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("machine content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(relPath, "machine: add dotfile"); err != nil {
+		t.Fatalf("CommitFile machine: %v", err)
+	}
+
+	// Main has a DIFFERENT version — this creates a real incoming diff that triggers a prompt.
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: relPath, Content: []byte("main content\n")},
+	}, "main: add dotfile"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	reg := &config.Registry{Files: []config.ManagedFile{{Path: homePath}}}
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+
+	// Empty reader — simulates closed stdin.
+	var callErr error
+	captureStdout(func() {
+		_, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir, bufio.NewReader(strings.NewReader("")))
+	})
+	if callErr == nil {
+		t.Error("expected error when stdin is closed during prompt, got nil")
+	}
+}
+
 func TestRootCmdMigrationHook(t *testing.T) {
 	if rootCmd.PersistentPreRunE == nil {
 		t.Error("rootCmd.PersistentPreRunE must be set to wire up legacy config.toml migration")

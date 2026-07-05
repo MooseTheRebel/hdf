@@ -4,6 +4,7 @@ import (
 	"bufio"
 	crand "crypto/rand"
 	"embed"
+	"errors"
 	"fmt"
 	"hdf/config"
 	"hdf/daemon"
@@ -479,7 +480,7 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 	if err := r.Push(cfg.Branch); err != nil {
 		return fmt.Errorf("pushing hostname branch: %w", err)
 	}
-	if err := r.Push("main"); err != nil && !strings.Contains(err.Error(), "non-fast-forward update") {
+	if err := r.Push("main"); err != nil && !errors.Is(err, repo.ErrNonFastForwardUpdate) {
 		return fmt.Errorf("pushing main: %w", err)
 	}
 	return nil
@@ -634,7 +635,7 @@ func remoteRegistry(r *repo.Repo, fallback *config.Registry) *config.Registry {
 		return fallback
 	}
 	reg, err := config.RegistryFromBytes(b)
-	if err != nil || len(reg.Files) == 0 {
+	if err != nil || reg == nil || len(reg.Files) == 0 {
 		return fallback
 	}
 	return reg
@@ -697,21 +698,37 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 			continue
 		}
 		anyIncoming = true
-		fmt.Printf("\n--- %s ---\n", f.Path)
-		printDiff(daemon.GenerateUnifiedDiff(string(branchBytes), string(mainBytes)))
-		fmt.Printf("Accept main's version of %s? [y/N]: ", f.Path)
-		ans, _ := reader.ReadString('\n')
-		if isYes(strings.TrimSpace(ans)) {
-			if err := acceptPromotedFile(r, cfg, relPath, mainBytes, f.Path, f.Hash); err != nil {
-				fmt.Fprintf(os.Stderr, "accepting %s: %v\n", f.Path, err)
-			} else {
-				fmt.Printf("Accepted %s from main.\n", f.Path)
-			}
-		} else {
-			fmt.Printf("Skipped %s — keeping local version.\n", f.Path)
+		if err := promptAndMaybeAccept(r, cfg, f, relPath, mainBytes, branchBytes, reader); err != nil {
+			return anyIncoming, err
 		}
 	}
 	return anyIncoming, nil
+}
+
+// promptAndMaybeAccept shows the diff for one incoming file, prompts the user,
+// and accepts or skips it. Returns an error only when stdin is closed or has
+// an unexpected read error.
+func promptAndMaybeAccept(r *repo.Repo, cfg *config.Config, f config.ManagedFile, relPath string, mainBytes, branchBytes []byte, reader *bufio.Reader) error {
+	fmt.Printf("\n--- %s ---\n", f.Path)
+	printDiff(daemon.GenerateUnifiedDiff(string(branchBytes), string(mainBytes)))
+	fmt.Printf("Accept main's version of %s? [y/N]: ", f.Path)
+	ans, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("reading user input: %w", err)
+	}
+	if errors.Is(err, io.EOF) && strings.TrimSpace(ans) == "" {
+		return fmt.Errorf("stdin closed: aborting pull")
+	}
+	if isYes(strings.TrimSpace(ans)) {
+		if err := acceptPromotedFile(r, cfg, relPath, mainBytes, f.Path, f.Hash); err != nil {
+			fmt.Fprintf(os.Stderr, "accepting %s: %v\n", f.Path, err)
+		} else {
+			fmt.Printf("Accepted %s from main.\n", f.Path)
+		}
+	} else {
+		fmt.Printf("Skipped %s — keeping local version.\n", f.Path)
+	}
+	return nil
 }
 
 func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte, tildePath, hash string) error {

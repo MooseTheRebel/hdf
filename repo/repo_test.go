@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -898,6 +899,66 @@ func TestMergeIntoBranchDivergedParentOrder(t *testing.T) {
 // TestMergeIntoBranchRefusesWhenMachineDeletedFile verifies that MergeIntoBranch
 // returns an error when the machine branch deleted a file that still exists on
 // main, rather than silently merging and losing the deletion signal.
+func TestPushNonFastForwardReturnsTypedError(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	// Repo A: init, commit v1, push to bare.
+	dirA := t.TempDir()
+	repoA, err := Init(dirA)
+	if err != nil {
+		t.Fatalf("Init A: %v", err)
+	}
+	if err := repoA.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("AddRemote A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirA, "f.txt"), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repoA.CommitFile("f.txt", "A: v1"); err != nil {
+		t.Fatalf("CommitFile A v1: %v", err)
+	}
+	if err := repoA.Push("main"); err != nil {
+		t.Fatalf("Push A v1: %v", err)
+	}
+
+	// Repo B: clone, commit v2, push — advancing bare past A's commit.
+	dirB := t.TempDir()
+	repoB, err := Clone(bareURL, dirB)
+	if err != nil {
+		t.Fatalf("Clone B: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, "f.txt"), []byte("v2-B"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repoB.CommitFile("f.txt", "B: v2"); err != nil {
+		t.Fatalf("CommitFile B v2: %v", err)
+	}
+	if err := repoB.Push("main"); err != nil {
+		t.Fatalf("Push B v2: %v", err)
+	}
+
+	// Repo A: commit something new on top of its own v1 (without pulling B's changes).
+	if err := os.WriteFile(filepath.Join(dirA, "f.txt"), []byte("v2-A"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repoA.CommitFile("f.txt", "A: v2"); err != nil {
+		t.Fatalf("CommitFile A v2: %v", err)
+	}
+
+	// Push should fail with a typed ErrNonFastForwardUpdate.
+	err = repoA.Push("main")
+	if err == nil {
+		t.Fatal("expected non-fast-forward error, got nil")
+	}
+	if !errors.Is(err, ErrNonFastForwardUpdate) {
+		t.Errorf("errors.Is(err, ErrNonFastForwardUpdate) = false; got: %v", err)
+	}
+}
+
 func TestMergeIntoBranchRefusesWhenMachineDeletedFile(t *testing.T) {
 	workDir := t.TempDir()
 	r, err := Init(workDir)
