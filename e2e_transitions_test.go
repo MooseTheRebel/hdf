@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -16,7 +17,11 @@ type Transition struct {
 }
 
 // validTransitions is the contract table for the state machine.
-// Each entry must have a corresponding exercising scenario in TestTransitionContractCoverage.
+// Each entry with a matching case in TestTransitionContractCoverage is exercised.
+//
+// Observer transitions (marked with "foreign-" prefix) cannot be exercised in
+// TestTransitionContractCoverage — no local command produces them. They are
+// exercised by TestExternalTransitions in e2e_promote_guards_test.go.
 //
 // Known gap: RegistryOnly has no outgoing transitions here. It is reachable in
 // deriveFileState (registry entry exists but both branches have no content) but
@@ -29,6 +34,10 @@ var validTransitions = []Transition{
 	{"pull-skip", Promoted, "changes-pull → skip", Promoted},
 	{"re-enroll", Synced, "edit + changes-push", Diverged},
 	{"re-promote", Diverged, "hdf promote", Synced},
+	{"pull-accept-diverged", Diverged, "changes-pull → accept", Synced},
+	// Observer transitions — no local command; exercised by TestExternalTransitions.
+	{"foreign-promote-same-file", Untracked, "another machine promotes", Promoted},
+	{"foreign-update-diverges-synced", Synced, "another machine re-promotes", Diverged},
 }
 
 // TestTransitionContractCoverage re-runs each transition in isolation and
@@ -36,6 +45,9 @@ var validTransitions = []Transition{
 func TestTransitionContractCoverage(t *testing.T) {
 	for _, tr := range validTransitions {
 		tr := tr
+		if strings.HasPrefix(tr.Name, "foreign-") {
+			continue // observer transitions; exercised by TestExternalTransitions
+		}
 		t.Run(tr.Name, func(t *testing.T) {
 			t.Parallel()
 			nodes, _ := setupCluster(t, 2)
@@ -133,6 +145,37 @@ func TestTransitionContractCoverage(t *testing.T) {
 				assertFileState(t, nodeA, "~/.bashrc", Diverged)
 				hdfPromote(t, nodeA)
 				assertFileState(t, nodeA, "~/.bashrc", Synced)
+
+			case "pull-accept-diverged":
+				nodeB := nodes[1]
+
+				// B enrolls .bashrc with its own content → Enrolled on B's branch.
+				dotfileB := filepath.Join(nodeB.home, ".bashrc")
+				if err := os.WriteFile(dotfileB, []byte("B-content\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, stderr, code := runHDFNode(t, nodeB, "", "changes-push", "--yes", dotfileB); code != 0 {
+					t.Fatalf("B changes-push: %s", stderr)
+				}
+
+				// A enrolls and promotes .bashrc (different content).
+				if err := os.WriteFile(dotfile, []byte("A-content\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, stderr, code := runHDFNode(t, nodeA, "", "changes-push", "--yes", dotfile); code != 0 {
+					t.Fatalf("A changes-push: %s", stderr)
+				}
+				hdfPromote(t, nodeA)
+
+				// B fetches to see A's promotion; B has B-content, main has A-content → Diverged.
+				runHDFNode(t, nodeB, "n\n", "changes-pull") //nolint:errcheck
+				assertFileState(t, nodeB, "~/.bashrc", Diverged)
+
+				// B accepts A's content → Synced.
+				if _, stderr, code := runHDFNode(t, nodeB, "y\n", "changes-pull"); code != 0 {
+					t.Fatalf("B changes-pull accept from Diverged: %s", stderr)
+				}
+				assertFileState(t, nodeB, "~/.bashrc", Synced)
 
 			default:
 				t.Fatalf("unhandled transition %q — add a case", tr.Name)
