@@ -490,8 +490,14 @@ func hasUnreviewedPromotions(r *repo.Repo, cfg *config.Config, homeDir string) (
 	}
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
-		repoPath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
-		if err != nil {
+		var repoPath string
+		var err error
+		if len(f.Variants) > 0 {
+			repoPath, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+		} else {
+			repoPath, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		}
+		if err != nil || repoPath == "" {
 			continue
 		}
 		rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoPath)

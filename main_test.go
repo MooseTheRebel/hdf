@@ -15,6 +15,7 @@ import (
 const (
 	testBranch    = "machine"
 	tildeTestRC   = "~/.testrc"
+	testRCRelPath = ".testrc"
 	updatedByMain = "updated-by-main\n"
 )
 
@@ -1405,7 +1406,7 @@ func TestRunLinkAcceptsPromotedContent(t *testing.T) {
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
-	relPath := ".testrc"
+	relPath := testRCRelPath
 	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("local content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1500,7 +1501,7 @@ func TestRunLinkAbortsPullOnAcceptFailure(t *testing.T) {
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
-	relPath := ".testrc"
+	relPath := testRCRelPath
 	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("local content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1977,6 +1978,103 @@ func TestPromoteRefusesWhenIncomingUnreviewed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "changes you haven't reviewed") {
 		t.Errorf("error = %q, want mention of 'changes you haven't reviewed'", err.Error())
+	}
+}
+
+// TestPromoteAllowsWhenVariantFileAlreadyOnBranch verifies that Guard 2 does not
+// block promote when a variant file is already on the machine branch — even if
+// origin/main has content at the file's non-variant (canonical) path.
+//
+// Bug: hasUnreviewedPromotions used link.RepoPathForHome for all files, checking
+// the canonical path on the machine branch. For variant files the content lives at
+// the variant-specific repo path, so branchBytes was always nil, making Guard 2
+// fire even when the machine had already reviewed its variant.
+func TestPromoteAllowsWhenVariantFileAlreadyOnBranch(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	const testBranch = "test-variant-machine"
+	variantRepoPath := ".testrc.test-variant-machine"
+
+	// Seed: initial main has ONLY the registry (no file content yet).
+	// The canonical ".testrc" path is added to main AFTER the machine branch is
+	// created — this ensures the branch does not inherit it from the initial clone.
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := &config.Registry{
+		Files: []config.ManagedFile{{
+			Path: tildeTestRC,
+			Variants: []config.Variant{{
+				Branch:   testBranch,
+				RepoPath: variantRepoPath,
+				Hash:     "aabbcc",
+			}},
+		}},
+	}
+	regBytes, err := config.RegistryToBytes(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First push: registry only — no file content.
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: managedTOMLPath, Content: regBytes},
+	}, "setup: registry only"); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Clone (before canonical ".testrc" exists on main) and set up machine branch
+	// with the variant file at its variant-specific path.
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, variantRepoPath), []byte("variant-content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(variantRepoPath, "machine: add variant file"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Push(testBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	// AFTER the machine branch was created, add canonical ".testrc" to main.
+	// The machine branch does NOT have ".testrc" — only ".testrc.test-variant-machine".
+	// Guard 2 (buggy): reads ".testrc" on branch → nil → fires (wrong).
+	// Guard 2 (fixed): reads ".testrc.test-variant-machine" on branch → has content → no fire.
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: testRCRelPath, Content: []byte("canonical\n")},
+	}, "another machine promotes .testrc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	homeDir := t.TempDir()
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
+	var capturedErr error
+	captureStdout(func() {
+		capturedErr = runPromote(cfg, homeDir)
+	})
+	if capturedErr != nil {
+		t.Fatalf("runPromote failed (Guard 2 falsely blocked?): %v", capturedErr)
 	}
 }
 
