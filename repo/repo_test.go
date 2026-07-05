@@ -959,6 +959,152 @@ func TestPushNonFastForwardReturnsTypedError(t *testing.T) {
 	}
 }
 
+func TestResetBranchToRemote(t *testing.T) {
+	bareDir := t.TempDir()
+	bareURL := "file://" + bareDir
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := r.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("AddRemote: %v", err)
+	}
+
+	// Commit v1 to local main and push so origin/main tracking ref exists.
+	f := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(f, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("f.txt", "v1"); err != nil {
+		t.Fatalf("CommitFile v1: %v", err)
+	}
+	if err := r.Push("main"); err != nil {
+		t.Fatalf("Push v1: %v", err)
+	}
+
+	// Advance local main to v2 WITHOUT pushing.
+	if err := os.WriteFile(f, []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("f.txt", "v2"); err != nil {
+		t.Fatalf("CommitFile v2: %v", err)
+	}
+
+	// Verify local main differs from origin/main before reset.
+	localBytes, err := r.ReadFileFromBranch("main", "f.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch before reset: %v", err)
+	}
+	remoteBytes, err := r.ReadFileFromRemoteBranch("origin", "main", "f.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromRemoteBranch before reset: %v", err)
+	}
+	if string(localBytes) == string(remoteBytes) {
+		t.Fatal("setup error: local and remote main should differ before reset")
+	}
+
+	// Reset.
+	if err := r.ResetBranchToRemote("main", "origin"); err != nil {
+		t.Fatalf("ResetBranchToRemote: %v", err)
+	}
+
+	// After reset local main should match origin/main.
+	localBytes, err = r.ReadFileFromBranch("main", "f.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch after reset: %v", err)
+	}
+	if string(localBytes) != string(remoteBytes) {
+		t.Errorf("after reset: local main = %q, want %q", localBytes, remoteBytes)
+	}
+}
+
+func TestResetBranchToRemoteAfterFailedPush(t *testing.T) {
+	bareDir := t.TempDir()
+	bareURL := "file://" + bareDir
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+
+	// Repo A: init, seed bare with an initial commit.
+	dirA := t.TempDir()
+	rA, err := Init(dirA)
+	if err != nil {
+		t.Fatalf("Init A: %v", err)
+	}
+	if err := rA.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("AddRemote A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirA, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rA.CommitFile("seed.txt", "seed"); err != nil {
+		t.Fatalf("CommitFile seed: %v", err)
+	}
+	if err := rA.Push("main"); err != nil {
+		t.Fatalf("Push seed: %v", err)
+	}
+
+	// Clone B: gets the seeded state. Commits to local main (simulating guard-2-passing promote).
+	dirB := filepath.Join(t.TempDir(), "repoB")
+	rB, err := Clone(bareURL, dirB)
+	if err != nil {
+		t.Fatalf("Clone B: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, "b.txt"), []byte("B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rB.CommitFile("b.txt", "B advances main"); err != nil {
+		t.Fatalf("CommitFile B: %v", err)
+	}
+
+	// Record origin/main tracking ref before the race (reflects seeded state).
+	remoteBytes, err := rB.ReadFileFromRemoteBranch("origin", "main", "seed.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromRemoteBranch before race: %v", err)
+	}
+
+	// Race: A pushes to bare AFTER B's local advance but BEFORE B pushes.
+	if err := os.WriteFile(filepath.Join(dirA, "a.txt"), []byte("A\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rA.CommitFile("a.txt", "A races"); err != nil {
+		t.Fatalf("CommitFile A race: %v", err)
+	}
+	if err := rA.Push("main"); err != nil {
+		t.Fatalf("A Push (race): %v", err)
+	}
+
+	// B's push fails: bare main has A's race commit, B's local main has its extra commit.
+	pushErr := rB.Push("main")
+	if !errors.Is(pushErr, ErrNonFastForwardUpdate) {
+		t.Fatalf("expected ErrNonFastForwardUpdate, got: %v", pushErr)
+	}
+
+	// Rollback: reset local main to origin/main.
+	if err := rB.ResetBranchToRemote("main", "origin"); err != nil {
+		t.Fatalf("ResetBranchToRemote: %v", err)
+	}
+
+	// After rollback, local main should match origin/main tracking ref (pre-race state).
+	localBytes, err := rB.ReadFileFromBranch("main", "seed.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch after rollback: %v", err)
+	}
+	if string(localBytes) != string(remoteBytes) {
+		t.Errorf("after rollback: local main seed.txt = %q, want %q", localBytes, remoteBytes)
+	}
+	// B's extra commit (b.txt) should no longer be on local main.
+	bBytes, _ := rB.ReadFileFromBranch("main", "b.txt")
+	if len(bBytes) > 0 {
+		t.Error("after rollback: b.txt should not be on local main")
+	}
+}
+
 func TestMergeIntoBranchRefusesWhenMachineDeletedFile(t *testing.T) {
 	workDir := t.TempDir()
 	r, err := Init(workDir)

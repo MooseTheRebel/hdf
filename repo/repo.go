@@ -397,6 +397,19 @@ func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
 	return ref.Hash().String(), nil
 }
 
+// ResetBranchToRemote resets the named local branch to match the current
+// remote tracking ref without touching the working tree. Used to roll back
+// a local branch after a failed push.
+func (r *Repo) ResetBranchToRemote(branch, remote string) error {
+	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, branch), true)
+	if err != nil {
+		return fmt.Errorf("resolving %s/%s: %w", remote, branch, err)
+	}
+	return r.r.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), remoteRef.Hash()),
+	)
+}
+
 // HasIncomingCommits returns true when origin/main has commits not yet in HEAD.
 func (r *Repo) HasIncomingCommits() (bool, error) {
 	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName("origin", "main"), true)
