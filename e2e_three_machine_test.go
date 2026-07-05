@@ -55,12 +55,9 @@ func TestThreeMachineConvergence(t *testing.T) {
 		hdfPromote(t, b)
 		assertFileState(t, b, "~/.vimrc", Synced)
 
-		// C accepts both files via two changes-pull rounds.
-		if _, stderr, code := runHDFNode(t, c, "y\n", "changes-pull"); code != 0 {
-			t.Fatalf("C changes-pull (1): %s", stderr)
-		}
-		if _, stderr, code := runHDFNode(t, c, "y\n", "changes-pull"); code != 0 {
-			t.Fatalf("C changes-pull (2): %s", stderr)
+		// C accepts both pending files in one changes-pull call (one "y" per file).
+		if _, stderr, code := runHDFNode(t, c, "y\ny\n", "changes-pull"); code != 0 {
+			t.Fatalf("C changes-pull: %s", stderr)
 		}
 		assertFileState(t, c, "~/.bashrc", Synced)
 		assertFileState(t, c, "~/.vimrc", Synced)
@@ -137,12 +134,9 @@ func TestThreeMachineConvergence(t *testing.T) {
 		}
 		hdfPromote(t, b)
 
-		// C accepts A's .bashrc and B's .vimrc, then promotes .profile.
-		if _, stderr, code := runHDFNode(t, c, "y\n", "changes-pull"); code != 0 {
-			t.Fatalf("C accept A .bashrc: %s", stderr)
-		}
-		if _, stderr, code := runHDFNode(t, c, "y\n", "changes-pull"); code != 0 {
-			t.Fatalf("C accept B .vimrc: %s", stderr)
+		// C accepts both .bashrc (A) and .vimrc (B) in one changes-pull call.
+		if _, stderr, code := runHDFNode(t, c, "y\ny\n", "changes-pull"); code != 0 {
+			t.Fatalf("C accept .bashrc+.vimrc: %s", stderr)
 		}
 		f = filepath.Join(c.home, ".profile")
 		if err := os.WriteFile(f, []byte("c\n"), 0o644); err != nil {
@@ -153,12 +147,9 @@ func TestThreeMachineConvergence(t *testing.T) {
 		}
 		hdfPromote(t, c)
 
-		// A accepts B's .vimrc and C's .profile.
-		if _, stderr, code := runHDFNode(t, a, "y\n", "changes-pull"); code != 0 {
-			t.Fatalf("A accept B .vimrc: %s", stderr)
-		}
-		if _, stderr, code := runHDFNode(t, a, "y\n", "changes-pull"); code != 0 {
-			t.Fatalf("A accept C .profile: %s", stderr)
+		// A accepts B's .vimrc and C's .profile in one changes-pull call.
+		if _, stderr, code := runHDFNode(t, a, "y\ny\n", "changes-pull"); code != 0 {
+			t.Fatalf("A accept .vimrc+.profile: %s", stderr)
 		}
 
 		// B accepts C's .profile.

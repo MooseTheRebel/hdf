@@ -410,6 +410,21 @@ func (r *Repo) ResetBranchToRemote(branch, remote string) error {
 	)
 }
 
+// SyncLocalMain fast-forwards local main to match origin/main after a fetch.
+// Returns nil without error if origin/main does not yet exist (first promote).
+func (r *Repo) SyncLocalMain(remote string) error {
+	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, "main"), true)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("resolving %s/main: %w", remote, err)
+	}
+	return r.r.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), remoteRef.Hash()),
+	)
+}
+
 // HasIncomingCommits returns true when origin/main has commits not yet in HEAD.
 func (r *Repo) HasIncomingCommits() (bool, error) {
 	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName("origin", "main"), true)

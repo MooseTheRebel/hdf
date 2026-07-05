@@ -884,6 +884,12 @@ func runPromote(cfg *config.Config, homeDir string) error {
 	if hasUnreviewed {
 		return fmt.Errorf("cannot promote: main has changes you haven't reviewed — run 'hdf changes-pull' first")
 	}
+	// Sync local main to origin/main so MergeIntoBranch builds on top of all
+	// prior promotions. Without this, Push("main") would be a non-fast-forward
+	// when another machine has promoted since this repo was last cloned/fetched.
+	if err := r.SyncLocalMain("origin"); err != nil {
+		return fmt.Errorf("syncing local main to origin: %w", err)
+	}
 	fmt.Printf("Merging %s into main...\n", cfg.Branch)
 	if err := r.MergeIntoBranch("main"); err != nil {
 		return fmt.Errorf("promoting: %w", err)
