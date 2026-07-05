@@ -675,7 +675,10 @@ func mergeEntry(r *git.Repository, ea object.TreeEntry, bEntries map[string]obje
 	if !exists || ea.Hash == eb.Hash {
 		return ea, nil
 	}
-	if ea.Mode == filemode.Dir && eb.Mode == filemode.Dir {
+	if ea.Mode != eb.Mode {
+		return ea, fmt.Errorf("entry %q has conflicting types: %s vs %s", ea.Name, ea.Mode, eb.Mode)
+	}
+	if ea.Mode == filemode.Dir {
 		h, err := mergeTrees(r, ea.Hash, eb.Hash)
 		if err != nil {
 			return ea, err

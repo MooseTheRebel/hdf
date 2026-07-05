@@ -1448,6 +1448,94 @@ func TestRunLinkAcceptsPromotedContent(t *testing.T) {
 	}
 }
 
+// TestRunLinkAbortsPullOnAcceptFailure verifies that when acceptPromotedFile
+// fails (here: dotfiles dir is read-only so os.WriteFile returns an error),
+// runLink returns the error rather than silently continuing.
+func TestRunLinkAbortsPullOnAcceptFailure(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("cannot test permission errors as root")
+	}
+
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdfDir := filepath.Join(seedDir, ".hdf")
+	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
+		t.Fatal(err)
+	}
+	reg := &config.Registry{Files: []config.ManagedFile{{Path: tildeTestRC}}}
+	regBytes, err := config.RegistryToBytes(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: managedTOMLPath, Content: regBytes},
+	}, "hdf: add registry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.AddRemote("origin", "file://"+bareDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Clone("file://"+bareDir, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatal(err)
+	}
+	relPath := ".testrc"
+	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("local content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(relPath, "machine: local version"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: relPath, Content: []byte("main content\n")},
+	}, "promote: add .testrc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	homeDir := t.TempDir()
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: "file://" + bareDir}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	// Make the existing .testrc file read-only so os.WriteFile inside
+	// acceptPromotedFile fails with "permission denied".
+	if err := os.Chmod(filepath.Join(workDir, relPath), 0o400); err != nil { //nolint:gosec
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(workDir, relPath), 0o600) })
+
+	var capturedErr error
+	captureStdout(func() {
+		capturedErr = runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath)
+	})
+	if capturedErr == nil {
+		t.Fatal("runLink should return an error when acceptPromotedFile fails, got nil")
+	}
+}
+
 // TestRunInitLocalAddRemoteErrorPropagated verifies that when AddRemote fails
 // (e.g. origin already points to a different URL), setupLocalRepo propagates
 // the error rather than silently swallowing it.

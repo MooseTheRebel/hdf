@@ -474,11 +474,17 @@ func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
 // This indicates another machine promoted files this machine hasn't reviewed
 // via changes-pull. Diverged files (machine has its own content) are allowed.
 func hasUnreviewedPromotions(r *repo.Repo, cfg *config.Config, homeDir string) (bool, error) {
-	regBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", ".hdf/managed.toml")
+	regBytes, err := r.ReadFileFromRemoteBranch("origin", "main", ".hdf/managed.toml")
+	if err != nil {
+		return false, fmt.Errorf("reading remote registry: %w", err)
+	}
 	if len(regBytes) == 0 {
 		return false, nil
 	}
-	reg, _ := config.RegistryFromBytes(regBytes)
+	reg, err := config.RegistryFromBytes(regBytes)
+	if err != nil {
+		return false, fmt.Errorf("parsing remote registry: %w", err)
+	}
 	if reg == nil {
 		return false, nil
 	}
@@ -493,8 +499,14 @@ func hasUnreviewedPromotions(r *repo.Repo, cfg *config.Config, homeDir string) (
 			continue
 		}
 		relSlash := filepath.ToSlash(rel)
-		mainBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", relSlash)
-		branchBytes, _ := r.ReadFileFromBranch(cfg.Branch, relSlash)
+		mainBytes, err := r.ReadFileFromRemoteBranch("origin", "main", relSlash)
+		if err != nil {
+			return false, fmt.Errorf("reading remote file %s: %w", relSlash, err)
+		}
+		branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relSlash)
+		if err != nil {
+			return false, fmt.Errorf("reading local file %s: %w", relSlash, err)
+		}
 		if len(mainBytes) > 0 && len(branchBytes) == 0 {
 			return true, nil
 		}
@@ -754,10 +766,9 @@ func promptAndMaybeAccept(r *repo.Repo, cfg *config.Config, f config.ManagedFile
 	}
 	if isYes(strings.TrimSpace(ans)) {
 		if err := acceptPromotedFile(r, cfg, relPath, mainBytes, f.Path, f.Hash); err != nil {
-			fmt.Fprintf(os.Stderr, "accepting %s: %v\n", f.Path, err)
-		} else {
-			fmt.Printf("Accepted %s from main.\n", f.Path)
+			return fmt.Errorf("accepting %s: %w", f.Path, err)
 		}
+		fmt.Printf("Accepted %s from main.\n", f.Path)
 	} else {
 		fmt.Printf("Skipped %s — keeping local version.\n", f.Path)
 	}
@@ -823,9 +834,11 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 				return err
 			}
 			if anyIncoming {
-				if reloaded, err := config.LoadRegistry(cfg.LocalDotfilesDir); err == nil {
-					reg = reloaded
+				reloaded, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+				if err != nil {
+					return fmt.Errorf("reloading registry: %w", err)
 				}
+				reg = reloaded
 			} else {
 				fmt.Println("Already up to date.")
 			}

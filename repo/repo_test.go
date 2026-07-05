@@ -1149,3 +1149,48 @@ func TestMergeIntoBranchRefusesWhenMachineDeletedFile(t *testing.T) {
 		t.Errorf("error = %q, want mention of deleted file", err.Error())
 	}
 }
+
+// TestMergeIntoBranchReturnsErrorOnTypeConflict verifies that when the machine
+// branch has a regular file at a path that main has as a directory (or vice
+// versa), MergeIntoBranch returns an error rather than silently discarding the
+// directory's contents.
+func TestMergeIntoBranchReturnsErrorOnTypeConflict(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("base.txt", "initial commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Machine branch: "config" is a regular file.
+	if err := os.WriteFile(filepath.Join(workDir, "config"), []byte("key=value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("config", "machine: add config file"); err != nil {
+		t.Fatal(err)
+	}
+	// Main: "config" is a directory containing "settings".
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "config/settings", Content: []byte("setting=foo\n")},
+	}, "main: add config dir"); err != nil {
+		t.Fatal(err)
+	}
+
+	// MergeIntoBranch must return an error — silently discarding one side's
+	// content ("config" directory on main, or "config" file on machine) would
+	// cause data loss with no user-visible indication.
+	err = r.MergeIntoBranch("main")
+	if err == nil {
+		t.Fatal("MergeIntoBranch should return an error for a file/directory type conflict, got nil")
+	}
+	if !strings.Contains(err.Error(), "conflicting types") {
+		t.Errorf("error = %q, want 'conflicting types'", err.Error())
+	}
+}
