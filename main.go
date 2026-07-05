@@ -469,6 +469,39 @@ func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
 	return sha, nil
 }
 
+// hasUnreviewedPromotions returns true when origin/main has content for any
+// registered file that the machine branch has no content for (Promoted state).
+// This indicates another machine promoted files this machine hasn't reviewed
+// via changes-pull. Diverged files (machine has its own content) are allowed.
+func hasUnreviewedPromotions(r *repo.Repo, cfg *config.Config, homeDir string) (bool, error) {
+	regBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", ".hdf/managed.toml")
+	if len(regBytes) == 0 {
+		return false, nil
+	}
+	reg, _ := config.RegistryFromBytes(regBytes)
+	if reg == nil {
+		return false, nil
+	}
+	for _, f := range reg.Files {
+		expanded := config.ExpandPathIn(f.Path, homeDir)
+		repoPath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoPath)
+		if err != nil {
+			continue
+		}
+		relSlash := filepath.ToSlash(rel)
+		mainBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", relSlash)
+		branchBytes, _ := r.ReadFileFromBranch(cfg.Branch, relSlash)
+		if len(mainBytes) > 0 && len(branchBytes) == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // pushBranches pushes the hostname branch and main when a remote is configured.
 // A non-fast-forward rejection on main is silently ignored: it means another
 // node promoted since our local main was last synced; the machine branch push
@@ -841,9 +874,15 @@ func runPromote(cfg *config.Config, homeDir string) error {
 	if !clean {
 		return fmt.Errorf("uncommitted changes in the dotfiles repository — run 'hdf changes-push <file>' first")
 	}
-	hasIncoming, err := r.HasIncomingCommits()
-	if err == nil && hasIncoming {
-		fmt.Fprintln(os.Stderr, "warning: main has commits you haven't pulled — promoting anyway")
+	if err := r.Fetch(); err != nil {
+		return fmt.Errorf("fetching before promote: %w", err)
+	}
+	hasUnreviewed, err := hasUnreviewedPromotions(r, cfg, homeDir)
+	if err != nil {
+		return fmt.Errorf("checking incoming: %w", err)
+	}
+	if hasUnreviewed {
+		return fmt.Errorf("cannot promote: main has changes you haven't reviewed — run 'hdf changes-pull' first")
 	}
 	fmt.Printf("Merging %s into main...\n", cfg.Branch)
 	if err := r.MergeIntoBranch("main"); err != nil {

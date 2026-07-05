@@ -1832,6 +1832,66 @@ func TestRunPromoteDirtyReturnsError(t *testing.T) {
 	}
 }
 
+func TestPromoteRefusesWhenIncomingUnreviewed(t *testing.T) {
+	bareDir := t.TempDir()
+
+	// Node A: init with bare, enroll .testrc, promote.
+	workDirA := filepath.Join(t.TempDir(), "dotfilesA")
+	cfgPathA, statePathA := initPaths(t)
+	homeA, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HDF_BRANCH", "node-a")
+	if err := runInit(strings.NewReader(localInitStdin(workDirA, bareDir)), cfgPathA, statePathA, ""); err != nil {
+		t.Fatalf("A runInit: %v", err)
+	}
+	cfgA, err := config.Load(cfgPathA)
+	if err != nil {
+		t.Fatalf("A Load: %v", err)
+	}
+	dotfileA := filepath.Join(homeA, ".testrc")
+	if err := os.WriteFile(dotfileA, []byte("A-content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(func() {
+		if err := runEnroll(tildeTestRC, homeA, cfgA, statePathA, strings.NewReader(""), true); err != nil {
+			t.Fatalf("A runEnroll: %v", err)
+		}
+	})
+	captureStdout(func() {
+		if err := runPromote(cfgA, homeA); err != nil {
+			t.Fatalf("A runPromote: %v", err)
+		}
+	})
+
+	// Node B: fresh local repo connected to same bare, different branch.
+	workDirB := filepath.Join(t.TempDir(), "dotfilesB")
+	cfgPathB, statePathB := initPaths(t)
+	homeB, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HDF_BRANCH", "node-b")
+	if err := runInit(strings.NewReader(localInitStdin(workDirB, bareDir)), cfgPathB, statePathB, ""); err != nil {
+		t.Fatalf("B runInit: %v", err)
+	}
+	cfgB, err := config.Load(cfgPathB)
+	if err != nil {
+		t.Fatalf("B Load: %v", err)
+	}
+	_ = statePathB
+
+	// B tries to promote without pulling A's .testrc — Guard 2 should refuse.
+	err = runPromote(cfgB, homeB)
+	if err == nil {
+		t.Fatal("expected error from B promoting without pulling, got nil")
+	}
+	if !strings.Contains(err.Error(), "changes you haven't reviewed") {
+		t.Errorf("error = %q, want mention of 'changes you haven't reviewed'", err.Error())
+	}
+}
+
 func TestPromoteRefusesWithNoRemote(t *testing.T) {
 	cfg := &config.Config{
 		GitPushTarget:    "",

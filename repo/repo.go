@@ -343,7 +343,7 @@ func (r *Repo) CommitCount() (int, error) {
 // Fetch fetches updates from the remote. Returns nil if already up to date.
 func (r *Repo) Fetch() error {
 	err := r.r.Fetch(&git.FetchOptions{Auth: authForURL(r.RemoteURL())})
-	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+	if errors.Is(err, git.NoErrAlreadyUpToDate) || errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return nil
 	}
 	return err
