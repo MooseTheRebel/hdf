@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -182,6 +183,8 @@ func hdfPromote(t *testing.T, node Node) {
 
 // prMerge simulates a GitHub PR merge by cloning the bare repo into a temp
 // dir, merging the node's machine branch into main, and pushing back.
+// Conflicts on .hdf/managed.toml are resolved by taking the union of both
+// sides' registry entries — matching the semantics hdf uses for promote.
 func prMerge(t *testing.T, node Node, bareURL string) {
 	t.Helper()
 	cfgPath := filepath.Join(node.home, ".config", "hdf", "config.toml")
@@ -191,22 +194,63 @@ func prMerge(t *testing.T, node Node, bareURL string) {
 	}
 
 	tmpDir := t.TempDir()
-	run := func(args ...string) {
+	runMayFail := func(args ...string) ([]byte, error) {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = tmpDir
-		if out, err := cmd.CombinedOutput(); err != nil {
+		return cmd.CombinedOutput()
+	}
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := runMayFail(args...); err != nil {
 			t.Fatalf("prMerge git %v: %v\n%s", args, err, out)
 		}
 	}
 	run("clone", bareURL, ".")
 	run("config", "user.email", "test@example.com")
 	run("config", "user.name", "Test User")
-	// -X theirs auto-resolves conflicts in favour of the machine branch, which
-	// matches the assumption that the machine branch content is authoritative when
-	// a PR is accepted. Real GitHub merges don't use -X theirs, so this won't catch
-	// bugs where the machine branch accidentally clobbers unrelated main content.
-	run("merge", "--no-ff", "-X", "theirs", "origin/"+cfg.Branch, "-m", "Merge "+cfg.Branch+" into main")
+
+	out, mergeErr := runMayFail("merge", "--no-ff", "origin/"+cfg.Branch, "-m", "Merge "+cfg.Branch+" into main")
+	if mergeErr != nil {
+		// Resolve managed.toml add/add or content conflict by merging registries.
+		oursBytes, e1 := exec.Command("git", "-C", tmpDir, "show", "HEAD:.hdf/managed.toml").Output()
+		theirsBytes, e2 := exec.Command("git", "-C", tmpDir, "show", "MERGE_HEAD:.hdf/managed.toml").Output()
+		if e1 != nil || e2 != nil {
+			t.Fatalf("prMerge: conflict on unexpected file\ngit merge out: %s\nHEAD err: %v\nMERGE_HEAD err: %v", out, e1, e2)
+		}
+		oursReg, err := config.RegistryFromBytes(oursBytes)
+		if err != nil {
+			t.Fatalf("prMerge: parse HEAD registry: %v", err)
+		}
+		theirsReg, err := config.RegistryFromBytes(theirsBytes)
+		if err != nil {
+			t.Fatalf("prMerge: parse MERGE_HEAD registry: %v", err)
+		}
+		byPath := make(map[string]config.ManagedFile)
+		for _, f := range oursReg.Files {
+			byPath[f.Path] = f
+		}
+		for _, f := range theirsReg.Files {
+			byPath[f.Path] = f
+		}
+		merged := &config.Registry{}
+		for _, f := range byPath {
+			merged.Files = append(merged.Files, f)
+		}
+		sort.Slice(merged.Files, func(i, j int) bool {
+			return merged.Files[i].Path < merged.Files[j].Path
+		})
+		b, err := config.RegistryToBytes(merged)
+		if err != nil {
+			t.Fatalf("prMerge: serialize merged registry: %v", err)
+		}
+		managedPath := filepath.Join(tmpDir, ".hdf", "managed.toml")
+		if err := os.WriteFile(managedPath, b, 0o644); err != nil { //nolint:gosec
+			t.Fatalf("prMerge: write managed.toml: %v", err)
+		}
+		run("add", ".hdf/managed.toml")
+		run("commit", "--no-edit")
+	}
 	run("push", "origin", "main")
 }
 
