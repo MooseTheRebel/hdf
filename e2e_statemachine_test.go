@@ -30,6 +30,71 @@ func (s FileState) String() string {
 	return [...]string{"Untracked", "Enrolled", "Promoted", "Synced", "Diverged", "RegistryOnly"}[s]
 }
 
+// TestDeriveFileStateVariantFile verifies that deriveFileState uses the
+// variant-specific repo path for files with branch variants, not the canonical
+// path. Without the fix, a variant file enrolled on branch X would be reported
+// as RegistryOnly instead of Enrolled because the canonical path has no content.
+func TestDeriveFileStateVariantFile(t *testing.T) {
+	t.Parallel()
+	nodes, _ := setupCluster(t, 1)
+	nodeA := nodes[0]
+
+	cfg := nodeConfig(t, nodeA)
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tildeFile := "~/.testrc"
+	variantRepoPath := ".testrc." + nodeA.branch
+
+	// Register the variant file in managed.toml on main (mirrors updateMainRegistry).
+	mainReg := &config.Registry{
+		Files: []config.ManagedFile{{
+			Path: tildeFile,
+			Hash: "abc123",
+			Variants: []config.Variant{{
+				Branch:   nodeA.branch,
+				RepoPath: variantRepoPath,
+			}},
+		}},
+	}
+	mainRegBytes, err := config.RegistryToBytes(mainReg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: ".hdf/managed.toml", Content: mainRegBytes},
+	}, "hdf: register variant .testrc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Commit the variant-specific file to nodeA's branch (mirrors stageAndCommit).
+	if err := os.WriteFile(filepath.Join(cfg.LocalDotfilesDir, variantRepoPath), []byte("variant content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.StageFile(variantRepoPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("hdf: enroll variant .testrc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Push(nodeA.branch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fetch so origin/* tracking refs are up to date.
+	if err := r.Fetch(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Branch has the variant file; origin/main does not → Enrolled.
+	assertFileState(t, nodeA, tildeFile, Enrolled)
+}
+
 // Node represents one hdf-managed machine in a cluster.
 // branch is unique per node and set via HDF_BRANCH during init.
 type Node struct {
@@ -178,24 +243,33 @@ func deriveFileState(t *testing.T, node Node, tildeFile string) FileState {
 	// Check registry on origin/main.
 	regBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", ".hdf/managed.toml")
 	reg, _ := config.RegistryFromBytes(regBytes)
-	inRegistry := false
+	var registeredFile *config.ManagedFile
 	if reg != nil {
-		for _, f := range reg.Files {
+		for i, f := range reg.Files {
 			if f.Path == tildeFile {
-				inRegistry = true
+				registeredFile = &reg.Files[i]
 				break
 			}
 		}
 	}
-	if !inRegistry {
+	if registeredFile == nil {
 		return Untracked
 	}
 
-	// Derive the repo-relative path for this file.
+	// Derive the repo-relative path, using variant-aware resolution so that
+	// variant files are checked at their branch-specific path, not the canonical one.
 	expanded := config.ExpandPathIn(tildeFile, node.home)
-	repoPath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, node.home)
-	if err != nil {
-		t.Fatalf("deriveFileState: RepoPathForHome: %v", err)
+	var repoPath string
+	if len(registeredFile.Variants) > 0 {
+		repoPath, err = resolveRepoPath(*registeredFile, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+		if err != nil || repoPath == "" {
+			return Untracked
+		}
+	} else {
+		repoPath, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, node.home)
+		if err != nil {
+			t.Fatalf("deriveFileState: RepoPathForHome: %v", err)
+		}
 	}
 	rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoPath)
 	if err != nil {
@@ -205,20 +279,15 @@ func deriveFileState(t *testing.T, node Node, tildeFile string) FileState {
 
 	mainBytes, _ := r.ReadFileFromRemoteBranch("origin", "main", relSlash)
 	branchBytes, _ := r.ReadFileFromBranch(cfg.Branch, relSlash)
-	fi, lerr := os.Lstat(expanded)
-	symlinkExists := lerr == nil && fi.Mode()&os.ModeSymlink != 0
-	// symlinkExists is intentionally excluded from state derivation. The state
-	// machine tracks content alignment between branches; whether the symlink is
-	// present on disk is a runtime concern (fixed by re-running hdf) separate
-	// from the sync state.
-	_ = symlinkExists
 
+	// Use nil checks (not len) so that legitimately empty files are not treated
+	// as absent — mirrors the fix applied to hasUnreviewedPromotions.
 	switch {
-	case len(branchBytes) == 0 && len(mainBytes) == 0:
+	case branchBytes == nil && mainBytes == nil:
 		return RegistryOnly
-	case len(branchBytes) == 0 && len(mainBytes) > 0:
+	case branchBytes == nil && mainBytes != nil:
 		return Promoted
-	case len(branchBytes) > 0 && len(mainBytes) == 0:
+	case branchBytes != nil && mainBytes == nil:
 		return Enrolled
 	case string(branchBytes) == string(mainBytes):
 		return Synced
