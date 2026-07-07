@@ -790,6 +790,14 @@ func promptAndMaybeAccept(r *repo.Repo, cfg *config.Config, f config.ManagedFile
 }
 
 func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte, tildePath, hash string) (retErr error) {
+	staged, err := r.HasStagedChanges()
+	if err != nil {
+		return fmt.Errorf("checking staged changes: %w", err)
+	}
+	if staged {
+		return fmt.Errorf("index has staged changes unrelated to this accept — commit or unstage them first")
+	}
+
 	fullPath := filepath.Join(cfg.LocalDotfilesDir, filepath.FromSlash(relPath))
 	regPath := filepath.Join(cfg.LocalDotfilesDir, filepath.FromSlash(managedTOMLPath))
 

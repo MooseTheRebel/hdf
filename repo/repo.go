@@ -542,6 +542,25 @@ func (r *Repo) IsCleanForPromote() (bool, error) {
 	return status.IsClean(), nil
 }
 
+// HasStagedChanges returns true when the git index contains files staged for
+// the next commit (i.e. staging area != unmodified for at least one entry).
+func (r *Repo) HasStagedChanges() (bool, error) {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("getting worktree: %w", err)
+	}
+	status, err := w.Status()
+	if err != nil {
+		return false, fmt.Errorf("checking status: %w", err)
+	}
+	for _, s := range status {
+		if s.Staging != git.Unmodified {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // MergeIntoBranch fast-forwards targetBranch to the current HEAD.
 // Returns an error if the branches have diverged — run 'hdf changes-pull'
 // to merge targetBranch into the current branch first, then retry.

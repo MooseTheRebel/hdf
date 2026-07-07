@@ -2532,3 +2532,51 @@ func TestFetchAndShowIncoming_CorruptRemoteRegistry(t *testing.T) {
 		t.Fatal("fetchAndShowIncoming: want error for corrupt remote registry, got nil")
 	}
 }
+
+// TestAcceptPromotedFileRejectsPreExistingStagedChanges verifies that
+// acceptPromotedFile refuses to run when the index already has staged changes.
+// Without this guard, CommitStaged would bundle those unrelated staged changes
+// into the accept commit, corrupting the branch history.
+func TestAcceptPromotedFileRejectsPreExistingStagedChanges(t *testing.T) {
+	workDir := t.TempDir()
+
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed an initial commit so the repo has a HEAD.
+	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveRegistry(workDir, &config.Registry{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.StageFile(".hdf/managed.toml"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("init registry"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stage an unrelated file before calling acceptPromotedFile.
+	unrelated := filepath.Join(workDir, "unrelated.txt")
+	if err := os.WriteFile(unrelated, []byte("unrelated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.StageFile("unrelated.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Branch: "machine", LocalDotfilesDir: workDir}
+	homeDir := t.TempDir()
+	acceptErr := acceptPromotedFile(r, cfg, testRCRelPath, []byte("content\n"), filepath.Join(homeDir, tildeTestRC), "abc123")
+	if acceptErr == nil {
+		t.Fatal("acceptPromotedFile: want error when pre-existing staged changes present, got nil")
+	}
+}
