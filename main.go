@@ -779,8 +779,28 @@ func promptAndMaybeAccept(r *repo.Repo, cfg *config.Config, f config.ManagedFile
 	return nil
 }
 
-func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte, tildePath, hash string) error {
+func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte, tildePath, hash string) (retErr error) {
 	fullPath := filepath.Join(cfg.LocalDotfilesDir, filepath.FromSlash(relPath))
+	regPath := filepath.Join(cfg.LocalDotfilesDir, filepath.FromSlash(managedTOMLPath))
+
+	// Snapshot disk state so we can roll back if any later step fails.
+	origFile, origFileErr := os.ReadFile(fullPath)
+	origReg, origRegErr := os.ReadFile(regPath)
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if origFileErr == nil {
+			_ = os.WriteFile(fullPath, origFile, 0o644) //nolint:gosec
+		} else {
+			_ = os.Remove(fullPath)
+		}
+		if origRegErr == nil {
+			_ = os.WriteFile(regPath, origReg, 0o644) //nolint:gosec
+		}
+		_ = r.UnstageAll()
+	}()
+
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}

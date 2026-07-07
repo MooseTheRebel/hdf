@@ -519,6 +519,16 @@ func (r *Repo) FastForwardFromMain() error {
 	})
 }
 
+// UnstageAll resets the index to HEAD (mixed reset), leaving the working tree
+// untouched. Used by acceptPromotedFile rollback to undo any partial staging.
+func (r *Repo) UnstageAll() error {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return err
+	}
+	return w.Reset(&git.ResetOptions{Mode: git.MixedReset})
+}
+
 // IsCleanForPromote returns true when the worktree has no uncommitted changes.
 func (r *Repo) IsCleanForPromote() (bool, error) {
 	w, err := r.r.Worktree()

@@ -1661,6 +1661,63 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	}
 }
 
+// TestAcceptPromotedFileRollsBackOnStageFailure verifies that acceptPromotedFile
+// leaves the working tree clean when StageFile fails partway through. Without
+// rollback, the written file and registry update remain on disk, causing
+// IsCleanForPromote to block future promotes with no recovery guidance.
+func TestAcceptPromotedFileRollsBackOnStageFailure(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveRegistry(workDir, &config.Registry{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.StageFile(".hdf/managed.toml"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("init registry"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Branch: "machine", LocalDotfilesDir: workDir}
+
+	// Make .git/index read-only so StageFile fails after WriteFile succeeds.
+	gitIndex := filepath.Join(workDir, ".git", "index")
+	if err := os.Chmod(gitIndex, 0o444); err != nil { //nolint:gosec
+		t.Fatal(err)
+	}
+
+	acceptErr := acceptPromotedFile(r, cfg, testRCRelPath, []byte("content\n"), filepath.Join(homeDir, tildeTestRC), "abc123")
+
+	if err := os.Chmod(gitIndex, 0o644); err != nil { //nolint:gosec
+		t.Logf("warn: could not restore index permissions: %v", err)
+	}
+
+	if acceptErr == nil {
+		t.Fatal("expected error from acceptPromotedFile when index locked, got nil")
+	}
+	clean, cleanErr := r.IsCleanForPromote()
+	if cleanErr != nil {
+		t.Fatalf("IsCleanForPromote: %v", cleanErr)
+	}
+	if !clean {
+		t.Error("want clean repo after acceptPromotedFile rollback, got dirty — rollback missing")
+	}
+}
+
 // TestFetchAndShowIncoming_EOFAborts verifies that fetchAndShowIncoming returns
 // an error when stdin is closed (EOF) while prompting for an incoming diff,
 // rather than silently skipping all remaining files.
