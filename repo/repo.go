@@ -25,6 +25,16 @@ var errStop = errors.New("stop")
 // because it is not a fast-forward update. Callers can test for this with errors.Is.
 var ErrNonFastForwardUpdate = errors.New("non-fast-forward update")
 
+// isNonFastForwardErr returns true when err represents a push rejection due to
+// a non-fast-forward update. go-git does not expose a public sentinel for the
+// push case — it uses fmt.Errorf("non-fast-forward update: %s", ref) — so
+// string matching is unavoidable. Using strings.Contains rather than
+// strings.HasPrefix guards against a future go-git version that wraps the
+// message in a prefix (e.g., "remote: non-fast-forward update: ...").
+func isNonFastForwardErr(err error) bool {
+	return errors.Is(err, git.ErrNonFastForwardUpdate) || strings.Contains(err.Error(), "non-fast-forward")
+}
+
 // authForURL returns an appropriate go-git auth method for rawURL, or nil for
 // public / unauthenticated access.
 //
@@ -361,9 +371,7 @@ func (r *Repo) Push(branch string) error {
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
 	}
-	// go-git does not expose a sentinel for push non-fast-forward errors; detect
-	// by message and wrap in our own sentinel so callers can use errors.Is.
-	if err != nil && strings.HasPrefix(err.Error(), "non-fast-forward update") {
+	if err != nil && isNonFastForwardErr(err) {
 		return fmt.Errorf("%w: %w", ErrNonFastForwardUpdate, err)
 	}
 	return err

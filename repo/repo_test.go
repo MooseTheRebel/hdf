@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
@@ -956,6 +957,31 @@ func TestPushNonFastForwardReturnsTypedError(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNonFastForwardUpdate) {
 		t.Errorf("errors.Is(err, ErrNonFastForwardUpdate) = false; got: %v", err)
+	}
+}
+
+// TestIsNonFastForwardErr verifies the detection helper against various error
+// message formats, including the sentinel and hypothetical future prefixes.
+func TestIsNonFastForwardErr(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		desc string
+		err  error
+		want bool
+	}{
+		{"current go-git push format", fmt.Errorf("non-fast-forward update: refs/heads/main"), true},
+		{"bare sentinel message", errors.New("non-fast-forward update"), true},
+		{"go-git ErrNonFastForwardUpdate sentinel", git.ErrNonFastForwardUpdate, true},
+		{"hypothetical remote-prefix format", fmt.Errorf("remote: non-fast-forward update: refs/heads/main"), true},
+		{"unrelated error", errors.New("some other error"), false},
+		{"empty error", errors.New(""), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			if got := isNonFastForwardErr(tc.err); got != tc.want {
+				t.Errorf("isNonFastForwardErr(%q) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
