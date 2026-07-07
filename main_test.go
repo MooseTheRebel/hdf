@@ -1616,8 +1616,8 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	}
 
 	homeDir := t.TempDir()
-	homePath := filepath.Join(homeDir, ".testrc")
-	relPath := filepath.Base(homePath)
+	homePath := filepath.Join(homeDir, testRCRelPath)
+	relPath := testRCRelPath
 
 	// Machine branch has real dotfile content.
 	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("real content\n"), 0o644); err != nil {
@@ -1627,11 +1627,13 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 		t.Fatalf("CommitFile machine: %v", err)
 	}
 
-	// Main advances with an enrollment placeholder (empty) for the managed file.
-	// This makes HasIncomingCommits=true but mainBytes=[]byte{} for the managed file.
+	// Main advances with a registry-only commit: the file is registered in
+	// managed.toml but has no blob in the main tree yet (enrolled, not promoted).
+	// HasIncomingCommits=true but mainBytes=nil for the managed file → skip.
+	regToml := "[files]\n  [[files.file]]\n    path = \"" + homePath + "\"\n"
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
-		{RepoRelPath: relPath, Content: []byte{}},
-	}, "hdf: enroll placeholder"); err != nil {
+		{RepoRelPath: ".hdf/managed.toml", Content: []byte(regToml)},
+	}, "hdf: register baseline"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
 	if err := seed.Push("main"); err != nil {
@@ -1655,7 +1657,7 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 		t.Fatalf("fetchAndShowIncoming: %v", callErr)
 	}
 	if anyIncoming {
-		t.Error("want anyIncoming=false (enrollment placeholder should be skipped), got true")
+		t.Error("want anyIncoming=false (file enrolled but not yet promoted — no blob in main), got true")
 	}
 }
 
@@ -2264,5 +2266,144 @@ func TestRunLinkSymlinksNewlyAcceptedFile(t *testing.T) {
 	}
 	if fi.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("expected %s to be a symlink, got mode %v", homePath, fi.Mode())
+	}
+}
+
+// TestFetchAndShowIncoming_ShowsEmptyPromotedFile verifies that a zero-byte
+// file promoted to origin/main is NOT silently skipped. A file like
+// ~/.hushlogin is intentionally empty; other machines must still be offered
+// the chance to accept it.
+func TestFetchAndShowIncoming_ShowsEmptyPromotedFile(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("seed Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	const emptyFile = ".hushlogin"
+	relPath := emptyFile
+
+	// Main advances: an empty blob for .hushlogin (simulating a promote of an
+	// empty dotfile). Machine branch does NOT have the file.
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: relPath, Content: []byte{}},
+	}, "hdf: promote empty file"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	homePath := filepath.Join(homeDir, emptyFile)
+	reg := &config.Registry{
+		Files: []config.ManagedFile{{Path: homePath}},
+	}
+	cfg := &config.Config{
+		Branch:           testBranch,
+		LocalDotfilesDir: workDir,
+	}
+
+	var anyIncoming bool
+	var callErr error
+	captureStdout(func() {
+		anyIncoming, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir, bufio.NewReader(strings.NewReader("n\n")))
+	})
+	if callErr != nil {
+		t.Fatalf("fetchAndShowIncoming: %v", callErr)
+	}
+	if !anyIncoming {
+		t.Error("want anyIncoming=true for promoted empty file, got false")
+	}
+}
+
+// TestPromoteGuard2FiresForEmptyPromotedFile verifies that Guard 2 blocks
+// promote when origin/main holds a zero-byte promoted file that the machine
+// branch hasn't reviewed yet. Previously, len(mainBytes)==0 caused the guard
+// to skip the file as if it were unregistered.
+func TestPromoteGuard2FiresForEmptyPromotedFile(t *testing.T) {
+	bareDir := t.TempDir()
+
+	// Node A: init, enroll empty .hushlogin, promote.
+	workDirA := filepath.Join(t.TempDir(), "dotfilesA")
+	cfgPathA, statePathA := initPaths(t)
+	homeA, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HDF_BRANCH", "node-a")
+	if err := runInit(strings.NewReader(localInitStdin(workDirA, bareDir)), cfgPathA, statePathA, ""); err != nil {
+		t.Fatalf("A runInit: %v", err)
+	}
+	cfgA, err := config.Load(cfgPathA)
+	if err != nil {
+		t.Fatalf("A Load: %v", err)
+	}
+	hushloginA := filepath.Join(homeA, ".hushlogin")
+	if err := os.WriteFile(hushloginA, []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(func() {
+		if err := runEnroll("~/.hushlogin", homeA, cfgA, statePathA, strings.NewReader(""), true); err != nil {
+			t.Fatalf("A runEnroll: %v", err)
+		}
+	})
+	captureStdout(func() {
+		if err := runPromote(cfgA, homeA); err != nil {
+			t.Fatalf("A runPromote: %v", err)
+		}
+	})
+
+	// Node B: fresh local repo connected to same bare, different branch.
+	workDirB := filepath.Join(t.TempDir(), "dotfilesB")
+	cfgPathB, statePathB := initPaths(t)
+	homeB, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HDF_BRANCH", "node-b")
+	if err := runInit(strings.NewReader(localInitStdin(workDirB, bareDir)), cfgPathB, statePathB, ""); err != nil {
+		t.Fatalf("B runInit: %v", err)
+	}
+	cfgB, err := config.Load(cfgPathB)
+	if err != nil {
+		t.Fatalf("B Load: %v", err)
+	}
+	_ = statePathB
+
+	// B tries to promote without pulling A's empty .hushlogin — Guard 2 must refuse.
+	err = runPromote(cfgB, homeB)
+	if err == nil {
+		t.Fatal("expected Guard 2 to block promote for empty promoted file, got nil")
+	}
+	if !strings.Contains(err.Error(), "changes you haven't reviewed") {
+		t.Errorf("error = %q, want mention of 'changes you haven't reviewed'", err.Error())
 	}
 }

@@ -513,7 +513,7 @@ func hasUnreviewedPromotions(r *repo.Repo, cfg *config.Config, homeDir string) (
 		if err != nil {
 			return false, fmt.Errorf("reading local file %s: %w", relSlash, err)
 		}
-		if len(mainBytes) > 0 && len(branchBytes) == 0 {
+		if mainBytes != nil && branchBytes == nil {
 			return true, nil
 		}
 	}
@@ -734,18 +734,16 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 		if err != nil {
 			return false, fmt.Errorf("reading %s from origin/main: %w", relPath, err)
 		}
-		// len==0 means main holds an enrollment placeholder committed by
-		// changes-push when the file was first registered. The real content
-		// lives only on the machine branch at this point, so there is nothing
-		// meaningful to diff against — skip to avoid a false "incoming change".
-		if len(mainBytes) == 0 {
+		// nil means the file is not yet in origin/main (enrolled but not yet
+		// promoted by any machine) — nothing to diff against, skip.
+		if mainBytes == nil {
 			continue
 		}
 		branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relPath)
 		if err != nil {
 			return false, fmt.Errorf("reading %s from branch %s: %w", relPath, cfg.Branch, err)
 		}
-		if string(mainBytes) == string(branchBytes) {
+		if branchBytes != nil && string(mainBytes) == string(branchBytes) {
 			continue
 		}
 		anyIncoming = true
