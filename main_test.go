@@ -1630,9 +1630,14 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	// Main advances with a registry-only commit: the file is registered in
 	// managed.toml but has no blob in the main tree yet (enrolled, not promoted).
 	// HasIncomingCommits=true but mainBytes=nil for the managed file → skip.
-	regToml := "[files]\n  [[files.file]]\n    path = \"" + homePath + "\"\n"
+	regToml, err := config.RegistryToBytes(&config.Registry{
+		Files: []config.ManagedFile{{Path: homePath}},
+	})
+	if err != nil {
+		t.Fatalf("RegistryToBytes: %v", err)
+	}
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
-		{RepoRelPath: ".hdf/managed.toml", Content: []byte(regToml)},
+		{RepoRelPath: ".hdf/managed.toml", Content: regToml},
 	}, "hdf: register baseline"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
@@ -2462,5 +2467,68 @@ func TestPromoteGuard2FiresForEmptyPromotedFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "changes you haven't reviewed") {
 		t.Errorf("error = %q, want mention of 'changes you haven't reviewed'", err.Error())
+	}
+}
+
+// TestFetchAndShowIncoming_CorruptRemoteRegistry verifies that a corrupt
+// managed.toml on origin/main surfaces an error rather than silently falling
+// back to the local registry (which would make the bad data invisible).
+func TestFetchAndShowIncoming_CorruptRemoteRegistry(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatalf("seed Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	// Push corrupt managed.toml to origin/main so HasIncomingCommits returns true.
+	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: ".hdf/managed.toml", Content: []byte("NOT VALID TOML ][[[")},
+	}, "hdf: corrupt registry"); err != nil {
+		t.Fatalf("CommitFilesToBranch: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push main: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	reg := &config.Registry{}
+	cfg := &config.Config{
+		Branch:           testBranch,
+		LocalDotfilesDir: workDir,
+	}
+
+	var callErr error
+	captureStdout(func() {
+		_, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir, bufio.NewReader(strings.NewReader("")))
+	})
+	if callErr == nil {
+		t.Fatal("fetchAndShowIncoming: want error for corrupt remote registry, got nil")
 	}
 }

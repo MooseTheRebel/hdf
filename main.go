@@ -679,17 +679,24 @@ Does not merge into main — that is a deliberate step done via hdf changes-pull
 }
 
 // remoteRegistry returns origin/main's registry when it contains files, falling
-// back to fallback otherwise.
-func remoteRegistry(r *repo.Repo, fallback *config.Registry) *config.Registry {
-	b, _ := r.ReadFileFromRemoteBranch("origin", "main", managedTOMLPath)
+// back to fallback when the file is absent or empty.  A non-nil error is
+// returned when the remote file exists but cannot be parsed.
+func remoteRegistry(r *repo.Repo, fallback *config.Registry) (*config.Registry, error) {
+	b, err := r.ReadFileFromRemoteBranch("origin", "main", managedTOMLPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading remote registry: %w", err)
+	}
 	if len(b) == 0 {
-		return fallback
+		return fallback, nil
 	}
 	reg, err := config.RegistryFromBytes(b)
-	if err != nil || reg == nil || len(reg.Files) == 0 {
-		return fallback
+	if err != nil {
+		return nil, fmt.Errorf("parsing remote registry: %w", err)
 	}
-	return reg
+	if reg == nil || len(reg.Files) == 0 {
+		return fallback, nil
+	}
+	return reg, nil
 }
 
 // fetchAndShowIncoming fetches from remote, prints a colored diff for every
@@ -712,7 +719,10 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 	}
 	// Prefer the registry from origin/main so files enrolled on other machines
 	// are visible even when this machine branch was created before enrollment.
-	reg = remoteRegistry(r, reg)
+	reg, err = remoteRegistry(r, reg)
+	if err != nil {
+		return false, err
+	}
 	anyIncoming := false
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
