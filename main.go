@@ -810,7 +810,7 @@ func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBy
 		}
 		if origFileErr == nil {
 			_ = os.WriteFile(fullPath, origFile, 0o644) //nolint:gosec
-		} else {
+		} else if os.IsNotExist(origFileErr) {
 			_ = os.Remove(fullPath)
 		}
 		if origRegErr == nil {

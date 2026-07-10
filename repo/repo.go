@@ -32,6 +32,9 @@ var ErrNonFastForwardUpdate = errors.New("non-fast-forward update")
 // strings.HasPrefix guards against a future go-git version that wraps the
 // message in a prefix (e.g., "remote: non-fast-forward update: ...").
 func isNonFastForwardErr(err error) bool {
+	if err == nil {
+		return false
+	}
 	return errors.Is(err, git.ErrNonFastForwardUpdate) || strings.Contains(err.Error(), "non-fast-forward")
 }
 
@@ -713,7 +716,12 @@ func mergeEntry(r *git.Repository, ea object.TreeEntry, bEntries map[string]obje
 		return ea, nil
 	}
 	if ea.Mode != eb.Mode {
-		return ea, fmt.Errorf("entry %q has conflicting types: %s vs %s", ea.Name, ea.Mode, eb.Mode)
+		isRegularOrExec := func(m filemode.FileMode) bool {
+			return m == filemode.Regular || m == filemode.Deprecated || m == filemode.Executable
+		}
+		if !isRegularOrExec(ea.Mode) || !isRegularOrExec(eb.Mode) {
+			return ea, fmt.Errorf("entry %q has conflicting types: %s vs %s", ea.Name, ea.Mode, eb.Mode)
+		}
 	}
 	if ea.Mode == filemode.Dir {
 		h, err := mergeTrees(r, ea.Hash, eb.Hash)
