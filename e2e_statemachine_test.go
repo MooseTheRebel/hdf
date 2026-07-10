@@ -265,8 +265,9 @@ func nodeConfig(t *testing.T, node Node) *config.Config {
 }
 
 // assertFileState derives and asserts the state of tildeFile on node.
-// It inspects the registry on origin/main, file content on origin/main,
-// file content on the machine branch, and whether a symlink exists on disk.
+// It inspects the registry on origin/main, file content on origin/main, and
+// file content on the machine branch. It does NOT check on-disk symlinks —
+// TestRunLinkSymlinksNewlyAcceptedFile covers linking separately.
 func assertFileState(t *testing.T, node Node, tildeFile string, want FileState) {
 	t.Helper()
 	got := deriveFileState(t, node, tildeFile)

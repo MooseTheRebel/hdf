@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -318,11 +319,9 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 		return err
 	}
 
-	hostname := branchName()
-	if err := r.CreateAndCheckoutBranch(hostname); err != nil {
-		fmt.Printf("Branch %q already exists, continuing.\n", hostname)
-	} else {
-		fmt.Printf("Created and checked out branch: %s\n", hostname)
+	hostname, err := setupMachineBranch(reader, r, gitURL)
+	if err != nil {
+		return err
 	}
 
 	cfg := &config.Config{
@@ -340,6 +339,80 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	fmt.Printf("Config saved to %s\n", cfgPath)
 	fmt.Println("\nhdf initialized. Use 'hdf changes-push <path>' to start managing dot files.")
 	return nil
+}
+
+// setupMachineBranch picks this machine's branch name (resolving remote
+// collisions interactively when a remote is configured) and checks it out,
+// creating it unless it was adopted from the remote.
+func setupMachineBranch(reader *bufio.Reader, r *repo.Repo, gitURL string) (string, error) {
+	hostname := branchName()
+	adopted := false
+	if gitURL != "" {
+		var err error
+		hostname, adopted, err = resolveBranchCollision(reader, r, hostname)
+		if err != nil {
+			return "", err
+		}
+	}
+	if !adopted {
+		if err := r.CreateAndCheckoutBranch(hostname); err != nil {
+			fmt.Printf("Branch %q already exists, continuing.\n", hostname)
+		} else {
+			fmt.Printf("Created and checked out branch: %s\n", hostname)
+		}
+	}
+	return hostname, nil
+}
+
+// resolveBranchCollision checks whether the remote already has a branch with
+// this machine's name. That is ambiguous: it could be this machine
+// re-initializing after a reinstall, or a different machine that happens to
+// share the hostname — so the user decides. Returns the branch name to use and
+// whether it was already checked out (adopted from the remote).
+func resolveBranchCollision(reader *bufio.Reader, r *repo.Repo, branch string) (string, bool, error) {
+	if err := r.Fetch(); err != nil {
+		fmt.Printf("Warning: could not fetch from remote to check for an existing %q branch: %v\n", branch, err)
+		return branch, false, nil
+	}
+	has, err := r.RemoteHasBranch("origin", branch)
+	if err != nil {
+		return "", false, fmt.Errorf("checking remote for branch %q: %w", branch, err)
+	}
+	if !has {
+		return branch, false, nil
+	}
+	fmt.Printf("A branch named %q already exists on the remote.\n", branch)
+	fmt.Println("  1) Reuse it (this machine was previously initialized)")
+	fmt.Println("  2) Create a unique branch name (a different machine uses this name)")
+	fmt.Print("Choice [1]: ")
+	ans, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", false, fmt.Errorf("reading input: %w", err)
+	}
+	if strings.TrimSpace(ans) == "2" {
+		unique := branch + "-" + randomBranchSuffix()
+		fmt.Printf("Using unique branch name: %s\n", unique)
+		return unique, false, nil
+	}
+	if err := r.CheckoutTrackingBranch(branch, "origin"); err != nil {
+		fmt.Printf("Could not adopt remote branch %q (%v); creating it locally.\n", branch, err)
+		return branch, false, nil
+	}
+	fmt.Printf("Reusing existing remote branch: %s\n", branch)
+	return branch, true, nil
+}
+
+// randomBranchSuffix returns a short random letter suffix for de-duplicating
+// branch names across machines that share a hostname.
+func randomBranchSuffix() string {
+	b := make([]byte, 4)
+	if _, err := crand.Read(b); err != nil {
+		return "x"
+	}
+	for i := range b {
+		b[i] = branchNameChars[int(b[i])%len(branchNameChars)]
+	}
+	return string(b)
 }
 
 // registryContains reports whether reg already has an entry for tildeFile
@@ -469,61 +542,234 @@ func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
 	return sha, nil
 }
 
-// hasUnreviewedPromotions returns true when origin/main has content for any
-// registered file that the machine branch has no content for (Promoted state).
-// This indicates another machine promoted files this machine hasn't reviewed
-// via changes-pull. Diverged files (machine has its own content) are allowed.
-func hasUnreviewedPromotions(r *repo.Repo, cfg *config.Config, homeDir string) (bool, error) {
-	regBytes, err := r.ReadFileFromRemoteBranch("origin", "main", ".hdf/managed.toml")
+// unseenIncoming is a registered file whose origin/main content this machine
+// has never held on its branch — either not on the branch at all (branchBytes
+// nil: another machine's promote this machine hasn't pulled) or diverged from
+// content the branch never carried (a newer promote this machine would revert).
+type unseenIncoming struct {
+	tildePath   string
+	relPath     string
+	mainBytes   []byte
+	branchBytes []byte
+}
+
+// collectUnseenIncoming lists registered files where origin/main holds content
+// that has never appeared at that path in the machine branch's history. Files
+// whose main content this machine produced or previously accepted are skipped,
+// so the routine edit → changes-push → promote cycle stays non-interactive.
+func collectUnseenIncoming(r *repo.Repo, cfg *config.Config, homeDir string) ([]unseenIncoming, error) {
+	regBytes, err := r.ReadFileFromRemoteBranch("origin", "main", managedTOMLPath)
 	if err != nil {
-		return false, fmt.Errorf("reading remote registry: %w", err)
+		return nil, fmt.Errorf("reading remote registry: %w", err)
 	}
 	if len(regBytes) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	reg, err := config.RegistryFromBytes(regBytes)
 	if err != nil {
-		return false, fmt.Errorf("parsing remote registry: %w", err)
+		return nil, fmt.Errorf("parsing remote registry: %w", err)
 	}
 	if reg == nil {
-		return false, nil
+		return nil, nil
 	}
+	var pending []unseenIncoming
 	for _, f := range reg.Files {
-		expanded := config.ExpandPathIn(f.Path, homeDir)
-		var repoPath string
-		var err error
-		if len(f.Variants) > 0 {
-			repoPath, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
-		} else {
-			repoPath, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
-		}
-		if err != nil || repoPath == "" {
-			continue
-		}
-		rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoPath)
+		item, err := unseenIncomingForFile(r, cfg, homeDir, f)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		relSlash := filepath.ToSlash(rel)
-		mainBytes, err := r.ReadFileFromRemoteBranch("origin", "main", relSlash)
-		if err != nil {
-			return false, fmt.Errorf("reading remote file %s: %w", relSlash, err)
-		}
-		branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relSlash)
-		if err != nil {
-			return false, fmt.Errorf("reading local file %s: %w", relSlash, err)
-		}
-		if mainBytes != nil && branchBytes == nil {
-			return true, nil
+		if item != nil {
+			pending = append(pending, *item)
 		}
 	}
-	return false, nil
+	return pending, nil
+}
+
+// unseenIncomingForFile checks one registered file and returns a non-nil
+// unseenIncoming when origin/main holds content for it that has never appeared
+// at that path in the machine branch's history.
+func unseenIncomingForFile(r *repo.Repo, cfg *config.Config, homeDir string, f config.ManagedFile) (*unseenIncoming, error) {
+	relSlash, ok := repoRelPathForManagedFile(cfg, homeDir, f)
+	if !ok {
+		return nil, nil
+	}
+	mainBytes, err := r.ReadFileFromRemoteBranch("origin", "main", relSlash)
+	if err != nil {
+		return nil, fmt.Errorf("reading remote file %s: %w", relSlash, err)
+	}
+	if mainBytes == nil {
+		return nil, nil // enrolled but not yet promoted by any machine
+	}
+	branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relSlash)
+	if err != nil {
+		return nil, fmt.Errorf("reading local file %s: %w", relSlash, err)
+	}
+	if branchBytes != nil && string(branchBytes) == string(mainBytes) {
+		return nil, nil // synced
+	}
+	seen, err := r.BranchHistoryHasFileContent(cfg.Branch, relSlash, mainBytes)
+	if err != nil {
+		return nil, fmt.Errorf("checking branch history for %s: %w", relSlash, err)
+	}
+	if seen {
+		return nil, nil // main holds content this machine produced or accepted before
+	}
+	return &unseenIncoming{
+		tildePath:   f.Path,
+		relPath:     relSlash,
+		mainBytes:   mainBytes,
+		branchBytes: branchBytes,
+	}, nil
+}
+
+// repoRelPathForManagedFile resolves a registry entry to its repo-relative
+// slash path, using the variant-specific path when the file has variants.
+// ok is false when the entry does not resolve to a path for this machine.
+func repoRelPathForManagedFile(cfg *config.Config, homeDir string, f config.ManagedFile) (string, bool) {
+	expanded := config.ExpandPathIn(f.Path, homeDir)
+	var repoPath string
+	var err error
+	if len(f.Variants) > 0 {
+		repoPath, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+	} else {
+		repoPath, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	}
+	if err != nil || repoPath == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoPath)
+	if err != nil {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// registryUnionMerger merges conflicting managed.toml blobs during promote by
+// unioning entries by path. This machine's entry wins on conflict, but foreign
+// entries (files enrolled by other machines this branch hasn't heard of yet)
+// and foreign per-branch variants are preserved instead of being clobbered by
+// an older wholesale copy of the registry.
+func registryUnionMerger(ours, theirs []byte) ([]byte, error) {
+	oursReg, err := config.RegistryFromBytes(ours)
+	if err != nil {
+		return nil, fmt.Errorf("parsing our registry: %w", err)
+	}
+	theirsReg, err := config.RegistryFromBytes(theirs)
+	if err != nil {
+		return nil, fmt.Errorf("parsing main's registry: %w", err)
+	}
+	byPath := make(map[string]config.ManagedFile)
+	if theirsReg != nil {
+		for _, f := range theirsReg.Files {
+			byPath[f.Path] = f
+		}
+	}
+	if oursReg != nil {
+		for _, f := range oursReg.Files {
+			if existing, ok := byPath[f.Path]; ok {
+				f.Variants = unionVariants(f.Variants, existing.Variants)
+			}
+			byPath[f.Path] = f
+		}
+	}
+	merged := &config.Registry{Files: make([]config.ManagedFile, 0, len(byPath))}
+	for _, f := range byPath {
+		merged.Files = append(merged.Files, f)
+	}
+	sort.Slice(merged.Files, func(i, j int) bool {
+		return merged.Files[i].Path < merged.Files[j].Path
+	})
+	return config.RegistryToBytes(merged)
+}
+
+// unionVariants merges two variant lists by branch; ours wins when both sides
+// carry a variant for the same branch. The result is sorted by branch.
+func unionVariants(ours, theirs []config.Variant) []config.Variant {
+	byBranch := make(map[string]config.Variant, len(ours)+len(theirs))
+	for _, v := range theirs {
+		byBranch[v.Branch] = v
+	}
+	for _, v := range ours {
+		byBranch[v.Branch] = v
+	}
+	merged := make([]config.Variant, 0, len(byBranch))
+	for _, v := range byBranch {
+		merged = append(merged, v)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Branch < merged[j].Branch })
+	return merged
+}
+
+// errPromoteUnreviewed is the refusal returned when promote cannot get an
+// explicit answer about unseen incoming content (closed stdin or decline).
+func errPromoteUnreviewed() error {
+	return fmt.Errorf("cannot promote: main has changes you haven't reviewed — run 'hdf changes-pull' first")
+}
+
+// reviewUnseenIncoming walks the user through every unseen incoming file and
+// returns the per-path merge overrides for files where main's version should
+// win. Files absent from the machine branch need only aggregate consent (the
+// merge preserves them); diverged files each get an explicit overwrite prompt.
+func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader) (map[string]bool, error) {
+	preferTheirs := make(map[string]bool)
+
+	var preserved []unseenIncoming
+	var diverged []unseenIncoming
+	for _, p := range pending {
+		if p.branchBytes == nil {
+			preserved = append(preserved, p)
+		} else {
+			diverged = append(diverged, p)
+		}
+	}
+
+	if len(preserved) > 0 {
+		fmt.Println("main has file(s) promoted by other machines that you haven't pulled:")
+		for _, p := range preserved {
+			fmt.Printf("  - %s (will be preserved by promote)\n", p.tildePath)
+		}
+		fmt.Print("Continue promoting? [y/N]: ")
+		ans, err := readPromptAnswer(reader)
+		if err != nil || !isYes(ans) {
+			return nil, errPromoteUnreviewed()
+		}
+	}
+
+	for _, p := range diverged {
+		fmt.Printf("\nmain has a newer version of %s that this machine has never had:\n", p.tildePath)
+		printDiff(daemon.GenerateUnifiedDiff(string(p.branchBytes), string(p.mainBytes)))
+		fmt.Printf("Overwrite main's newer version of %s with yours? [y/N]: ", p.tildePath)
+		ans, err := readPromptAnswer(reader)
+		if err != nil {
+			return nil, errPromoteUnreviewed()
+		}
+		if !isYes(ans) {
+			preferTheirs[p.relPath] = true
+			fmt.Printf("Keeping main's version of %s.\n", p.tildePath)
+		}
+	}
+	return preferTheirs, nil
+}
+
+// readPromptAnswer reads one line from reader, tolerating a final line without
+// a trailing newline. A closed stream with no input is an error.
+func readPromptAnswer(reader *bufio.Reader) (string, error) {
+	ans, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("reading user input: %w", err)
+	}
+	ans = strings.TrimSpace(ans)
+	if errors.Is(err, io.EOF) && ans == "" {
+		return "", fmt.Errorf("stdin closed")
+	}
+	return ans, nil
 }
 
 // pushBranches pushes the hostname branch and main when a remote is configured.
-// A non-fast-forward rejection on main is silently ignored: it means another
-// node promoted since our local main was last synced; the machine branch push
-// still lands, and the caller can fetch + promote to catch up.
+// A non-fast-forward rejection on main is tolerated: it means another node
+// promoted since our local main was last synced; the machine branch push still
+// lands, and the registry entry reaches main on the next promote. The user is
+// told, since until then other machines cannot see this enrollment.
 func pushBranches(r *repo.Repo, cfg *config.Config) error {
 	if cfg.GitPushTarget == "" {
 		return nil
@@ -531,8 +777,13 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 	if err := r.Push(cfg.Branch); err != nil {
 		return fmt.Errorf("pushing hostname branch: %w", err)
 	}
-	if err := r.Push("main"); err != nil && !errors.Is(err, repo.ErrNonFastForwardUpdate) {
-		return fmt.Errorf("pushing main: %w", err)
+	if err := r.Push("main"); err != nil {
+		if !errors.Is(err, repo.ErrNonFastForwardUpdate) {
+			return fmt.Errorf("pushing main: %w", err)
+		}
+		fmt.Println("Note: main has moved on the remote (another machine promoted); " +
+			"this enrollment will be registered on main when you next run 'hdf promote' " +
+			"(run 'hdf changes-pull' first to review the incoming changes).")
 	}
 	return nil
 }
@@ -914,7 +1165,7 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 	return nil
 }
 
-func runPromote(cfg *config.Config, homeDir string) error {
+func runPromote(cfg *config.Config, homeDir string, stdin io.Reader) error {
 	if cfg.GitPushTarget == "" {
 		return fmt.Errorf("cannot promote: no remote configured — promotion has no effect without a shared repository")
 	}
@@ -932,12 +1183,16 @@ func runPromote(cfg *config.Config, homeDir string) error {
 	if err := r.Fetch(); err != nil {
 		return fmt.Errorf("fetching before promote: %w", err)
 	}
-	hasUnreviewed, err := hasUnreviewedPromotions(r, cfg, homeDir)
+	// Guard 2: origin/main holds content this machine has never had — either
+	// unpulled promotes (preserved by the merge) or newer versions this promote
+	// would overwrite. Each needs explicit consent before proceeding.
+	pending, err := collectUnseenIncoming(r, cfg, homeDir)
 	if err != nil {
 		return fmt.Errorf("checking incoming: %w", err)
 	}
-	if hasUnreviewed {
-		return fmt.Errorf("cannot promote: main has changes you haven't reviewed — run 'hdf changes-pull' first")
+	preferTheirs, err := reviewUnseenIncoming(pending, bufio.NewReader(stdin))
+	if err != nil {
+		return err
 	}
 	// Sync local main to origin/main so MergeIntoBranch builds on top of all
 	// prior promotions. Without this, Push("main") would be a non-fast-forward
@@ -946,7 +1201,11 @@ func runPromote(cfg *config.Config, homeDir string) error {
 		return fmt.Errorf("syncing local main to origin: %w", err)
 	}
 	fmt.Printf("Merging %s into main...\n", cfg.Branch)
-	if err := r.MergeIntoBranch("main"); err != nil {
+	mergeOpts := &repo.MergeOpts{
+		PreferTheirs:   preferTheirs,
+		ContentMergers: map[string]repo.ContentMerger{managedTOMLPath: registryUnionMerger},
+	}
+	if err := r.MergeIntoBranch("main", mergeOpts); err != nil {
 		return fmt.Errorf("promoting: %w", err)
 	}
 	if err := r.Push(cfg.Branch); err != nil {
@@ -985,7 +1244,7 @@ var promoteCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
-		return runPromote(cfg, homeDir)
+		return runPromote(cfg, homeDir, os.Stdin)
 	},
 }
 

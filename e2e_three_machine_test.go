@@ -158,11 +158,10 @@ func TestThreeMachineConvergence(t *testing.T) {
 		}
 
 		// All three machines now see all three files as Synced.
-		for i, node := range []Node{a, b, c} {
+		for _, node := range []Node{a, b, c} {
 			assertFileState(t, node, "~/.bashrc", Synced)
 			assertFileState(t, node, "~/.vimrc", Synced)
 			assertFileState(t, node, "~/.profile", Synced)
-			_ = i
 		}
 	})
 
@@ -221,4 +220,72 @@ func TestThreeMachineConvergence(t *testing.T) {
 		}
 		assertFileState(t, c, "~/.bashrc", Synced)
 	})
+}
+
+// TestStaleNodePromoteCannotRevert is the multi-node lost-update guard: after
+// A promotes v2, a node still holding v1 must not be able to silently revert
+// main by promoting unrelated work. Non-interactively promote refuses; with an
+// explicit "n" it proceeds while keeping main's newer version.
+func TestStaleNodePromoteCannotRevert(t *testing.T) {
+	t.Parallel()
+	nodes, _ := setupCluster(t, 3)
+	a, b, c := nodes[0], nodes[1], nodes[2]
+
+	// Round 1: A promotes v1; B and C accept — everyone Synced on v1.
+	bashrcA := filepath.Join(a.home, ".bashrc")
+	if err := os.WriteFile(bashrcA, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := runHDFNode(t, a, "", "changes-push", "--yes", bashrcA); code != 0 {
+		t.Fatalf("A changes-push v1: %s", stderr)
+	}
+	hdfPromote(t, a)
+	if _, stderr, code := runHDFNode(t, b, "y\n", "changes-pull"); code != 0 {
+		t.Fatalf("B accept v1: %s", stderr)
+	}
+	if _, stderr, code := runHDFNode(t, c, "y\n", "changes-pull"); code != 0 {
+		t.Fatalf("C accept v1: %s", stderr)
+	}
+
+	// Round 2: A promotes v2. B does NOT pull.
+	if err := os.WriteFile(bashrcA, []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := runHDFNode(t, a, "", "changes-push", "--yes", bashrcA); code != 0 {
+		t.Fatalf("A changes-push v2: %s", stderr)
+	}
+	hdfPromote(t, a)
+
+	// B (stale: still on v1) enrolls unrelated work.
+	vimrcB := filepath.Join(b.home, ".vimrc")
+	if err := os.WriteFile(vimrcB, []byte("set number\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := runHDFNode(t, b, "", "changes-push", "--yes", vimrcB); code != 0 {
+		t.Fatalf("B changes-push .vimrc: %s", stderr)
+	}
+
+	// Non-interactive promote must refuse — B has never seen v2.
+	_, stderr, code := runHDFNode(t, b, "", "promote")
+	if code == 0 {
+		t.Fatal("B promote should refuse non-interactively while holding stale v1")
+	}
+	if !containsAny(stderr, "haven't reviewed", "changes-pull") {
+		t.Errorf("expected review-guard message in stderr, got: %q", stderr)
+	}
+
+	// With an explicit "n" (keep main's newer version) the promote proceeds.
+	_, stderr, code = runHDFNode(t, b, "n\n", "promote")
+	if code != 0 {
+		t.Fatalf("B promote with decline should succeed: %s", stderr)
+	}
+
+	// A must still be Synced on v2 — B's promote did not revert main.
+	assertFileStateAfterFetch(t, a, "~/.bashrc", Synced)
+	// B's .vimrc landed on main.
+	assertFileState(t, b, "~/.vimrc", Synced)
+	// B itself remains Diverged on .bashrc (it kept v1 locally).
+	assertFileState(t, b, "~/.bashrc", Diverged)
+	// C sees B's .vimrc as an incoming promote.
+	assertFileStateAfterFetch(t, c, "~/.vimrc", Promoted)
 }
