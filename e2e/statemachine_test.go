@@ -1,6 +1,6 @@
 //go:build e2e
 
-package main
+package e2e
 
 import (
 	"fmt"
@@ -306,8 +306,8 @@ func deriveFileState(t *testing.T, node Node, tildeFile string) FileState {
 	expanded := config.ExpandPathIn(tildeFile, node.home)
 	var repoPath string
 	if len(registeredFile.Variants) > 0 {
-		repoPath, err = resolveRepoPath(*registeredFile, cfg.Branch, cfg.LocalDotfilesDir, expanded)
-		if err != nil || repoPath == "" {
+		repoPath = variantRepoPathFor(*registeredFile, cfg.Branch, cfg.LocalDotfilesDir)
+		if repoPath == "" {
 			return Untracked
 		}
 	} else {
@@ -339,4 +339,16 @@ func deriveFileState(t *testing.T, node Node, tildeFile string) FileState {
 	default:
 		return Diverged
 	}
+}
+
+// variantRepoPathFor resolves a variant file's repo path for the given
+// branch, mirroring the CLI's internal variant resolution. Returns "" when
+// the file has no variant for this branch.
+func variantRepoPathFor(f config.ManagedFile, branch, localDotfilesDir string) string {
+	for _, v := range f.Variants {
+		if v.Branch == branch {
+			return filepath.Join(localDotfilesDir, v.RepoPath)
+		}
+	}
+	return ""
 }

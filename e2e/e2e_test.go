@@ -1,6 +1,6 @@
 //go:build e2e
 
-package main
+package e2e
 
 import (
 	"os"
@@ -21,7 +21,9 @@ func TestMain(m *testing.M) {
 	}
 
 	bin := filepath.Join(dir, "hdf")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	// Build the root package by module path so this works from the e2e
+	// subdirectory (and anywhere else inside the module).
+	if out, err := exec.Command("go", "build", "-o", bin, "hdf").CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
 		panic("go build failed:\n" + string(out))
 	}
