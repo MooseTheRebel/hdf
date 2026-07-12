@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// HashBytes computes the SHA-256 hash of b in the same "sha256:<hex>" format
+// as HashFile.
+func HashBytes(b []byte) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(b))
+}
+
 // HashFile computes the SHA-256 hash of a file and returns "sha256:<hex>".
 func HashFile(path string) (string, error) {
 	f, err := os.Open(path)

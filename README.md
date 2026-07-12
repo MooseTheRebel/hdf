@@ -34,19 +34,26 @@ Initialize hdf. Prompts for a git URL or local path, sets up the repository, and
 "$HDF_CLI" init
 ```
 
-### enroll
-Enroll a dot file. Copies it into the hdf repo, replaces the original with a symlink, and commits.
+### changes-push (alias: enroll)
+Enroll a dot file. Copies it into the hdf repo, replaces the original with a symlink, commits to your machine branch, and registers it on main.
 
 ```bash
-"$HDF_CLI" enroll ~/.bashrc
-"$HDF_CLI" enroll ~/.vimrc
+"$HDF_CLI" changes-push ~/.bashrc
+"$HDF_CLI" changes-push ~/.vimrc
 ```
 
-### link
-Re-create all managed symlinks (safe to re-run after cloning on a new machine).
+### changes-pull (alias: link)
+Fetch main, review each incoming file (accept or skip per file), and re-create all managed symlinks (safe to re-run after cloning on a new machine).
 
 ```bash
-"$HDF_CLI" link
+"$HDF_CLI" changes-pull
+```
+
+### promote
+Merge your machine branch into main and push. Content you have never reviewed (another machine's promote you haven't pulled, or a newer version of a file you both changed) is shown first and needs explicit consent. See [docs/state-machine.md](docs/state-machine.md) for the full state machine, guards, and multi-machine model.
+
+```bash
+"$HDF_CLI" promote
 ```
 
 ### status

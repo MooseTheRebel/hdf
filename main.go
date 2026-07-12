@@ -415,6 +415,24 @@ func randomBranchSuffix() string {
 	return string(b)
 }
 
+// ensureOnMachineBranch refuses to proceed when the repo has a different
+// branch checked out than this machine's configured branch. Commands that
+// commit (changes-push, changes-pull accepts, promote) operate on HEAD, so a
+// manual git checkout in the dotfiles repo would otherwise route commits to
+// the wrong branch — later discarded by promote's SyncLocalMain.
+func ensureOnMachineBranch(r *repo.Repo, cfg *config.Config) error {
+	cur, err := r.CurrentBranch()
+	if err != nil {
+		return fmt.Errorf("determining current branch: %w", err)
+	}
+	if cur != cfg.Branch {
+		return fmt.Errorf(
+			"dotfiles repo has branch %q checked out, but this machine's branch is %q — run 'git -C %s checkout %s' first",
+			cur, cfg.Branch, cfg.LocalDotfilesDir, cfg.Branch)
+	}
+	return nil
+}
+
 // registryContains reports whether reg already has an entry for tildeFile
 // with exactly the given hash.
 func registryContains(reg *config.Registry, tildeFile, hash string) bool {
@@ -710,7 +728,7 @@ func errPromoteUnreviewed() error {
 // returns the per-path merge overrides for files where main's version should
 // win. Files absent from the machine branch need only aggregate consent (the
 // merge preserves them); diverged files each get an explicit overwrite prompt.
-func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader) (map[string]bool, error) {
+func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader, statePath string) (map[string]bool, error) {
 	preferTheirs := make(map[string]bool)
 
 	var preserved []unseenIncoming
@@ -735,7 +753,19 @@ func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader) (map[s
 		}
 	}
 
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		state = &config.State{}
+	}
 	for _, p := range diverged {
+		mainHash := link.HashBytes(p.mainBytes)
+		if state.DeclinedOverwrites[p.relPath] == mainHash {
+			// The user already reviewed exactly this main content and chose to
+			// keep it — honor that decision without re-prompting.
+			preferTheirs[p.relPath] = true
+			fmt.Printf("Keeping main's version of %s (previously declined overwrite).\n", p.tildePath)
+			continue
+		}
 		fmt.Printf("\nmain has a newer version of %s that this machine has never had:\n", p.tildePath)
 		printDiff(daemon.GenerateUnifiedDiff(string(p.branchBytes), string(p.mainBytes)))
 		fmt.Printf("Overwrite main's newer version of %s with yours? [y/N]: ", p.tildePath)
@@ -743,12 +773,35 @@ func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader) (map[s
 		if err != nil {
 			return nil, errPromoteUnreviewed()
 		}
-		if !isYes(ans) {
-			preferTheirs[p.relPath] = true
-			fmt.Printf("Keeping main's version of %s.\n", p.tildePath)
+		if isYes(ans) {
+			if updateErr := recordDecline(statePath, p.relPath, "", false); updateErr != nil {
+				fmt.Printf("Warning: could not update state file: %v\n", updateErr)
+			}
+			continue
+		}
+		preferTheirs[p.relPath] = true
+		fmt.Printf("Keeping main's version of %s.\n", p.tildePath)
+		if updateErr := recordDecline(statePath, p.relPath, mainHash, true); updateErr != nil {
+			fmt.Printf("Warning: could not update state file: %v\n", updateErr)
 		}
 	}
 	return preferTheirs, nil
+}
+
+// recordDecline persists (or clears, when add is false) the remembered
+// decline for relPath under the state lock.
+func recordDecline(statePath, relPath, mainHash string, add bool) error {
+	return config.UpdateState(statePath, func(s *config.State) error {
+		if !add {
+			delete(s.DeclinedOverwrites, relPath)
+			return nil
+		}
+		if s.DeclinedOverwrites == nil {
+			s.DeclinedOverwrites = make(map[string]string)
+		}
+		s.DeclinedOverwrites[relPath] = mainHash
+		return nil
+	})
 }
 
 // readPromptAnswer reads one line from reader, tolerating a final line without
@@ -874,6 +927,9 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, s
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
+	}
+	if err := ensureOnMachineBranch(r, cfg); err != nil {
+		return err
 	}
 	ignoredPaths, err := ignoredPathsFromRemote(r)
 	if err != nil {
@@ -1030,7 +1086,7 @@ func promptAndMaybeAccept(r *repo.Repo, cfg *config.Config, f config.ManagedFile
 		return fmt.Errorf("stdin closed: aborting pull")
 	}
 	if isYes(strings.TrimSpace(ans)) {
-		if err := acceptPromotedFile(r, cfg, relPath, mainBytes, f.Path, f.Hash); err != nil {
+		if err := acceptPromotedFile(r, cfg, relPath, mainBytes, f.Path); err != nil {
 			return fmt.Errorf("accepting %s: %w", f.Path, err)
 		}
 		fmt.Printf("Accepted %s from main.\n", f.Path)
@@ -1040,7 +1096,7 @@ func promptAndMaybeAccept(r *repo.Repo, cfg *config.Config, f config.ManagedFile
 	return nil
 }
 
-func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte, tildePath, hash string) (retErr error) {
+func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBytes []byte, tildePath string) (retErr error) {
 	staged, err := r.HasStagedChanges()
 	if err != nil {
 		return fmt.Errorf("checking staged changes: %w", err)
@@ -1080,7 +1136,9 @@ func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBy
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
 	}
-	upsertRegistryEntry(localReg, tildePath, hash)
+	// Hash the accepted bytes rather than trusting main's registry entry,
+	// which may carry a stale or empty stub hash from the enrolling machine.
+	upsertRegistryEntry(localReg, tildePath, link.HashBytes(mainBytes))
 	if err := config.SaveRegistry(cfg.LocalDotfilesDir, localReg); err != nil {
 		return fmt.Errorf("saving registry: %w", err)
 	}
@@ -1112,6 +1170,9 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
+	}
+	if err := ensureOnMachineBranch(r, cfg); err != nil {
+		return err
 	}
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
@@ -1165,13 +1226,16 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 	return nil
 }
 
-func runPromote(cfg *config.Config, homeDir string, stdin io.Reader) error {
+func runPromote(cfg *config.Config, homeDir string, stdin io.Reader, statePath string) error {
 	if cfg.GitPushTarget == "" {
 		return fmt.Errorf("cannot promote: no remote configured — promotion has no effect without a shared repository")
 	}
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
+	}
+	if err := ensureOnMachineBranch(r, cfg); err != nil {
+		return err
 	}
 	clean, err := r.IsCleanForPromote()
 	if err != nil {
@@ -1190,7 +1254,7 @@ func runPromote(cfg *config.Config, homeDir string, stdin io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("checking incoming: %w", err)
 	}
-	preferTheirs, err := reviewUnseenIncoming(pending, bufio.NewReader(stdin))
+	preferTheirs, err := reviewUnseenIncoming(pending, bufio.NewReader(stdin), statePath)
 	if err != nil {
 		return err
 	}
@@ -1208,6 +1272,14 @@ func runPromote(cfg *config.Config, homeDir string, stdin io.Reader) error {
 	if err := r.MergeIntoBranch("main", mergeOpts); err != nil {
 		return fmt.Errorf("promoting: %w", err)
 	}
+	return pushPromoted(r, cfg, statePath)
+}
+
+// pushPromoted pushes the machine branch and the merged main, rolling local
+// main back (Guard 3) when another machine promoted in the race window, and
+// records the new main SHA so the daemon does not notify this machine about
+// its own promote.
+func pushPromoted(r *repo.Repo, cfg *config.Config, statePath string) error {
 	if err := r.Push(cfg.Branch); err != nil {
 		return fmt.Errorf("pushing %s: %w", cfg.Branch, err)
 	}
@@ -1226,14 +1298,32 @@ func runPromote(cfg *config.Config, homeDir string, stdin io.Reader) error {
 		}
 		return fmt.Errorf("pushing main: %w", err)
 	}
+	// Best-effort: a failure here only costs one redundant notification.
+	if mainSHA, shaErr := r.BranchSHA("main"); shaErr == nil {
+		if stateErr := recordMainCommit(statePath, mainSHA); stateErr != nil {
+			fmt.Printf("Warning: could not update state file: %v\n", stateErr)
+		}
+	}
 	fmt.Printf("Promoted %s → main and pushed to origin.\n", cfg.Branch)
 	return nil
+}
+
+// recordMainCommit updates state.LastMainCommit under the state lock so the
+// daemon does not notify this machine about its own promote.
+func recordMainCommit(statePath, mainSHA string) error {
+	return config.UpdateState(statePath, func(state *config.State) error {
+		state.LastMainCommit = mainSHA
+		return nil
+	})
 }
 
 var promoteCmd = &cobra.Command{
 	Use:   "promote",
 	Short: "Merge your machine branch into main and push",
-	Long:  "Merges the current machine branch into main (fast-forward) and pushes both to origin.\nRun 'hdf changes-pull' first if main has diverged.",
+	Long: `Merges the current machine branch into main and pushes both to origin.
+Content this machine has never reviewed (another machine's promote you haven't
+pulled, or a newer version of a file you both changed) is shown first and needs
+explicit consent. Run 'hdf changes-pull' to review incoming changes in full.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
 		cfg, err := config.Load(cfgPath)
@@ -1244,16 +1334,18 @@ var promoteCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
-		return runPromote(cfg, homeDir, os.Stdin)
+		return runPromote(cfg, homeDir, os.Stdin, config.DefaultStatePath())
 	},
 }
 
 var linkCmd = &cobra.Command{
 	Use:   "changes-pull",
-	Short: "Fetch main, show incoming diffs, optionally merge, and re-create symlinks",
-	Long: `Fetches origin/main, shows an incoming diff, then prompts to merge now or delay.
-Symlinks are always re-created from the current branch state regardless of the choice.
-Delaying is an accepted workflow — run hdf changes-pull again when ready to merge.`,
+	Short: "Fetch main, review incoming files one by one, and re-create symlinks",
+	Long: `Fetches origin/main and walks through each managed file that differs from your
+machine branch, showing the diff and asking whether to accept main's version.
+Accepting commits main's content to your branch and updates the local registry;
+skipping keeps your version. Symlinks are always re-created afterwards.
+Skipping is an accepted workflow — run hdf changes-pull again when ready.`,
 	Aliases: []string{"link"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()

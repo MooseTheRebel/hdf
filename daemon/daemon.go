@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"hdf/config"
 	"hdf/link"
@@ -13,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	git "github.com/go-git/go-git/v5"
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
@@ -23,28 +21,46 @@ const maxDiffFileSize = 1 << 20 // 1 MB
 // warnings survive daemon restarts and are readable by the CLI process.
 func addWarning(msg, statePath string) {
 	notify.LogAndNotify(notify.LevelWarning, "hdf", msg)
-	state, err := config.LoadState(statePath)
-	if err != nil {
+	_ = config.UpdateState(statePath, func(state *config.State) error {
+		state.PendingWarnings = append(state.PendingWarnings, msg)
+		return nil
+	})
+}
+
+// notifyFailureThrottled sends a failure notification and records a pending
+// warning at most once per cooldown window. Sync failures (offline remote,
+// broken auth, branch collisions) tend to persist across cycles; without
+// throttling they alert on every sync interval and pile up duplicate warnings.
+func notifyFailureThrottled(n notify.Notifier, title, msg, statePath string, cooldown time.Duration) {
+	throttled := false
+	_ = config.UpdateState(statePath, func(s *config.State) error {
+		if !s.LastFailureNotifyAt.IsZero() && time.Since(s.LastFailureNotifyAt) < cooldown {
+			throttled = true
+			return nil
+		}
+		s.LastFailureNotifyAt = time.Now()
+		return nil
+	})
+	if throttled {
+		// Still log for debuggability; skip the user-facing channels.
+		notify.LogAndNotify(notify.LevelWarning, title, msg)
 		return
 	}
-	state.PendingWarnings = append(state.PendingWarnings, msg)
-	_ = config.SaveState(statePath, state)
+	_ = n.Send(title, msg)
+	addWarning(msg, statePath)
 }
 
 // PendingWarnings returns and clears all warnings written to statePath by the
 // daemon since the last call. Called by hdf changes-push/changes-pull (via
 // promptPendingWarnings) before proceeding so the user can be prompted to act.
 func PendingWarnings(statePath string) ([]string, error) {
-	state, err := config.LoadState(statePath)
+	var warnings []string
+	err := config.UpdateState(statePath, func(state *config.State) error {
+		warnings = state.PendingWarnings
+		state.PendingWarnings = nil
+		return nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	warnings := state.PendingWarnings
-	if len(warnings) == 0 {
-		return nil, nil
-	}
-	state.PendingWarnings = nil
-	if err := config.SaveState(statePath, state); err != nil {
 		return nil, err
 	}
 	return warnings, nil
@@ -133,10 +149,12 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	}
 	if err := r.Fetch(); err != nil {
 		// Fetch failures are often transient (offline). Use the standard notifier
-		// to avoid intrusive modal alerts on every network hiccup.
+		// to avoid intrusive modal alerts, and throttle so an offline laptop is
+		// not re-notified every sync cycle. SharedSettings are unreachable
+		// before a successful fetch, so use the default cooldown.
 		msg := fmt.Sprintf("fetch from remote failed: %v", err)
-		_ = n.Send("hdf: remote fetch failed", msg)
-		addWarning(msg, statePath)
+		notifyFailureThrottled(n, "hdf: remote fetch failed", msg, statePath,
+			time.Duration(config.DefaultNotifyCooldownMinutes)*time.Minute)
 		return 0, fmt.Errorf("fetching from remote: %w", err)
 	}
 
@@ -170,15 +188,22 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	}
 
 	// 4. Push the machine branch so changes-push keeps its name honest.
-	if err := r.Push(cfg.Branch); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+	// repo.Push already maps "already up to date" to nil.
+	if err := r.Push(cfg.Branch); err != nil {
 		msg := fmt.Sprintf("push %s failed: %v", cfg.Branch, err)
-		_ = cn.Send("hdf: push failed", msg)
-		addWarning(msg, statePath)
+		notifyFailureThrottled(cn, "hdf: push failed", msg, statePath, cooldown)
 		return 0, fmt.Errorf("pushing branch %s: %w", cfg.Branch, err)
 	}
 
-	state.LastSync = time.Now()
-	return interval, config.SaveState(statePath, state)
+	// Persist only the fields this sync cycle owns, under the state lock, so
+	// warnings appended concurrently (by the CLI or addWarning) are not lost
+	// to a stale in-memory snapshot.
+	return interval, config.UpdateState(statePath, func(s *config.State) error {
+		s.LastSync = time.Now()
+		s.LastMainCommit = state.LastMainCommit
+		s.LastNotifiedAt = state.LastNotifiedAt
+		return nil
+	})
 }
 
 // checkMainProgress notifies if main has advanced past the last known commit and
@@ -194,7 +219,7 @@ func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
 		return
 	}
 	if state.LastMainCommit != "" && state.LastMainCommit != mainSHA {
-		_ = n.Send("hdf", "New commits on main — merge into your branch")
+		_ = n.Send("hdf", "New commits on main — run 'hdf changes-pull' to review")
 	}
 	state.LastMainCommit = mainSHA
 }

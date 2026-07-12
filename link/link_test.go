@@ -311,3 +311,20 @@ func TestLinkVariants(t *testing.T) {
 		})
 	}
 }
+
+// TestHashBytesMatchesHashFile verifies HashBytes produces the same digest
+// format and value as HashFile for identical content.
+func TestHashBytesMatchesHashFile(t *testing.T) {
+	content := []byte("some dotfile content\n")
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fromFile, err := HashFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := HashBytes(content); got != fromFile {
+		t.Errorf("HashBytes = %q, HashFile = %q — must match", got, fromFile)
+	}
+}

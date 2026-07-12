@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"hdf/config"
+	"hdf/link"
 	"hdf/repo"
 	"io"
 	"os"
@@ -1705,7 +1706,7 @@ func TestAcceptPromotedFileRollsBackOnStageFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	acceptErr := acceptPromotedFile(r, cfg, testRCRelPath, []byte("content\n"), filepath.Join(homeDir, tildeTestRC), "abc123")
+	acceptErr := acceptPromotedFile(r, cfg, testRCRelPath, []byte("content\n"), filepath.Join(homeDir, tildeTestRC))
 
 	if err := os.Chmod(gitIndex, 0o644); err != nil { //nolint:gosec
 		t.Logf("warn: could not restore index permissions: %v", err)
@@ -1941,7 +1942,7 @@ func TestRunPromoteFastForwards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runPromote(cfg, t.TempDir(), strings.NewReader("")); err != nil {
+	if err := runPromote(cfg, t.TempDir(), strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml")); err != nil {
 		t.Fatalf("runPromote: %v", err)
 	}
 
@@ -1976,7 +1977,7 @@ func TestRunPromoteDirtyReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = runPromote(cfg, t.TempDir(), strings.NewReader(""))
+	err = runPromote(cfg, t.TempDir(), strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	if err == nil {
 		t.Fatal("expected error for dirty worktree, got nil")
 	}
@@ -2013,7 +2014,7 @@ func TestPromoteRefusesWhenIncomingUnreviewed(t *testing.T) {
 		}
 	})
 	captureStdout(func() {
-		if err := runPromote(cfgA, homeA, strings.NewReader("")); err != nil {
+		if err := runPromote(cfgA, homeA, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml")); err != nil {
 			t.Fatalf("A runPromote: %v", err)
 		}
 	})
@@ -2036,7 +2037,7 @@ func TestPromoteRefusesWhenIncomingUnreviewed(t *testing.T) {
 	_ = statePathB
 
 	// B tries to promote without pulling A's .testrc — Guard 2 should refuse.
-	err = runPromote(cfgB, homeB, strings.NewReader(""))
+	err = runPromote(cfgB, homeB, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	if err == nil {
 		t.Fatal("expected error from B promoting without pulling, got nil")
 	}
@@ -2135,7 +2136,7 @@ func TestPromoteAllowsWhenVariantFileAlreadyOnBranch(t *testing.T) {
 	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
 	var capturedErr error
 	captureStdout(func() {
-		capturedErr = runPromote(cfg, homeDir, strings.NewReader(""))
+		capturedErr = runPromote(cfg, homeDir, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	})
 	if capturedErr != nil {
 		t.Fatalf("runPromote failed (Guard 2 falsely blocked?): %v", capturedErr)
@@ -2148,7 +2149,7 @@ func TestPromoteRefusesWithNoRemote(t *testing.T) {
 		LocalDotfilesDir: t.TempDir(),
 		Branch:           "test-machine",
 	}
-	err := runPromote(cfg, t.TempDir(), strings.NewReader(""))
+	err := runPromote(cfg, t.TempDir(), strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	if err == nil {
 		t.Fatal("expected error from promote with no remote, got nil")
 	}
@@ -2159,10 +2160,14 @@ func TestPromoteRefusesWithNoRemote(t *testing.T) {
 
 // TestAcceptedFileUpdatesLocalRegistry verifies that when the user accepts an
 // incoming file during changes-pull, the local managed.toml is updated with the
-// file's registry entry (Fix 2).
+// file's registry entry — and the hash is computed from the ACCEPTED bytes,
+// not copied from main's registry entry (which may be a stale or empty stub
+// left by the enrolling machine).
 func TestAcceptedFileUpdatesLocalRegistry(t *testing.T) {
 	const branch = "test-host"
+	// Deliberately wrong/stale value in main's registry entry.
 	const knownHash = "deadbeef"
+	wantHash := link.HashBytes([]byte("from-main\n"))
 
 	bareDir := t.TempDir()
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
@@ -2238,8 +2243,8 @@ func TestAcceptedFileUpdatesLocalRegistry(t *testing.T) {
 	for _, f := range localReg.Files {
 		if f.Path == homePath {
 			found = true
-			if f.Hash != knownHash {
-				t.Errorf("registry hash = %q, want %q", f.Hash, knownHash)
+			if f.Hash != wantHash {
+				t.Errorf("registry hash = %q, want hash of accepted bytes %q", f.Hash, wantHash)
 			}
 		}
 	}
@@ -2438,7 +2443,7 @@ func TestPromoteGuard2FiresForEmptyPromotedFile(t *testing.T) {
 		}
 	})
 	captureStdout(func() {
-		if err := runPromote(cfgA, homeA, strings.NewReader("")); err != nil {
+		if err := runPromote(cfgA, homeA, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml")); err != nil {
 			t.Fatalf("A runPromote: %v", err)
 		}
 	})
@@ -2461,7 +2466,7 @@ func TestPromoteGuard2FiresForEmptyPromotedFile(t *testing.T) {
 	_ = statePathB
 
 	// B tries to promote without pulling A's empty .hushlogin — Guard 2 must refuse.
-	err = runPromote(cfgB, homeB, strings.NewReader(""))
+	err = runPromote(cfgB, homeB, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	if err == nil {
 		t.Fatal("expected Guard 2 to block promote for empty promoted file, got nil")
 	}
@@ -2575,17 +2580,19 @@ func TestAcceptPromotedFileRejectsPreExistingStagedChanges(t *testing.T) {
 
 	cfg := &config.Config{Branch: "machine", LocalDotfilesDir: workDir}
 	homeDir := t.TempDir()
-	acceptErr := acceptPromotedFile(r, cfg, testRCRelPath, []byte("content\n"), filepath.Join(homeDir, tildeTestRC), "abc123")
+	acceptErr := acceptPromotedFile(r, cfg, testRCRelPath, []byte("content\n"), filepath.Join(homeDir, tildeTestRC))
 	if acceptErr == nil {
 		t.Fatal("acceptPromotedFile: want error when pre-existing staged changes present, got nil")
 	}
 }
 
+const divergedMainV2 = "v2\n"
+
 // setupDivergedForPromote builds the stale-node scenario: the machine branch
 // holds v1 of a registered file (inherited from main at clone time), origin/main
 // has since moved to v2 (another machine's promote), and the machine branch has
 // its own new file to promote. Returns cfg, homeDir, and the bare repo.
-func setupDivergedForPromote(t *testing.T) (*config.Config, string, *repo.Repo) {
+func setupDivergedForPromote(t *testing.T) (*config.Config, string, *repo.Repo, *repo.Repo) {
 	t.Helper()
 	bareDir := t.TempDir()
 	bare, _, err := repo.InitOrOpenBare(bareDir)
@@ -2639,7 +2646,7 @@ func setupDivergedForPromote(t *testing.T) (*config.Config, string, *repo.Repo) 
 
 	// main moves to v2 AFTER the clone — content this machine has never held.
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
-		{RepoRelPath: testRCRelPath, Content: []byte("v2\n")},
+		{RepoRelPath: testRCRelPath, Content: []byte(divergedMainV2)},
 	}, "promote v2 from another machine"); err != nil {
 		t.Fatal(err)
 	}
@@ -2648,7 +2655,7 @@ func setupDivergedForPromote(t *testing.T) (*config.Config, string, *repo.Repo) 
 	}
 
 	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
-	return cfg, homeDir, bare
+	return cfg, homeDir, bare, seed
 }
 
 // TestPromoteRefusesStaleOverwriteOnEOF is the stale-node revert guard: when
@@ -2656,11 +2663,11 @@ func setupDivergedForPromote(t *testing.T) (*config.Config, string, *repo.Repo) 
 // closed (non-interactive), promote must refuse rather than silently revert
 // the other machine's promote.
 func TestPromoteRefusesStaleOverwriteOnEOF(t *testing.T) {
-	cfg, homeDir, bare := setupDivergedForPromote(t)
+	cfg, homeDir, bare, _ := setupDivergedForPromote(t)
 
 	var err error
 	captureStdout(func() {
-		err = runPromote(cfg, homeDir, strings.NewReader(""))
+		err = runPromote(cfg, homeDir, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	})
 	if err == nil {
 		t.Fatal("promote should refuse when main has unseen newer content and stdin is closed")
@@ -2672,7 +2679,7 @@ func TestPromoteRefusesStaleOverwriteOnEOF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "v2\n" {
+	if string(got) != divergedMainV2 {
 		t.Errorf("main .testrc = %q, want v2 untouched after refusal", got)
 	}
 }
@@ -2681,11 +2688,11 @@ func TestPromoteRefusesStaleOverwriteOnEOF(t *testing.T) {
 // prompt promotes the machine's other changes while keeping main's newer
 // version of the diverged file.
 func TestPromoteOverwriteDeclineKeepsMains(t *testing.T) {
-	cfg, homeDir, bare := setupDivergedForPromote(t)
+	cfg, homeDir, bare, _ := setupDivergedForPromote(t)
 
 	var err error
 	captureStdout(func() {
-		err = runPromote(cfg, homeDir, strings.NewReader("n\n"))
+		err = runPromote(cfg, homeDir, strings.NewReader("n\n"), filepath.Join(t.TempDir(), "state.toml"))
 	})
 	if err != nil {
 		t.Fatalf("runPromote with decline: %v", err)
@@ -2694,7 +2701,7 @@ func TestPromoteOverwriteDeclineKeepsMains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "v2\n" {
+	if string(got) != divergedMainV2 {
 		t.Errorf("main .testrc = %q, want main's v2 kept after decline", got)
 	}
 	got, err = bare.ReadFileFromBranch("main", ".other")
@@ -2709,11 +2716,11 @@ func TestPromoteOverwriteDeclineKeepsMains(t *testing.T) {
 // TestPromoteOverwriteAcceptTakesOurs verifies answering "y" performs the
 // informed overwrite: main gets the machine branch's version.
 func TestPromoteOverwriteAcceptTakesOurs(t *testing.T) {
-	cfg, homeDir, bare := setupDivergedForPromote(t)
+	cfg, homeDir, bare, _ := setupDivergedForPromote(t)
 
 	var err error
 	captureStdout(func() {
-		err = runPromote(cfg, homeDir, strings.NewReader("y\n"))
+		err = runPromote(cfg, homeDir, strings.NewReader("y\n"), filepath.Join(t.TempDir(), "state.toml"))
 	})
 	if err != nil {
 		t.Fatalf("runPromote with overwrite accept: %v", err)
@@ -2756,7 +2763,7 @@ func TestPromoteOwnRePromoteNeedsNoPrompt(t *testing.T) {
 		}
 	})
 	captureStdout(func() {
-		if err := runPromote(cfg, home, strings.NewReader("")); err != nil {
+		if err := runPromote(cfg, home, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml")); err != nil {
 			t.Fatalf("first runPromote: %v", err)
 		}
 	})
@@ -2772,7 +2779,7 @@ func TestPromoteOwnRePromoteNeedsNoPrompt(t *testing.T) {
 		}
 	})
 	captureStdout(func() {
-		err = runPromote(cfg, home, strings.NewReader(""))
+		err = runPromote(cfg, home, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	})
 	if err != nil {
 		t.Fatalf("re-promote of own edit must not prompt (EOF should be irrelevant): %v", err)
@@ -2847,7 +2854,7 @@ func TestPromoteProceedsPastPreservedFilesWithConsent(t *testing.T) {
 
 	var promoteErr error
 	captureStdout(func() {
-		promoteErr = runPromote(cfg, homeDir, strings.NewReader("y\n"))
+		promoteErr = runPromote(cfg, homeDir, strings.NewReader("y\n"), filepath.Join(t.TempDir(), "state.toml"))
 	})
 	if promoteErr != nil {
 		t.Fatalf("runPromote with consent: %v", promoteErr)
@@ -2951,7 +2958,7 @@ func TestPromotePreservesForeignRegistryEntries(t *testing.T) {
 	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
 	var promoteErr error
 	captureStdout(func() {
-		promoteErr = runPromote(cfg, homeDir, strings.NewReader(""))
+		promoteErr = runPromote(cfg, homeDir, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	})
 	if promoteErr != nil {
 		t.Fatalf("runPromote: %v", promoteErr)
@@ -3182,5 +3189,212 @@ func TestInitBranchCollisionReuse(t *testing.T) {
 	}
 	if string(got) != "existing\n" {
 		t.Errorf("reused branch .machinerc = %q, want previous install's content", got)
+	}
+}
+
+// setupWrongBranchRepo creates a repo checked out on a branch that does NOT
+// match cfg.Branch — simulating a user who ran raw git in the dotfiles repo.
+func setupWrongBranchRepo(t *testing.T) (*config.Config, string) {
+	t.Helper()
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatal(err)
+	}
+	workDir := t.TempDir()
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AddRemote("origin", "file://"+bareDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("some-other-branch"); err != nil {
+		t.Fatal(err)
+	}
+	homeDir := t.TempDir()
+	cfg := &config.Config{
+		Branch:           "the-machine-branch",
+		LocalDotfilesDir: workDir,
+		GitPushTarget:    "file://" + bareDir,
+	}
+	return cfg, homeDir
+}
+
+// TestPromoteRefusesWrongBranch: promote must not merge/commit from a HEAD
+// that is not the configured machine branch.
+func TestPromoteRefusesWrongBranch(t *testing.T) {
+	cfg, homeDir := setupWrongBranchRepo(t)
+	err := runPromote(cfg, homeDir, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
+	if err == nil {
+		t.Fatal("promote should refuse when HEAD is not the machine branch")
+	}
+	if !strings.Contains(err.Error(), "the-machine-branch") || !strings.Contains(err.Error(), "some-other-branch") {
+		t.Errorf("error should name both branches, got: %q", err.Error())
+	}
+}
+
+// TestRunLinkRefusesWrongBranch: changes-pull must not accept/commit onto a
+// HEAD that is not the configured machine branch.
+func TestRunLinkRefusesWrongBranch(t *testing.T) {
+	cfg, homeDir := setupWrongBranchRepo(t)
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	var err error
+	captureStdout(func() {
+		err = runLink(homeDir, cfg, false, strings.NewReader(""), statePath)
+	})
+	if err == nil {
+		t.Fatal("changes-pull should refuse when HEAD is not the machine branch")
+	}
+	if !strings.Contains(err.Error(), "the-machine-branch") {
+		t.Errorf("error should name the machine branch, got: %q", err.Error())
+	}
+}
+
+// TestEnrollRefusesWrongBranch: changes-push must not commit enrollments onto
+// a HEAD that is not the configured machine branch.
+func TestEnrollRefusesWrongBranch(t *testing.T) {
+	cfg, homeDir := setupWrongBranchRepo(t)
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	captureStdout(func() {
+		err = runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true)
+	})
+	if err == nil {
+		t.Fatal("changes-push should refuse when HEAD is not the machine branch")
+	}
+	if !strings.Contains(err.Error(), "the-machine-branch") {
+		t.Errorf("error should name the machine branch, got: %q", err.Error())
+	}
+}
+
+// TestPromoteRecordsMainCommitInState verifies that a successful promote
+// records the new main SHA in state.toml so the daemon's checkMainProgress
+// does not notify the machine about its own promote.
+func TestPromoteRecordsMainCommitInState(t *testing.T) {
+	bareDir := t.TempDir()
+	workDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotfile := filepath.Join(cfg.LocalDotfilesDir, "dot.txt")
+	if err := os.WriteFile(dotfile, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("dot.txt", "machine: add dot.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdout(func() {
+		if err := runPromote(cfg, t.TempDir(), strings.NewReader(""), statePath); err != nil {
+			t.Fatalf("runPromote: %v", err)
+		}
+	})
+
+	mainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastMainCommit != mainSHA {
+		t.Errorf("state.LastMainCommit = %q, want promoted main SHA %q", state.LastMainCommit, mainSHA)
+	}
+}
+
+// TestPromoteRemembersDecline verifies decline persistence: after answering
+// "n" once, subsequent promotes are non-interactive for the same main content
+// (keeping main's version), but a NEW version of the file on main prompts
+// again.
+func TestPromoteRemembersDecline(t *testing.T) {
+	cfg, homeDir, bare, seed := setupDivergedForPromote(t)
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Round 1: decline the overwrite interactively; promote succeeds.
+	var promoteErr error
+	captureStdout(func() {
+		promoteErr = runPromote(cfg, homeDir, strings.NewReader("n\n"), statePath)
+	})
+	if promoteErr != nil {
+		t.Fatalf("first runPromote: %v", promoteErr)
+	}
+
+	// Round 2: new local work; promote with CLOSED stdin must succeed because
+	// the decline for main's v2 is remembered — and main keeps v2.
+	if err := os.WriteFile(filepath.Join(cfg.LocalDotfilesDir, ".other2"), []byte("more\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(".other2", "machine: add .other2"); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(func() {
+		promoteErr = runPromote(cfg, homeDir, strings.NewReader(""), statePath)
+	})
+	if promoteErr != nil {
+		t.Fatalf("second runPromote should be non-interactive after remembered decline: %v", promoteErr)
+	}
+	got, err := bare.ReadFileFromBranch("main", testRCRelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != divergedMainV2 {
+		t.Errorf("main .testrc = %q, want v2 preserved by remembered decline", got)
+	}
+
+	// Round 3: main moves to v3 — the remembered decline no longer applies,
+	// so a closed-stdin promote must refuse again. Use a fresh clone to build
+	// v3 on top of the current bare main (the seed repo is stale by now).
+	_ = seed
+	fresh, err := repo.Clone(cfg.GitPushTarget, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.CommitFilesToBranch("main", []repo.BranchFile{
+		{RepoRelPath: testRCRelPath, Content: []byte("v3\n")},
+	}, "another machine promotes v3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fresh.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.LocalDotfilesDir, ".other3"), []byte("even more\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(".other3", "machine: add .other3"); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(func() {
+		promoteErr = runPromote(cfg, homeDir, strings.NewReader(""), statePath)
+	})
+	if promoteErr == nil {
+		t.Fatal("third runPromote must refuse: main has NEW content the decline does not cover")
 	}
 }
