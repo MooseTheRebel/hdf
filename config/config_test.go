@@ -341,3 +341,35 @@ func TestExpandPath(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveVariant verifies the shared variant-resolution helper that
+// status, changes-pull, and the daemon's drift counting all build on:
+// these previously each had their own inconsistent logic).
+func TestResolveVariant(t *testing.T) {
+	plain := ManagedFile{Path: "~/.bashrc", Hash: "base-hash"}
+	withMatch := ManagedFile{Path: "~/.gitconfig", Variants: []Variant{
+		{Branch: "laptop", RepoPath: ".gitconfig.laptop", Hash: "laptop-hash"},
+		{Branch: "desktop", RepoPath: ".gitconfig.desktop", Hash: "desktop-hash"},
+	}}
+
+	cases := []struct {
+		desc     string
+		file     ManagedFile
+		branch   string
+		wantRes  VariantResolution
+		wantHash string
+	}{
+		{"no variants at all", plain, "laptop", VariantNone, ""},
+		{"variant matches branch", withMatch, "desktop", VariantMatch, "desktop-hash"},
+		{"variants but none for branch", withMatch, "server", VariantNoBranchMatch, ""},
+	}
+	for _, tc := range cases {
+		v, res := tc.file.ResolveVariant(tc.branch)
+		if res != tc.wantRes {
+			t.Errorf("%s: resolution = %v, want %v", tc.desc, res, tc.wantRes)
+		}
+		if v.Hash != tc.wantHash {
+			t.Errorf("%s: variant hash = %q, want %q", tc.desc, v.Hash, tc.wantHash)
+		}
+	}
+}

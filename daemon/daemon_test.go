@@ -976,3 +976,34 @@ func TestMergeSyncResultsWritesOwnFieldsWhenUncontended(t *testing.T) {
 		t.Errorf("LastMainCommit = %q, want fetchedSHA", final.LastMainCommit)
 	}
 }
+
+// TestFileDriftNoVariantForBranch verifies that a variant-managed file with
+// no variant for the current branch is not counted as drift: it is not
+// managed on this machine (previously the hash fallback made it
+// count as one drift hunk on every sync).
+func TestFileDriftNoVariantForBranch(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The file exists on disk with real content.
+	homePath := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(homePath, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := config.ManagedFile{
+		Path: homePath,
+		Variants: []config.Variant{
+			{Branch: "some-other-machine", RepoPath: ".testrc.other", Hash: "abc"},
+		},
+	}
+	cfg := &config.Config{Branch: "this-machine", LocalDotfilesDir: workDir}
+
+	if got := fileDrift(f, cfg, r, homeDir); got != 0 {
+		t.Errorf("fileDrift = %d, want 0 — a file with no variant for this branch is not drift", got)
+	}
+}

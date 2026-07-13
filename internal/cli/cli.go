@@ -650,7 +650,7 @@ func repoRelPathForManagedFile(cfg *config.Config, homeDir string, f config.Mana
 	var repoPath string
 	var err error
 	if len(f.Variants) > 0 {
-		repoPath, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+		repoPath, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir)
 	} else {
 		repoPath, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 	}
@@ -1037,7 +1037,7 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 		expanded := config.ExpandPathIn(f.Path, homeDir)
 		var repoFile string
 		if len(f.Variants) > 0 {
-			repoFile, _ = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+			repoFile, _ = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir)
 		} else {
 			repoFile, _ = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 		}
@@ -1206,7 +1206,7 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 		var repoFile string
 		var err error
 		if len(f.Variants) > 0 {
-			repoFile, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir, expanded)
+			repoFile, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir)
 		} else {
 			repoFile, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 		}
@@ -1398,25 +1398,38 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("\nManaged files (%d):\n", len(reg.Files))
 
 		for _, f := range reg.Files {
-			expanded := config.ExpandPathIn(f.Path, homeDir)
-			expectedHash := f.Hash
-			for _, v := range f.Variants {
-				if v.Branch == cfg.Branch {
-					expectedHash = v.Hash
-					break
-				}
-			}
-			currentHash, err := link.HashFile(expanded)
-			status := "ok"
-			if err != nil {
-				status = "missing"
-			} else if currentHash != expectedHash {
-				status = "CHANGED (uncommitted)"
-			}
-			fmt.Printf("  %-40s %s\n", f.Path, status)
+			fmt.Printf("  %-40s %s\n", f.Path, fileStatus(f, cfg.Branch, homeDir))
 		}
 		return nil
 	},
+}
+
+// statusNoVariant is the status label for a file that has variants but none
+// for this machine's branch.
+const statusNoVariant = "no variant for this branch"
+
+// fileStatus returns the status label for one managed file on the given
+// branch. A file whose variants have no entry for this branch is not managed
+// on this machine, so it gets its own state rather than being misreported as
+// drift or as missing.
+func fileStatus(f config.ManagedFile, branch, homeDir string) string {
+	v, res := f.ResolveVariant(branch)
+	if res == config.VariantNoBranchMatch {
+		return statusNoVariant
+	}
+	expectedHash := f.Hash
+	if res == config.VariantMatch {
+		expectedHash = v.Hash
+	}
+	expanded := config.ExpandPathIn(f.Path, homeDir)
+	currentHash, err := link.HashFile(expanded)
+	if err != nil {
+		return "missing"
+	}
+	if currentHash != expectedHash {
+		return "CHANGED (uncommitted)"
+	}
+	return "ok"
 }
 
 var daemonCmd = &cobra.Command{
@@ -1484,13 +1497,12 @@ func promptPendingWarnings(statePath string, reader *bufio.Reader) error {
 
 // resolveRepoPath returns the repo file path for a managed file with variants,
 // choosing the variant matching branch, or empty string if no variant matches.
-func resolveRepoPath(f config.ManagedFile, branch, localDotfilesDir, expanded string) (string, error) {
-	for _, v := range f.Variants {
-		if v.Branch == branch {
-			return filepath.Join(localDotfilesDir, v.RepoPath), nil
-		}
+func resolveRepoPath(f config.ManagedFile, branch, localDotfilesDir string) (string, error) {
+	v, res := f.ResolveVariant(branch)
+	if res != config.VariantMatch {
+		return "", nil
 	}
-	return "", nil
+	return filepath.Join(localDotfilesDir, v.RepoPath), nil
 }
 
 func launchGUI(diffURLs []string) {

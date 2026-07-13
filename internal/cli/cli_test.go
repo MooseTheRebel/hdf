@@ -3474,3 +3474,65 @@ func TestRunLinkSkipsVariantlessFile(t *testing.T) {
 		t.Errorf("stderr = %q\nwant it to contain %q", stderr, wantMsg)
 	}
 }
+
+// TestFileStatus verifies per-file status labels, in particular that a
+// variant-managed file with no variant for this branch is reported as its own
+// state instead of false "CHANGED (uncommitted)" drift .
+func TestFileStatus(t *testing.T) {
+	const otherMachine = "other-machine"
+	homeDir := t.TempDir()
+	onDisk := filepath.Join(homeDir, ".testrc")
+	content := []byte("some content\n")
+	if err := os.WriteFile(onDisk, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contentHash := link.HashBytes(content)
+
+	cases := []struct {
+		desc string
+		file config.ManagedFile
+		want string
+	}{
+		{
+			desc: "variants exist but none for this branch",
+			file: config.ManagedFile{Path: tildeTestRC, Variants: []config.Variant{
+				{Branch: otherMachine, RepoPath: ".testrc.other", Hash: "whatever"},
+			}},
+			want: statusNoVariant,
+		},
+		{
+			desc: "non-variant file in sync",
+			file: config.ManagedFile{Path: tildeTestRC, Hash: contentHash},
+			want: "ok",
+		},
+		{
+			desc: "non-variant file with local edits",
+			file: config.ManagedFile{Path: tildeTestRC, Hash: "stale-hash"},
+			want: "CHANGED (uncommitted)",
+		},
+		{
+			desc: "matching variant in sync",
+			file: config.ManagedFile{Path: tildeTestRC, Variants: []config.Variant{
+				{Branch: testBranch, RepoPath: ".testrc." + testBranch, Hash: contentHash},
+			}},
+			want: "ok",
+		},
+		{
+			desc: "file missing from disk",
+			file: config.ManagedFile{Path: "~/.does-not-exist", Hash: "x"},
+			want: "missing",
+		},
+		{
+			desc: "variantless file missing from disk still reports no variant",
+			file: config.ManagedFile{Path: "~/.does-not-exist", Variants: []config.Variant{
+				{Branch: otherMachine, RepoPath: ".x", Hash: "y"},
+			}},
+			want: statusNoVariant,
+		},
+	}
+	for _, tc := range cases {
+		if got := fileStatus(tc.file, testBranch, homeDir); got != tc.want {
+			t.Errorf("%s: fileStatus = %q, want %q", tc.desc, got, tc.want)
+		}
+	}
+}
