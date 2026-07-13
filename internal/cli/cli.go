@@ -1502,7 +1502,19 @@ func resolveRepoPath(f config.ManagedFile, branch, localDotfilesDir string) (str
 	if res != config.VariantMatch {
 		return "", nil
 	}
-	return filepath.Join(localDotfilesDir, v.RepoPath), nil
+	// RepoPath comes from the shared registry, which other machines write —
+	// treat it as untrusted input and refuse anything that would resolve
+	// outside the dotfiles repo (a hostile entry could otherwise make
+	// changes-pull write attacker-controlled content to an arbitrary path).
+	if filepath.IsAbs(v.RepoPath) {
+		return "", fmt.Errorf("variant repo path for %s must be relative, got %q", f.Path, v.RepoPath)
+	}
+	resolved := filepath.Join(localDotfilesDir, v.RepoPath)
+	rel, err := filepath.Rel(localDotfilesDir, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("variant repo path for %s escapes the dotfiles repo: %q", f.Path, v.RepoPath)
+	}
+	return resolved, nil
 }
 
 func launchGUI(diffURLs []string) {

@@ -301,13 +301,20 @@ func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir s
 		return 0 // file is clean
 	}
 
-	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
-	if err != nil {
-		return 0
-	}
-	rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
-	if err != nil {
-		return 0
+	// Matched variants live at the variant's own repo path; canonical files
+	// at the path mirroring their location under $HOME.
+	var rel string
+	if res == config.VariantMatch {
+		rel = variant.RepoPath
+	} else {
+		repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		if err != nil {
+			return 0
+		}
+		rel, err = filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
+		if err != nil {
+			return 0
+		}
 	}
 
 	committedBytes, err := r.ReadFileFromBranch(cfg.Branch, filepath.ToSlash(rel))

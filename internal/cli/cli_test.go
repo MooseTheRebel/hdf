@@ -3536,3 +3536,48 @@ func TestFileStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveRepoPathRejectsTraversal verifies that a variant RepoPath from
+// the shared registry cannot escape the dotfiles repository. managed.toml is
+// written by other machines, so a hostile entry like "../../evil" must be
+// rejected rather than resolved to a path outside the repo (where a later
+// changes-pull accept would write attacker-controlled content).
+func TestResolveRepoPathRejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(repoPath string) config.ManagedFile {
+		return config.ManagedFile{Path: "~/.testrc", Variants: []config.Variant{
+			{Branch: testBranch, RepoPath: repoPath},
+		}}
+	}
+
+	cases := []struct {
+		desc     string
+		repoPath string
+		wantErr  bool
+		wantPath string
+	}{
+		{"plain filename", ".testrc.machine", false, filepath.Join(dir, ".testrc.machine")},
+		{"nested path", "sub/dir/.testrc", false, filepath.Join(dir, "sub", "dir", ".testrc")},
+		{"filename starting with dots is fine", "..testrc", false, filepath.Join(dir, "..testrc")},
+		{"parent traversal", "../evil", true, ""},
+		{"deep traversal", "../../../etc/passwd", true, ""},
+		{"sneaky mid-path traversal", "sub/../../evil", true, ""},
+		{"absolute path", "/etc/passwd", true, ""},
+	}
+	for _, tc := range cases {
+		got, err := resolveRepoPath(mk(tc.repoPath), testBranch, dir)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%s: want error for RepoPath %q, got path %q", tc.desc, tc.repoPath, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", tc.desc, err)
+			continue
+		}
+		if got != tc.wantPath {
+			t.Errorf("%s: path = %q, want %q", tc.desc, got, tc.wantPath)
+		}
+	}
+}
