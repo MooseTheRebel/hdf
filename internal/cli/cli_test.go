@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"hdf/config"
 	"hdf/link"
 	"hdf/repo"
@@ -3396,5 +3397,80 @@ func TestPromoteRemembersDecline(t *testing.T) {
 	})
 	if promoteErr == nil {
 		t.Fatal("third runPromote must refuse: main has NEW content the decline does not cover")
+	}
+}
+
+// captureStderr redirects os.Stderr for the duration of f and returns what
+// was written, mirroring captureStdout.
+func captureStderr(f func()) string {
+	origStderr := os.Stderr
+	pr, pw, _ := os.Pipe()
+	os.Stderr = pw
+	f()
+	_ = pw.Close()
+	os.Stderr = origStderr
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, pr)
+	return buf.String()
+}
+
+// TestRunLinkSkipsVariantlessFile verifies the behavior when a registered
+// file has no variant for this machine's branch: changes-pull succeeds, the
+// file is skipped (no symlink is created), and the message explains why the
+// file was skipped and that a variant entry in the registry is the remedy.
+func TestRunLinkSkipsVariantlessFile(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Registered file whose only variant belongs to a different machine.
+	homePath := filepath.Join(homeDir, ".testrc")
+	reg := &config.Registry{Files: []config.ManagedFile{{
+		Path: homePath,
+		Variants: []config.Variant{{
+			Branch: "some-other-machine", RepoPath: ".testrc.some-other-machine",
+		}},
+	}}}
+	if err := config.SaveRegistry(workDir, reg); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	var stderr string
+	captureStdout(func() {
+		stderr = captureStderr(func() {
+			if err := runLink(homeDir, cfg, true, strings.NewReader(""), statePath); err != nil {
+				t.Errorf("runLink must succeed and skip the variantless file, got: %v", err)
+			}
+		})
+	})
+
+	// The file is skipped: nothing is created at its home path.
+	if _, err := os.Lstat(homePath); !os.IsNotExist(err) {
+		t.Errorf("Lstat(%s) err = %v, want IsNotExist — no symlink may be created for a variantless file", homePath, err)
+	}
+
+	// The message states the reason (which file, which branch) and the remedy
+	// (a variant entry for this branch in the registry).
+	wantMsg := fmt.Sprintf(
+		"link %s: no variant for branch %q — skipping (add a variant for this branch to %s to manage the file here)",
+		homePath, testBranch, managedTOMLPath)
+	if !strings.Contains(stderr, wantMsg) {
+		t.Errorf("stderr = %q\nwant it to contain %q", stderr, wantMsg)
 	}
 }

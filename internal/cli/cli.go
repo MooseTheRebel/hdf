@@ -1215,8 +1215,8 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 			continue
 		}
 		if repoFile == "" {
-			fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — run: hdf changes-push --variant %s\n",
-				f.Path, cfg.Branch, f.Path)
+			fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — skipping (add a variant for this branch to %s to manage the file here)\n",
+				f.Path, cfg.Branch, managedTOMLPath)
 			continue
 		}
 		if err := link.Link(expanded, repoFile); err != nil {

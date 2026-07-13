@@ -140,6 +140,9 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	if err != nil {
 		return 0, fmt.Errorf("loading state: %w", err)
 	}
+	// Snapshot the loaded values before this cycle mutates state; the final
+	// save uses it to detect fields changed by concurrent processes.
+	loadedSnapshot := *state
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return 0, fmt.Errorf("opening repo at %s: %w", cfg.LocalDotfilesDir, err)
@@ -195,15 +198,28 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 		return 0, fmt.Errorf("pushing branch %s: %w", cfg.Branch, err)
 	}
 
-	// Persist only the fields this sync cycle owns, under the state lock, so
-	// warnings appended concurrently (by the CLI or addWarning) are not lost
-	// to a stale in-memory snapshot.
-	return interval, config.UpdateState(statePath, func(s *config.State) error {
+	// Persist this cycle's results under the state lock, without clobbering
+	// anything other processes wrote during the (long) fetch/push window.
+	return interval, config.UpdateState(statePath, mergeSyncResults(&loadedSnapshot, state))
+}
+
+// mergeSyncResults returns an UpdateState callback that writes a sync cycle's
+// computed results with per-field compare-and-swap semantics: a field is only
+// written if its on-disk value still matches what this cycle loaded at the
+// start. That way a concurrent writer — e.g. `hdf promote` recording the just-
+// pushed main SHA via recordMainCommit — wins over this cycle's stale view,
+// and the daemon does not re-notify the user about their own promote.
+func mergeSyncResults(loaded, computed *config.State) func(*config.State) error {
+	return func(s *config.State) error {
 		s.LastSync = time.Now()
-		s.LastMainCommit = state.LastMainCommit
-		s.LastNotifiedAt = state.LastNotifiedAt
+		if s.LastMainCommit == loaded.LastMainCommit {
+			s.LastMainCommit = computed.LastMainCommit
+		}
+		if s.LastNotifiedAt.Equal(loaded.LastNotifiedAt) {
+			s.LastNotifiedAt = computed.LastNotifiedAt
+		}
 		return nil
-	})
+	}
 }
 
 // checkMainProgress notifies if main has advanced past the last known commit and

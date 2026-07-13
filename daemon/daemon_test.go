@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestGenerateUnifiedDiff(t *testing.T) {
@@ -892,5 +893,86 @@ func TestSyncPushFailureNotifiesOncePerCooldown(t *testing.T) {
 	}
 	if pushWarnings != 1 {
 		t.Errorf("push-failure warnings = %d, want 1", pushWarnings)
+	}
+}
+
+const fetchedSHA = "fetched-sha"
+
+// TestMergeSyncResultsPreservesConcurrentWrites verifies the daemon's final
+// state save does not clobber fields another process changed during the sync
+// cycle: a `hdf promote` recording LastMainCommit between the daemon's load
+// and save must survive (the exact lost-update flagged in PR #34 review).
+func TestMergeSyncResultsPreservesConcurrentWrites(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	// On-disk state at the start of the daemon's cycle.
+	if err := config.SaveState(statePath, &config.State{LastMainCommit: "old-sha"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedSnapshot := *loaded
+
+	// The daemon computes new values during the cycle (checkMainProgress).
+	computed := *loaded
+	computed.LastMainCommit = fetchedSHA
+	computed.LastNotifiedAt = time.Now()
+
+	// Meanwhile the CLI promotes and records the freshly pushed main SHA.
+	if err := config.UpdateState(statePath, func(s *config.State) error {
+		s.LastMainCommit = "promote-sha"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Daemon's final save.
+	if err := config.UpdateState(statePath, mergeSyncResults(&loadedSnapshot, &computed)); err != nil {
+		t.Fatal(err)
+	}
+
+	final, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.LastMainCommit != "promote-sha" {
+		t.Errorf("LastMainCommit = %q, want %q — daemon clobbered the CLI's concurrent promote record",
+			final.LastMainCommit, "promote-sha")
+	}
+	if final.LastSync.IsZero() {
+		t.Error("LastSync should be set by the daemon's save")
+	}
+	if !final.LastNotifiedAt.Equal(computed.LastNotifiedAt) {
+		t.Errorf("LastNotifiedAt = %v, want computed %v (no concurrent writer touched it)",
+			final.LastNotifiedAt, computed.LastNotifiedAt)
+	}
+}
+
+// TestMergeSyncResultsWritesOwnFieldsWhenUncontended verifies the normal case:
+// nothing else wrote during the cycle, so the daemon's computed values land.
+func TestMergeSyncResultsWritesOwnFieldsWhenUncontended(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SaveState(statePath, &config.State{LastMainCommit: "old-sha"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedSnapshot := *loaded
+	computed := *loaded
+	computed.LastMainCommit = fetchedSHA
+
+	if err := config.UpdateState(statePath, mergeSyncResults(&loadedSnapshot, &computed)); err != nil {
+		t.Fatal(err)
+	}
+	final, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.LastMainCommit != fetchedSHA {
+		t.Errorf("LastMainCommit = %q, want fetchedSHA", final.LastMainCommit)
 	}
 }
