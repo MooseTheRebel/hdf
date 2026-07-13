@@ -61,7 +61,13 @@ Binaries built by hand with `go build` say `dev` instead.
 ## Trying a release build without publishing anything
 
 If you want to check that release builds still work (for example after
-changing dependencies), run this locally:
+changing dependencies), you can run the same build locally. You need two
+things installed:
+
+- the `goreleaser` tool: `go install github.com/goreleaser/goreleaser/v2@latest`
+- Node.js and npm (the build compiles the frontend first)
+
+Then run:
 
 ```bash
 goreleaser release --snapshot --clean
