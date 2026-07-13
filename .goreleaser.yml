@@ -1,0 +1,61 @@
+# GoReleaser configuration for hdf.
+# Docs: https://goreleaser.com
+# Validate with: goreleaser check
+# Test locally without publishing:
+#   go install github.com/goreleaser/goreleaser/v2@latest
+#   goreleaser release --snapshot --clean
+version: 2
+
+project_name: hdf
+
+before:
+  hooks:
+    # The binary embeds frontend/dist (see main.go), so the frontend must be
+    # built before Go compilation.
+    - npm --prefix frontend ci
+    - npm --prefix frontend run build
+
+builds:
+  - main: .
+    binary: hdf
+    env:
+      # The CLI builds fully static without cgo, which is what makes
+      # cross-compiling all four targets from one Linux runner possible.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X hdf/internal/cli.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - docs/*.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev-{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^test"
+      - "^ci:"
+      - "^chore"
+
+release:
+  # Tags containing a hyphenated suffix (v1.0.0-rc.1, v1.0.0-beta.2, …) are
+  # automatically published as GitHub pre-releases; plain tags (v1.0.0) become
+  # full releases. See docs/creating-releases.md.
+  prerelease: auto

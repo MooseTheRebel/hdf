@@ -1,0 +1,33 @@
+name: Release
+
+# Runs whenever a version tag (v1.2.3 or v1.2.3-rc.1) is pushed.
+# Builds binaries for macOS and Linux (amd64 + arm64) and attaches them,
+# with checksums, to a GitHub release. See docs/creating-releases.md.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so goreleaser can generate the changelog.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
