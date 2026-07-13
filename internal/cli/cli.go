@@ -1516,10 +1516,16 @@ func launchGUI(diffURLs []string) {
 	}
 }
 
+// version is the release version shown by `hdf --version`. It is injected at
+// build time by goreleaser via -ldflags "-X hdf/internal/cli.version=...";
+// plain `go build` binaries report "dev".
+var version = "dev"
+
 // Execute runs the hdf CLI. frontendAssets is the embedded frontend bundle,
 // passed in by package main. Exits the process with status 1 on error.
 func Execute(frontendAssets embed.FS) {
 	assets = frontendAssets
+	rootCmd.Version = version
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
