@@ -272,6 +272,11 @@ func countDrift(reg *config.Registry, cfg *config.Config, r *repo.Repo, homeDir 
 
 // fileDrift returns the hunk count for a single managed file.
 func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir string) int {
+	variant, res := f.ResolveVariant(cfg.Branch)
+	if res == config.VariantNoBranchMatch {
+		return 0 // no variant for this branch — not managed here, not drift
+	}
+
 	expanded := config.ExpandPathIn(f.Path, homeDir)
 
 	info, err := os.Stat(expanded)
@@ -287,19 +292,29 @@ func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir s
 		return 1
 	}
 
-	registryHash := resolveHash(f, cfg.Branch)
+	registryHash := f.Hash
+	if res == config.VariantMatch {
+		registryHash = variant.Hash
+	}
 	diskHash, _ := link.HashFile(expanded)
 	if diskHash == registryHash {
 		return 0 // file is clean
 	}
 
-	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
-	if err != nil {
-		return 0
-	}
-	rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
-	if err != nil {
-		return 0
+	// Matched variants live at the variant's own repo path; canonical files
+	// at the path mirroring their location under $HOME.
+	var rel string
+	if res == config.VariantMatch {
+		rel = variant.RepoPath
+	} else {
+		repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+		if err != nil {
+			return 0
+		}
+		rel, err = filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
+		if err != nil {
+			return 0
+		}
 	}
 
 	committedBytes, err := r.ReadFileFromBranch(cfg.Branch, filepath.ToSlash(rel))
@@ -308,17 +323,6 @@ func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir s
 	}
 
 	return countHunks(string(committedBytes), string(diskBytes))
-}
-
-// resolveHash returns the hash for f on the given branch, falling back to the
-// base hash when no branch-specific variant exists.
-func resolveHash(f config.ManagedFile, branch string) string {
-	for _, v := range f.Variants {
-		if v.Branch == branch {
-			return v.Hash
-		}
-	}
-	return f.Hash
 }
 
 const contextLines = 3

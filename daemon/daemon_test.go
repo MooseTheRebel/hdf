@@ -976,3 +976,87 @@ func TestMergeSyncResultsWritesOwnFieldsWhenUncontended(t *testing.T) {
 		t.Errorf("LastMainCommit = %q, want fetchedSHA", final.LastMainCommit)
 	}
 }
+
+// TestFileDriftNoVariantForBranch verifies that a variant-managed file with
+// no variant for the current branch is not counted as drift: it is not
+// managed on this machine (previously the hash fallback made it
+// count as one drift hunk on every sync).
+func TestFileDriftNoVariantForBranch(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The file exists on disk with real content.
+	homePath := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(homePath, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := config.ManagedFile{
+		Path: homePath,
+		Variants: []config.Variant{
+			{Branch: "some-other-machine", RepoPath: ".testrc.other", Hash: "abc"},
+		},
+	}
+	cfg := &config.Config{Branch: "this-machine", LocalDotfilesDir: workDir}
+
+	if got := fileDrift(f, cfg, r, homeDir); got != 0 {
+		t.Errorf("fileDrift = %d, want 0 — a file with no variant for this branch is not drift", got)
+	}
+}
+
+// TestFileDriftMatchedVariantUsesVariantPath verifies the content diff for a
+// matched variant file reads the variant's repo path, not the canonical
+// mirror path. Disk content equals the committed variant content here, so
+// drift must be 0 even though the registry hash is stale — reading the
+// canonical path instead would find nothing and miscount it as drift.
+func TestFileDriftMatchedVariantUsesVariantPath(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
+		t.Fatal(err)
+	}
+	const branch = "this-machine"
+	if err := r.CreateAndCheckoutBranch(branch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Variant content committed at the variant-specific repo path.
+	content := []byte("line1\nline2\n")
+	variantRepoPath := ".testrc." + branch
+	if err := os.WriteFile(filepath.Join(workDir, variantRepoPath), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(variantRepoPath, "variant content"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Disk file matches the committed variant content exactly.
+	homePath := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(homePath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := config.ManagedFile{
+		Path: homePath,
+		Variants: []config.Variant{
+			// Stale hash forces the content-diff path.
+			{Branch: branch, RepoPath: variantRepoPath, Hash: "stale-hash"},
+		},
+	}
+	cfg := &config.Config{Branch: branch, LocalDotfilesDir: workDir}
+
+	if got := fileDrift(f, cfg, r, homeDir); got != 0 {
+		t.Errorf("fileDrift = %d, want 0 — disk matches the committed variant content", got)
+	}
+}

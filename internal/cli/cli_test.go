@@ -3474,3 +3474,110 @@ func TestRunLinkSkipsVariantlessFile(t *testing.T) {
 		t.Errorf("stderr = %q\nwant it to contain %q", stderr, wantMsg)
 	}
 }
+
+// TestFileStatus verifies per-file status labels, in particular that a
+// variant-managed file with no variant for this branch is reported as its own
+// state instead of false "CHANGED (uncommitted)" drift .
+func TestFileStatus(t *testing.T) {
+	const otherMachine = "other-machine"
+	homeDir := t.TempDir()
+	onDisk := filepath.Join(homeDir, ".testrc")
+	content := []byte("some content\n")
+	if err := os.WriteFile(onDisk, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contentHash := link.HashBytes(content)
+
+	cases := []struct {
+		desc string
+		file config.ManagedFile
+		want string
+	}{
+		{
+			desc: "variants exist but none for this branch",
+			file: config.ManagedFile{Path: tildeTestRC, Variants: []config.Variant{
+				{Branch: otherMachine, RepoPath: ".testrc.other", Hash: "whatever"},
+			}},
+			want: statusNoVariant,
+		},
+		{
+			desc: "non-variant file in sync",
+			file: config.ManagedFile{Path: tildeTestRC, Hash: contentHash},
+			want: "ok",
+		},
+		{
+			desc: "non-variant file with local edits",
+			file: config.ManagedFile{Path: tildeTestRC, Hash: "stale-hash"},
+			want: "CHANGED (uncommitted)",
+		},
+		{
+			desc: "matching variant in sync",
+			file: config.ManagedFile{Path: tildeTestRC, Variants: []config.Variant{
+				{Branch: testBranch, RepoPath: ".testrc." + testBranch, Hash: contentHash},
+			}},
+			want: "ok",
+		},
+		{
+			desc: "file missing from disk",
+			file: config.ManagedFile{Path: "~/.does-not-exist", Hash: "x"},
+			want: "missing",
+		},
+		{
+			desc: "variantless file missing from disk still reports no variant",
+			file: config.ManagedFile{Path: "~/.does-not-exist", Variants: []config.Variant{
+				{Branch: otherMachine, RepoPath: ".x", Hash: "y"},
+			}},
+			want: statusNoVariant,
+		},
+	}
+	for _, tc := range cases {
+		if got := fileStatus(tc.file, testBranch, homeDir); got != tc.want {
+			t.Errorf("%s: fileStatus = %q, want %q", tc.desc, got, tc.want)
+		}
+	}
+}
+
+// TestResolveRepoPathRejectsTraversal verifies that a variant RepoPath from
+// the shared registry cannot escape the dotfiles repository. managed.toml is
+// written by other machines, so a hostile entry like "../../evil" must be
+// rejected rather than resolved to a path outside the repo (where a later
+// changes-pull accept would write attacker-controlled content).
+func TestResolveRepoPathRejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(repoPath string) config.ManagedFile {
+		return config.ManagedFile{Path: "~/.testrc", Variants: []config.Variant{
+			{Branch: testBranch, RepoPath: repoPath},
+		}}
+	}
+
+	cases := []struct {
+		desc     string
+		repoPath string
+		wantErr  bool
+		wantPath string
+	}{
+		{"plain filename", ".testrc.machine", false, filepath.Join(dir, ".testrc.machine")},
+		{"nested path", "sub/dir/.testrc", false, filepath.Join(dir, "sub", "dir", ".testrc")},
+		{"filename starting with dots is fine", "..testrc", false, filepath.Join(dir, "..testrc")},
+		{"parent traversal", "../evil", true, ""},
+		{"deep traversal", "../../../etc/passwd", true, ""},
+		{"sneaky mid-path traversal", "sub/../../evil", true, ""},
+		{"absolute path", "/etc/passwd", true, ""},
+	}
+	for _, tc := range cases {
+		got, err := resolveRepoPath(mk(tc.repoPath), testBranch, dir)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%s: want error for RepoPath %q, got path %q", tc.desc, tc.repoPath, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", tc.desc, err)
+			continue
+		}
+		if got != tc.wantPath {
+			t.Errorf("%s: path = %q, want %q", tc.desc, got, tc.wantPath)
+		}
+	}
+}

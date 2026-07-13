@@ -39,6 +39,37 @@ type ManagedFile struct {
 	Variants []Variant `toml:"variants,omitempty"`
 }
 
+// VariantResolution classifies how a managed file's content resolves for a
+// given machine branch.
+type VariantResolution int
+
+const (
+	// VariantNone means the file has no variants; the canonical entry applies.
+	VariantNone VariantResolution = iota
+	// VariantMatch means the file has a variant for this branch.
+	VariantMatch
+	// VariantNoBranchMatch means the file has variants but none for this
+	// branch — it is not managed on this machine (not drift, not missing).
+	VariantNoBranchMatch
+)
+
+// ResolveVariant returns the variant for branch and how it resolved. The
+// returned Variant is only meaningful when the resolution is VariantMatch.
+// status, changes-pull, and the daemon's drift counting all resolve variants
+// through this helper so they agree on what "no variant for this branch"
+// means.
+func (f ManagedFile) ResolveVariant(branch string) (Variant, VariantResolution) {
+	if len(f.Variants) == 0 {
+		return Variant{}, VariantNone
+	}
+	for _, v := range f.Variants {
+		if v.Branch == branch {
+			return v, VariantMatch
+		}
+	}
+	return Variant{}, VariantNoBranchMatch
+}
+
 // Variant describes a machine-specific mapping for a managed file.
 // Branch must match cfg.Branch exactly (1:1).
 type Variant struct {
