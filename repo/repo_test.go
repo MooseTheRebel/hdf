@@ -1,13 +1,20 @@
 package repo
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+)
+
+const (
+	testFile        = "f.txt"
+	testManagedTOML = ".hdf/managed.toml"
 )
 
 func TestAddRemote(t *testing.T) {
@@ -175,10 +182,10 @@ func TestHasNewCommitsOnMain(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("a"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testFile), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sha1, _ := r.CommitFile("f.txt", "first")
+	sha1, _ := r.CommitFile(testFile, "first")
 
 	// Tracked at sha1; no new commits yet
 	behind, err := r.HasNewCommitsOnMain(sha1)
@@ -190,10 +197,10 @@ func TestHasNewCommitsOnMain(t *testing.T) {
 	}
 
 	// Add a second commit
-	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("b"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testFile), []byte("b"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = r.CommitFile("f.txt", "second")
+	_, _ = r.CommitFile(testFile, "second")
 
 	// Now main is ahead of our tracked sha1
 	behind, err = r.HasNewCommitsOnMain(sha1)
@@ -274,7 +281,7 @@ func TestCommitFilesToBranch(t *testing.T) {
 	// Write two files to main without touching the working tree.
 	sha, err := r.CommitFilesToBranch("main", []BranchFile{
 		{RepoRelPath: "stub.txt", Content: []byte{}},
-		{RepoRelPath: ".hdf/managed.toml", Content: []byte("[files]\n")},
+		{RepoRelPath: testManagedTOML, Content: []byte("[files]\n")},
 	}, "hdf: register baseline")
 	if err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
@@ -386,10 +393,10 @@ func TestHasUnpushedCommits(t *testing.T) {
 	}
 
 	// Initial commit on main
-	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("init"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testFile), []byte("init"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.CommitFile("f.txt", "initial"); err != nil {
+	if _, err := r.CommitFile(testFile, "initial"); err != nil {
 		t.Fatalf("initial commit: %v", err)
 	}
 
@@ -409,10 +416,10 @@ func TestHasUnpushedCommits(t *testing.T) {
 	}
 
 	// Commit something on hostname branch
-	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("change"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testFile), []byte("change"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.CommitFile("f.txt", "hostname change"); err != nil {
+	if _, err := r.CommitFile(testFile, "hostname change"); err != nil {
 		t.Fatalf("hostname commit: %v", err)
 	}
 
@@ -616,5 +623,769 @@ func TestFastForwardFromMain(t *testing.T) {
 	}
 	if head != mainSHA {
 		t.Errorf("HEAD = %s, want %s", head, mainSHA)
+	}
+}
+
+func TestIsCleanForPromote(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(dir, "dot.txt")
+	if err := os.WriteFile(f, []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("dot.txt", "add"); err != nil {
+		t.Fatal(err)
+	}
+
+	// No uncommitted changes — should be clean.
+	clean, err := r.IsCleanForPromote()
+	if err != nil {
+		t.Fatalf("IsCleanForPromote: %v", err)
+	}
+	if !clean {
+		t.Error("want clean after commit, got dirty")
+	}
+
+	// Modify the file without committing — should be dirty.
+	if err := os.WriteFile(f, []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err := r.IsCleanForPromote()
+	if err != nil {
+		t.Fatalf("IsCleanForPromote: %v", err)
+	}
+	if dirty {
+		t.Error("want dirty after uncommitted change, got clean")
+	}
+}
+
+func TestMergeIntoBranch(t *testing.T) {
+	// Set up a repo with a commit on main, then create a machine branch with
+	// one more commit. MergeIntoBranch("main", nil) should fast-forward main.
+	bareDir := t.TempDir()
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("base.txt", "base commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AddRemote("origin", bareURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "extra.txt"), []byte("extra\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := r.CommitFile("extra.txt", "machine commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// machine branch is ahead of main — MergeIntoBranch should fast-forward main.
+	if err := r.MergeIntoBranch("main", nil); err != nil {
+		t.Fatalf("MergeIntoBranch: %v", err)
+	}
+
+	mainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA: %v", err)
+	}
+	if mainSHA != sha {
+		t.Errorf("main SHA = %s, want %s", mainSHA, sha)
+	}
+}
+
+// TestMergeIntoBranchDivergedCreatesMergeCommit verifies that when branches have
+// diverged, MergeIntoBranch creates a merge commit using the machine branch's tree
+// (equivalent to `git merge -X theirs`) without touching the working tree.
+func TestMergeIntoBranchDivergedCreatesMergeCommit(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Initial commit on main.
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("a.txt", "main commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Commit on machine branch with real content for b.txt.
+	if err := os.WriteFile(filepath.Join(workDir, "b.txt"), []byte("b-real\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	machineSHA, err := r.CommitFile("b.txt", "machine commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Commit on main independently (diverge) with a placeholder for b.txt.
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "b.txt", Content: []byte("")},
+	}, "main-only commit"); err != nil {
+		t.Fatal(err)
+	}
+
+	// MergeIntoBranch should succeed and create a merge commit.
+	if err := r.MergeIntoBranch("main", nil); err != nil {
+		t.Fatalf("MergeIntoBranch diverged: %v", err)
+	}
+
+	// main should now point to a new merge commit descended from both branches.
+	mainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA main: %v", err)
+	}
+	if mainSHA == machineSHA {
+		t.Error("main should be a new merge commit, not just the machine branch tip")
+	}
+
+	// The merge commit's tree should reflect the machine branch content (b-real).
+	mainCommit, err := r.r.CommitObject(plumbing.NewHash(mainSHA))
+	if err != nil {
+		t.Fatalf("CommitObject: %v", err)
+	}
+	if len(mainCommit.ParentHashes) != 2 {
+		t.Errorf("merge commit should have 2 parents, got %d", len(mainCommit.ParentHashes))
+	}
+	// Tree should have b.txt with machine-branch content.
+	tree, err := mainCommit.Tree()
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	f, err := tree.File("b.txt")
+	if err != nil {
+		t.Fatalf("tree.File b.txt: %v", err)
+	}
+	content, err := f.Contents()
+	if err != nil {
+		t.Fatalf("file contents: %v", err)
+	}
+	if content != "b-real\n" {
+		t.Errorf("b.txt content = %q, want %q", content, "b-real\n")
+	}
+}
+
+// TestMergeIntoBranchPreservesMainOnlyFiles verifies that when branches have
+// diverged, MergeIntoBranch keeps files that exist only on main (e.g. dotfiles
+// promoted by other machines) instead of silently deleting them.
+func TestMergeIntoBranchPreservesMainOnlyFiles(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Initial commit on main: shared.txt
+	if err := os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("shared\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("shared.txt", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	// Create machine branch from main.
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Machine adds machine-only.txt (diverges from main).
+	if err := os.WriteFile(filepath.Join(workDir, "machine-only.txt"), []byte("machine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("machine-only.txt", "machine adds file"); err != nil {
+		t.Fatal(err)
+	}
+	// Main independently adds main-only.txt (another machine promoted it).
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "main-only.txt", Content: []byte("main-only\n")},
+	}, "other machine promotes file"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.MergeIntoBranch("main", nil); err != nil {
+		t.Fatalf("MergeIntoBranch: %v", err)
+	}
+
+	// machine-only.txt must be present with machine content.
+	got, err := r.ReadFileFromBranch("main", "machine-only.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch machine-only.txt: %v", err)
+	}
+	if string(got) != "machine\n" {
+		t.Errorf("machine-only.txt = %q, want %q", string(got), "machine\n")
+	}
+
+	// main-only.txt must survive — this is the regression this test guards.
+	got, err = r.ReadFileFromBranch("main", "main-only.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch main-only.txt: %v", err)
+	}
+	if string(got) != "main-only\n" {
+		t.Errorf("main-only.txt = %q, want %q (must be preserved from main)", string(got), "main-only\n")
+	}
+}
+
+// TestMergeIntoBranchDivergedParentOrder verifies that when a diverged merge
+// commit is written to main, main's previous HEAD is parent[0] so that
+// git log --first-parent traces main's own history, not the machine branch.
+func TestMergeIntoBranchDivergedParentOrder(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("a.txt", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("b.txt", "machine commit"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "c.txt", Content: []byte("c\n")},
+	}, "main-only commit"); err != nil {
+		t.Fatal(err)
+	}
+
+	prevMainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA before merge: %v", err)
+	}
+
+	if err := r.MergeIntoBranch("main", nil); err != nil {
+		t.Fatalf("MergeIntoBranch: %v", err)
+	}
+
+	mainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatalf("BranchSHA after merge: %v", err)
+	}
+	mergeCommit, err := r.r.CommitObject(plumbing.NewHash(mainSHA))
+	if err != nil {
+		t.Fatalf("CommitObject: %v", err)
+	}
+	if len(mergeCommit.ParentHashes) != 2 {
+		t.Fatalf("expected 2 parents, got %d", len(mergeCommit.ParentHashes))
+	}
+	// parent[0] must be main's previous HEAD so git log --first-parent
+	// follows main's own lineage, not the machine branch.
+	if mergeCommit.ParentHashes[0].String() != prevMainSHA {
+		t.Errorf("parent[0] = %s, want main's prev HEAD %s",
+			mergeCommit.ParentHashes[0].String(), prevMainSHA)
+	}
+}
+
+// TestPushNonFastForwardReturnsTypedError verifies that Push wraps a remote
+// non-fast-forward rejection in the typed ErrNonFastForwardUpdate sentinel.
+func TestPushNonFastForwardReturnsTypedError(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	// Repo A: init, commit v1, push to bare.
+	dirA := t.TempDir()
+	repoA, err := Init(dirA)
+	if err != nil {
+		t.Fatalf("Init A: %v", err)
+	}
+	if err := repoA.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("AddRemote A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirA, testFile), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repoA.CommitFile(testFile, "A: v1"); err != nil {
+		t.Fatalf("CommitFile A v1: %v", err)
+	}
+	if err := repoA.Push("main"); err != nil {
+		t.Fatalf("Push A v1: %v", err)
+	}
+
+	// Repo B: clone, commit v2, push — advancing bare past A's commit.
+	dirB := t.TempDir()
+	repoB, err := Clone(bareURL, dirB)
+	if err != nil {
+		t.Fatalf("Clone B: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, testFile), []byte("v2-B"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repoB.CommitFile(testFile, "B: v2"); err != nil {
+		t.Fatalf("CommitFile B v2: %v", err)
+	}
+	if err := repoB.Push("main"); err != nil {
+		t.Fatalf("Push B v2: %v", err)
+	}
+
+	// Repo A: commit something new on top of its own v1 (without pulling B's changes).
+	if err := os.WriteFile(filepath.Join(dirA, testFile), []byte("v2-A"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repoA.CommitFile(testFile, "A: v2"); err != nil {
+		t.Fatalf("CommitFile A v2: %v", err)
+	}
+
+	// Push should fail with a typed ErrNonFastForwardUpdate.
+	err = repoA.Push("main")
+	if err == nil {
+		t.Fatal("expected non-fast-forward error, got nil")
+	}
+	if !errors.Is(err, ErrNonFastForwardUpdate) {
+		t.Errorf("errors.Is(err, ErrNonFastForwardUpdate) = false; got: %v", err)
+	}
+}
+
+// TestIsNonFastForwardErr verifies the detection helper against various error
+// message formats, including the sentinel and hypothetical future prefixes.
+func TestIsNonFastForwardErr(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		desc string
+		err  error
+		want bool
+	}{
+		{"current go-git push format", fmt.Errorf("non-fast-forward update: refs/heads/main"), true},
+		{"bare sentinel message", errors.New("non-fast-forward update"), true},
+		{"go-git ErrNonFastForwardUpdate sentinel", git.ErrNonFastForwardUpdate, true},
+		{"hypothetical remote-prefix format", fmt.Errorf("remote: non-fast-forward update: refs/heads/main"), true},
+		{"unrelated error", errors.New("some other error"), false},
+		{"empty error", errors.New(""), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			if got := isNonFastForwardErr(tc.err); got != tc.want {
+				t.Errorf("isNonFastForwardErr(%q) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResetBranchToRemote(t *testing.T) {
+	bareDir := t.TempDir()
+	bareURL := "file://" + bareDir
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := r.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("AddRemote: %v", err)
+	}
+
+	// Commit v1 to local main and push so origin/main tracking ref exists.
+	f := filepath.Join(dir, testFile)
+	if err := os.WriteFile(f, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(testFile, "v1"); err != nil {
+		t.Fatalf("CommitFile v1: %v", err)
+	}
+	if err := r.Push("main"); err != nil {
+		t.Fatalf("Push v1: %v", err)
+	}
+
+	// Advance local main to v2 WITHOUT pushing.
+	if err := os.WriteFile(f, []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(testFile, "v2"); err != nil {
+		t.Fatalf("CommitFile v2: %v", err)
+	}
+
+	// Verify local main differs from origin/main before reset.
+	localBytes, err := r.ReadFileFromBranch("main", testFile)
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch before reset: %v", err)
+	}
+	remoteBytes, err := r.ReadFileFromRemoteBranch("origin", "main", testFile)
+	if err != nil {
+		t.Fatalf("ReadFileFromRemoteBranch before reset: %v", err)
+	}
+	if string(localBytes) == string(remoteBytes) {
+		t.Fatal("setup error: local and remote main should differ before reset")
+	}
+
+	// Reset.
+	if err := r.ResetBranchToRemote("main", "origin"); err != nil {
+		t.Fatalf("ResetBranchToRemote: %v", err)
+	}
+
+	// After reset local main should match origin/main.
+	localBytes, err = r.ReadFileFromBranch("main", testFile)
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch after reset: %v", err)
+	}
+	if string(localBytes) != string(remoteBytes) {
+		t.Errorf("after reset: local main = %q, want %q", localBytes, remoteBytes)
+	}
+}
+
+func TestResetBranchToRemoteAfterFailedPush(t *testing.T) {
+	bareDir := t.TempDir()
+	bareURL := "file://" + bareDir
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+
+	// Repo A: init, seed bare with an initial commit.
+	dirA := t.TempDir()
+	rA, err := Init(dirA)
+	if err != nil {
+		t.Fatalf("Init A: %v", err)
+	}
+	if err := rA.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("AddRemote A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirA, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rA.CommitFile("seed.txt", "seed"); err != nil {
+		t.Fatalf("CommitFile seed: %v", err)
+	}
+	if err := rA.Push("main"); err != nil {
+		t.Fatalf("Push seed: %v", err)
+	}
+
+	// Clone B: gets the seeded state. Commits to local main (simulating guard-2-passing promote).
+	dirB := filepath.Join(t.TempDir(), "repoB")
+	rB, err := Clone(bareURL, dirB)
+	if err != nil {
+		t.Fatalf("Clone B: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, "b.txt"), []byte("B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rB.CommitFile("b.txt", "B advances main"); err != nil {
+		t.Fatalf("CommitFile B: %v", err)
+	}
+
+	// Record origin/main tracking ref before the race (reflects seeded state).
+	remoteBytes, err := rB.ReadFileFromRemoteBranch("origin", "main", "seed.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromRemoteBranch before race: %v", err)
+	}
+
+	// Race: A pushes to bare AFTER B's local advance but BEFORE B pushes.
+	if err := os.WriteFile(filepath.Join(dirA, "a.txt"), []byte("A\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rA.CommitFile("a.txt", "A races"); err != nil {
+		t.Fatalf("CommitFile A race: %v", err)
+	}
+	if err := rA.Push("main"); err != nil {
+		t.Fatalf("A Push (race): %v", err)
+	}
+
+	// B's push fails: bare main has A's race commit, B's local main has its extra commit.
+	pushErr := rB.Push("main")
+	if !errors.Is(pushErr, ErrNonFastForwardUpdate) {
+		t.Fatalf("expected ErrNonFastForwardUpdate, got: %v", pushErr)
+	}
+
+	// Rollback: reset local main to origin/main.
+	if err := rB.ResetBranchToRemote("main", "origin"); err != nil {
+		t.Fatalf("ResetBranchToRemote: %v", err)
+	}
+
+	// After rollback, local main should match origin/main tracking ref (pre-race state).
+	localBytes, err := rB.ReadFileFromBranch("main", "seed.txt")
+	if err != nil {
+		t.Fatalf("ReadFileFromBranch after rollback: %v", err)
+	}
+	if string(localBytes) != string(remoteBytes) {
+		t.Errorf("after rollback: local main seed.txt = %q, want %q", localBytes, remoteBytes)
+	}
+	// B's extra commit (b.txt) should no longer be on local main.
+	bBytes, _ := rB.ReadFileFromBranch("main", "b.txt")
+	if len(bBytes) > 0 {
+		t.Error("after rollback: b.txt should not be on local main")
+	}
+}
+
+// TestMergeIntoBranchRefusesWhenMachineDeletedFile verifies that MergeIntoBranch
+// returns an error when the machine branch deleted a file that still exists on
+// main, rather than silently merging and losing the deletion signal.
+func TestMergeIntoBranchRefusesWhenMachineDeletedFile(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Initial commit: both files present on main.
+	for _, name := range []string{"shared.txt", "to-unenroll.txt"} {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte(name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.CommitFile(name, "add "+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Machine unenrolls to-unenroll.txt — deletes it from the branch.
+	w, err := r.r.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Remove("to-unenroll.txt"); err != nil {
+		t.Fatalf("w.Remove: %v", err)
+	}
+	if _, err := r.CommitStaged("machine: unenroll to-unenroll.txt"); err != nil {
+		t.Fatalf("CommitStaged: %v", err)
+	}
+	// Main diverges independently (to-unenroll.txt still exists there).
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "shared.txt", Content: []byte("updated\n")},
+	}, "main: update shared"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = r.MergeIntoBranch("main", nil)
+	if err == nil {
+		t.Fatal("expected error when machine deleted a file that still exists on main, got nil")
+	}
+	if !strings.Contains(err.Error(), "to-unenroll.txt") {
+		t.Errorf("error = %q, want mention of deleted file", err.Error())
+	}
+}
+
+// TestMergeIntoBranchReturnsErrorOnTypeConflict verifies that when the machine
+// branch has a regular file at a path that main has as a directory (or vice
+// versa), MergeIntoBranch returns an error rather than silently discarding the
+// directory's contents.
+func TestMergeIntoBranchReturnsErrorOnTypeConflict(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("base.txt", "initial commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Machine branch: "config" is a regular file.
+	if err := os.WriteFile(filepath.Join(workDir, "config"), []byte("key=value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("config", "machine: add config file"); err != nil {
+		t.Fatal(err)
+	}
+	// Main: "config" is a directory containing "settings".
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "config/settings", Content: []byte("setting=foo\n")},
+	}, "main: add config dir"); err != nil {
+		t.Fatal(err)
+	}
+
+	// MergeIntoBranch must return an error — silently discarding one side's
+	// content ("config" directory on main, or "config" file on machine) would
+	// cause data loss with no user-visible indication.
+	err = r.MergeIntoBranch("main", nil)
+	if err == nil {
+		t.Fatal("MergeIntoBranch should return an error for a file/directory type conflict, got nil")
+	}
+	if !strings.Contains(err.Error(), "conflicting types") {
+		t.Errorf("error = %q, want 'conflicting types'", err.Error())
+	}
+}
+
+// TestBranchHistoryHasFileContent verifies the helper that answers "has this
+// branch ever carried exactly this content at this path?" — used by promote
+// to distinguish main content this machine has seen from foreign content.
+func TestBranchHistoryHasFileContent(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(workDir, testFile)
+	if err := os.WriteFile(f, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(testFile, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f, []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(testFile, "v2"); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		desc    string
+		path    string
+		content string
+		want    bool
+	}{
+		{"current tip content", testFile, "v2\n", true},
+		{"older content still in history", testFile, "v1\n", true},
+		{"content never on branch", testFile, "v3\n", false},
+		{"path never on branch", "missing.txt", "v1\n", false},
+	}
+	for _, tc := range cases {
+		got, err := r.BranchHistoryHasFileContent("machine", tc.path, []byte(tc.content))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.desc, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.desc, got, tc.want)
+		}
+	}
+}
+
+// TestMergeIntoBranchPreferTheirs verifies that per-path PreferTheirs overrides
+// the default ours-wins rule, including for nested paths.
+func TestMergeIntoBranchPreferTheirs(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("a.txt", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	// Machine branch versions.
+	if err := os.WriteFile(filepath.Join(workDir, "keep.txt"), []byte("machine-keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("keep.txt", "machine keep"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workDir, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "nested", "defer.txt"), []byte("machine-defer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("nested/defer.txt", "machine defer"); err != nil {
+		t.Fatal(err)
+	}
+	// Main diverges with its own versions of both files.
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: "keep.txt", Content: []byte("main-keep\n")},
+		{RepoRelPath: "nested/defer.txt", Content: []byte("main-defer\n")},
+	}, "main diverges"); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &MergeOpts{PreferTheirs: map[string]bool{"nested/defer.txt": true}}
+	if err := r.MergeIntoBranch("main", opts); err != nil {
+		t.Fatalf("MergeIntoBranch: %v", err)
+	}
+
+	got, err := r.ReadFileFromBranch("main", "keep.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "machine-keep\n" {
+		t.Errorf("keep.txt = %q, want machine version (default ours-wins)", got)
+	}
+	got, err = r.ReadFileFromBranch("main", "nested/defer.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "main-defer\n" {
+		t.Errorf("nested/defer.txt = %q, want main version (PreferTheirs)", got)
+	}
+}
+
+// TestMergeIntoBranchContentMerger verifies that a per-path content merger is
+// invoked with both sides' bytes and its output becomes the merged blob.
+func TestMergeIntoBranchContentMerger(t *testing.T) {
+	workDir := t.TempDir()
+	r, err := Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("a.txt", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workDir, ".hdf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".hdf", "managed.toml"), []byte("ours\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile(testManagedTOML, "machine registry"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFilesToBranch("main", []BranchFile{
+		{RepoRelPath: testManagedTOML, Content: []byte("theirs\n")},
+	}, "main diverges"); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &MergeOpts{
+		ContentMergers: map[string]ContentMerger{
+			testManagedTOML: func(ours, theirs []byte) ([]byte, error) {
+				return append(append([]byte{}, ours...), theirs...), nil
+			},
+		},
+	}
+	if err := r.MergeIntoBranch("main", opts); err != nil {
+		t.Fatalf("MergeIntoBranch: %v", err)
+	}
+
+	got, err := r.ReadFileFromBranch("main", testManagedTOML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "ours\ntheirs\n" {
+		t.Errorf("merged content = %q, want %q", got, "ours\ntheirs\n")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestGenerateUnifiedDiff(t *testing.T) {
@@ -772,5 +773,206 @@ func TestAddWarningPersistedToState(t *testing.T) {
 	}
 	if len(got2) != 0 {
 		t.Errorf("want 0 warnings after drain, got: %v", got2)
+	}
+}
+
+// TestSyncPushFailureNotifiesOncePerCooldown verifies that a persistently
+// failing machine-branch push (e.g. a hostname collision or broken auth)
+// alerts at most once per cooldown window instead of on every sync cycle.
+func TestSyncPushFailureNotifiesOncePerCooldown(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	// Seed main.
+	seedDir := t.TempDir()
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seedDir, ".hdf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, ".hdf", ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile(".hdf/.gitkeep", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A rogue machine claims the branch name "collide" on the remote first.
+	rogueDir := t.TempDir()
+	rogue, err := repo.Clone(bareURL, rogueDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rogue.CreateAndCheckoutBranch("collide"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rogueDir, "rogue.txt"), []byte("rogue\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rogue.CommitFile("rogue.txt", "rogue commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rogue.Push("collide"); err != nil {
+		t.Fatal(err)
+	}
+
+	// This host has its own divergent "collide" branch — push is always non-FF.
+	workDir := t.TempDir()
+	r, err := repo.Clone(bareURL, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch("collide"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "host.txt"), []byte("host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("host.txt", "host commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveRegistry(workDir, &config.Registry{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.StageFile(".hdf/managed.toml"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("registry"); err != nil {
+		t.Fatal(err)
+	}
+
+	homeDir := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.Save(cfgPath, &config.Config{
+		Branch:           "collide",
+		LocalDotfilesDir: workDir,
+		GitPushTarget:    bareURL,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	n := &fakeNotifier{}
+	cn := &fakeNotifier{}
+
+	// Two consecutive failing sync cycles within the cooldown window.
+	for i := 0; i < 2; i++ {
+		if _, err := syncWithHome(cfgPath, statePath, n, cn, homeDir); err == nil {
+			t.Fatalf("cycle %d: expected push failure error, got nil", i)
+		}
+	}
+
+	cn.mu.Lock()
+	criticalCount := len(cn.msgs)
+	cn.mu.Unlock()
+	if criticalCount != 1 {
+		t.Errorf("critical notifications = %d, want 1 (cooldown must gate repeat failures)", criticalCount)
+	}
+
+	// Warnings must not pile up either: one failure warning, not two.
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushWarnings := 0
+	for _, w := range state.PendingWarnings {
+		if strings.Contains(w, "push") {
+			pushWarnings++
+		}
+	}
+	if pushWarnings != 1 {
+		t.Errorf("push-failure warnings = %d, want 1", pushWarnings)
+	}
+}
+
+const fetchedSHA = "fetched-sha"
+
+// TestMergeSyncResultsPreservesConcurrentWrites verifies the daemon's final
+// state save does not clobber fields another process changed during the sync
+// cycle: a `hdf promote` recording LastMainCommit between the daemon's load
+// and save must survive (the exact lost-update flagged in PR #34 review).
+func TestMergeSyncResultsPreservesConcurrentWrites(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	// On-disk state at the start of the daemon's cycle.
+	if err := config.SaveState(statePath, &config.State{LastMainCommit: "old-sha"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedSnapshot := *loaded
+
+	// The daemon computes new values during the cycle (checkMainProgress).
+	computed := *loaded
+	computed.LastMainCommit = fetchedSHA
+	computed.LastNotifiedAt = time.Now()
+
+	// Meanwhile the CLI promotes and records the freshly pushed main SHA.
+	if err := config.UpdateState(statePath, func(s *config.State) error {
+		s.LastMainCommit = "promote-sha"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Daemon's final save.
+	if err := config.UpdateState(statePath, mergeSyncResults(&loadedSnapshot, &computed)); err != nil {
+		t.Fatal(err)
+	}
+
+	final, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.LastMainCommit != "promote-sha" {
+		t.Errorf("LastMainCommit = %q, want %q — daemon clobbered the CLI's concurrent promote record",
+			final.LastMainCommit, "promote-sha")
+	}
+	if final.LastSync.IsZero() {
+		t.Error("LastSync should be set by the daemon's save")
+	}
+	if !final.LastNotifiedAt.Equal(computed.LastNotifiedAt) {
+		t.Errorf("LastNotifiedAt = %v, want computed %v (no concurrent writer touched it)",
+			final.LastNotifiedAt, computed.LastNotifiedAt)
+	}
+}
+
+// TestMergeSyncResultsWritesOwnFieldsWhenUncontended verifies the normal case:
+// nothing else wrote during the cycle, so the daemon's computed values land.
+func TestMergeSyncResultsWritesOwnFieldsWhenUncontended(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SaveState(statePath, &config.State{LastMainCommit: "old-sha"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedSnapshot := *loaded
+	computed := *loaded
+	computed.LastMainCommit = fetchedSHA
+
+	if err := config.UpdateState(statePath, mergeSyncResults(&loadedSnapshot, &computed)); err != nil {
+		t.Fatal(err)
+	}
+	final, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.LastMainCommit != fetchedSHA {
+		t.Errorf("LastMainCommit = %q, want fetchedSHA", final.LastMainCommit)
 	}
 }

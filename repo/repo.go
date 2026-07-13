@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,23 @@ import (
 )
 
 var errStop = errors.New("stop")
+
+// ErrNonFastForwardUpdate is returned by Push when the remote rejects the push
+// because it is not a fast-forward update. Callers can test for this with errors.Is.
+var ErrNonFastForwardUpdate = errors.New("non-fast-forward update")
+
+// isNonFastForwardErr returns true when err represents a push rejection due to
+// a non-fast-forward update. go-git does not expose a public sentinel for the
+// push case — it uses fmt.Errorf("non-fast-forward update: %s", ref) — so
+// string matching is unavoidable. Using strings.Contains rather than
+// strings.HasPrefix guards against a future go-git version that wraps the
+// message in a prefix (e.g., "remote: non-fast-forward update: ...").
+func isNonFastForwardErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, git.ErrNonFastForwardUpdate) || strings.Contains(err.Error(), "non-fast-forward")
+}
 
 // authForURL returns an appropriate go-git auth method for rawURL, or nil for
 // public / unauthenticated access.
@@ -339,20 +357,28 @@ func (r *Repo) CommitCount() (int, error) {
 // Fetch fetches updates from the remote. Returns nil if already up to date.
 func (r *Repo) Fetch() error {
 	err := r.r.Fetch(&git.FetchOptions{Auth: authForURL(r.RemoteURL())})
-	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+	if errors.Is(err, git.NoErrAlreadyUpToDate) || errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return nil
 	}
 	return err
 }
 
-// Push pushes the named branch to the remote.
+// Push pushes the named branch to the remote. Returns nil when already up to date.
+// Returns ErrNonFastForwardUpdate when the remote rejects the push as non-fast-forward.
 func (r *Repo) Push(branch string) error {
-	return r.r.Push(&git.PushOptions{
+	err := r.r.Push(&git.PushOptions{
 		Auth: authForURL(r.RemoteURL()),
 		RefSpecs: []gitconfig.RefSpec{
 			gitconfig.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)),
 		},
 	})
+	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	if err != nil && isNonFastForwardErr(err) {
+		return fmt.Errorf("%w: %w", ErrNonFastForwardUpdate, err)
+	}
+	return err
 }
 
 // HasNewCommitsOnMain returns true if the main branch HEAD differs from lastCommitSHA.
@@ -381,6 +407,66 @@ func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
 		return "", err
 	}
 	return ref.Hash().String(), nil
+}
+
+// RemoteHasBranch reports whether the remote tracking ref for branch exists
+// (refs/remotes/<remote>/<branch>). Call Fetch first for a fresh answer.
+func (r *Repo) RemoteHasBranch(remote, branch string) (bool, error) {
+	_, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, branch), true)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// CheckoutTrackingBranch creates a local branch starting at the remote
+// tracking ref's tip and checks it out. Used when init adopts a machine
+// branch left by a previous install.
+func (r *Repo) CheckoutTrackingBranch(branch, remote string) error {
+	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, branch), true)
+	if err != nil {
+		return fmt.Errorf("resolving %s/%s: %w", remote, branch, err)
+	}
+	w, err := r.r.Worktree()
+	if err != nil {
+		return err
+	}
+	return w.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(branch),
+		Hash:   remoteRef.Hash(),
+		Create: true,
+	})
+}
+
+// ResetBranchToRemote resets the named local branch to match the current
+// remote tracking ref without touching the working tree. Used to roll back
+// a local branch after a failed push.
+func (r *Repo) ResetBranchToRemote(branch, remote string) error {
+	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, branch), true)
+	if err != nil {
+		return fmt.Errorf("resolving %s/%s: %w", remote, branch, err)
+	}
+	return r.r.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), remoteRef.Hash()),
+	)
+}
+
+// SyncLocalMain fast-forwards local main to match origin/main after a fetch.
+// Returns nil without error if origin/main does not yet exist (first promote).
+func (r *Repo) SyncLocalMain(remote string) error {
+	remoteRef, err := r.r.Reference(plumbing.NewRemoteReferenceName(remote, "main"), true)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("resolving %s/main: %w", remote, err)
+	}
+	return r.r.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), remoteRef.Hash()),
+	)
 }
 
 // HasIncomingCommits returns true when origin/main has commits not yet in HEAD.
@@ -475,6 +561,441 @@ func (r *Repo) FastForwardFromMain() error {
 		Commit: remoteRef.Hash(),
 		Mode:   git.HardReset,
 	})
+}
+
+// UnstageAll resets the index to HEAD (mixed reset), leaving the working tree
+// untouched. Used by acceptPromotedFile rollback to undo any partial staging.
+func (r *Repo) UnstageAll() error {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return err
+	}
+	return w.Reset(&git.ResetOptions{Mode: git.MixedReset})
+}
+
+// IsCleanForPromote returns true when the worktree has no uncommitted changes.
+func (r *Repo) IsCleanForPromote() (bool, error) {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("getting worktree: %w", err)
+	}
+	status, err := w.Status()
+	if err != nil {
+		return false, fmt.Errorf("checking status: %w", err)
+	}
+	return status.IsClean(), nil
+}
+
+// HasStagedChanges returns true when the git index contains files staged for
+// the next commit (i.e. staging area != unmodified for at least one entry).
+func (r *Repo) HasStagedChanges() (bool, error) {
+	w, err := r.r.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("getting worktree: %w", err)
+	}
+	status, err := w.Status()
+	if err != nil {
+		return false, fmt.Errorf("checking status: %w", err)
+	}
+	for _, s := range status {
+		if s.Staging != git.Unmodified {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ContentMerger merges two conflicting versions of a file's bytes during a
+// tree merge. ours is the current branch's version, theirs the target's.
+type ContentMerger func(ours, theirs []byte) ([]byte, error)
+
+// MergeOpts customises MergeIntoBranch's conflict resolution for specific
+// repo-relative slash paths. Paths absent from both maps follow the default
+// ours-wins rule.
+type MergeOpts struct {
+	// PreferTheirs lists paths where the target branch's version wins.
+	PreferTheirs map[string]bool
+	// ContentMergers maps paths to functions that produce the merged blob
+	// from both sides' contents (e.g. registry union for managed.toml).
+	ContentMergers map[string]ContentMerger
+}
+
+func (o *MergeOpts) preferTheirs(path string) bool {
+	return o != nil && o.PreferTheirs[path]
+}
+
+func (o *MergeOpts) merger(path string) ContentMerger {
+	if o == nil {
+		return nil
+	}
+	return o.ContentMergers[path]
+}
+
+// MergeIntoBranch fast-forwards targetBranch to the current HEAD.
+// Returns an error if the branches have diverged — run 'hdf changes-pull'
+// to merge targetBranch into the current branch first, then retry.
+// opts may be nil for default ours-wins conflict resolution.
+func (r *Repo) MergeIntoBranch(targetBranch string, opts *MergeOpts) error {
+	targetRefName := plumbing.NewBranchReferenceName(targetBranch)
+	targetRef, err := r.r.Reference(targetRefName, true)
+	if err != nil {
+		return fmt.Errorf("resolving %s: %w", targetBranch, err)
+	}
+	head, err := r.r.Head()
+	if err != nil {
+		return fmt.Errorf("resolving HEAD: %w", err)
+	}
+	if head.Hash() == targetRef.Hash() {
+		return nil
+	}
+	headCommit, err := r.r.CommitObject(head.Hash())
+	if err != nil {
+		return fmt.Errorf("reading HEAD commit: %w", err)
+	}
+	targetCommit, err := r.r.CommitObject(targetRef.Hash())
+	if err != nil {
+		return fmt.Errorf("reading %s commit: %w", targetBranch, err)
+	}
+	bases, err := headCommit.MergeBase(targetCommit)
+	if err != nil {
+		return fmt.Errorf("computing merge base: %w", err)
+	}
+	if len(bases) == 0 {
+		return fmt.Errorf("no common ancestor between HEAD and %s", targetBranch)
+	}
+	// targetBranch is already at or ahead of HEAD — nothing to do or already merged.
+	if bases[0].Hash == head.Hash() {
+		return fmt.Errorf("%s is already ahead of the current branch; run 'hdf changes-pull' first", targetBranch)
+	}
+	// Fast-forward possible: targetBranch is an ancestor of HEAD.
+	if bases[0].Hash == targetRef.Hash() {
+		return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, head.Hash()))
+	}
+	// Branches have diverged. Refuse if the machine branch deleted any file
+	// that still exists on targetBranch — the user must pull first and decide.
+	deleted, err := deletionsAcrossBases(r.r, bases, headCommit, targetCommit)
+	if err != nil {
+		return fmt.Errorf("checking for deletions: %w", err)
+	}
+	if len(deleted) > 0 {
+		return fmt.Errorf(
+			"cannot promote: %s deleted file(s) that still exist on %s (%s) — run 'hdf changes-pull' first",
+			head.Name().Short(), targetBranch, strings.Join(deleted, ", "),
+		)
+	}
+	// Merge the two trees so files promoted by other machines (present in
+	// targetBranch but not HEAD) are preserved, while HEAD's versions win.
+	mergedTreeHash, err := mergeTrees(r.r, headCommit.TreeHash, targetCommit.TreeHash, "", opts)
+	if err != nil {
+		return fmt.Errorf("merging trees: %w", err)
+	}
+	commitHash, err := writeMergeCommit(r.r, mergedTreeHash, head, targetRef, targetBranch)
+	if err != nil {
+		return err
+	}
+	return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, commitHash))
+}
+
+// deletionsAcrossBases collects the files deleted by head but still present on
+// target, checked against every merge base. Criss-cross histories can yield
+// multiple bases; a deletion visible from any of them blocks the merge.
+func deletionsAcrossBases(r *git.Repository, bases []*object.Commit, headCommit, targetCommit *object.Commit) ([]string, error) {
+	deletedSet := make(map[string]struct{})
+	for _, base := range bases {
+		deleted, err := filesMissingFromHeadStillInTarget(r, base.TreeHash, headCommit.TreeHash, targetCommit.TreeHash)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range deleted {
+			deletedSet[p] = struct{}{}
+		}
+	}
+	deleted := make([]string, 0, len(deletedSet))
+	for p := range deletedSet {
+		deleted = append(deleted, p)
+	}
+	sort.Strings(deleted)
+	return deleted, nil
+}
+
+// writeMergeCommit stores a two-parent merge commit for the given tree and
+// returns its hash. parent[0] is targetBranch's previous HEAD so that
+// git log --first-parent follows targetBranch's own lineage, not the
+// machine branch.
+func writeMergeCommit(r *git.Repository, treeHash plumbing.Hash, head, targetRef *plumbing.Reference, targetBranch string) (plumbing.Hash, error) {
+	author := gitAuthor()
+	mergeCommit := &object.Commit{
+		Author:       *author,
+		Committer:    *author,
+		Message:      fmt.Sprintf("hdf: promote %s into %s\n", head.Name().Short(), targetBranch),
+		TreeHash:     treeHash,
+		ParentHashes: []plumbing.Hash{targetRef.Hash(), head.Hash()},
+	}
+	obj := r.Storer.NewEncodedObject()
+	if err := mergeCommit.Encode(obj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("encoding merge commit: %w", err)
+	}
+	commitHash, err := r.Storer.SetEncodedObject(obj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("storing merge commit: %w", err)
+	}
+	return commitHash, nil
+}
+
+// mergeTrees recursively merges two git trees. Entries in treeA win when both
+// trees contain the same name; entries only in treeB are preserved. prefix is
+// the slash-joined path of the trees being merged ("" at the root); opts may
+// be nil.
+//
+// This is a two-way merge (no merge base). Files deleted in treeA but present
+// in treeB are re-added ("resurrected") unless MergeIntoBranch's upstream
+// deletion guard caught them. That guard diffs against the merge base(s),
+// which only advance when this machine promotes — so it covers files that
+// existed at the last promote point, NOT files this branch acquired and
+// deleted since (e.g. accepted via changes-pull, then removed). Any future
+// unenroll/remove command must close this gap before relying on mergeTrees.
+func mergeTrees(r *git.Repository, treeA, treeB plumbing.Hash, prefix string, opts *MergeOpts) (plumbing.Hash, error) {
+	if treeA == treeB || treeB.IsZero() {
+		return treeA, nil
+	}
+	if treeA.IsZero() {
+		return treeB, nil
+	}
+
+	a, err := r.TreeObject(treeA)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	b, err := r.TreeObject(treeB)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	bEntries := make(map[string]object.TreeEntry, len(b.Entries))
+	for _, e := range b.Entries {
+		bEntries[e.Name] = e
+	}
+
+	merged := make([]object.TreeEntry, 0, len(a.Entries)+len(b.Entries))
+	aNames := make(map[string]struct{}, len(a.Entries))
+
+	for _, ea := range a.Entries {
+		aNames[ea.Name] = struct{}{}
+		entry, err := mergeEntry(r, ea, bEntries, prefix, opts)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		merged = append(merged, entry)
+	}
+
+	for _, eb := range b.Entries {
+		if _, inA := aNames[eb.Name]; !inA {
+			merged = append(merged, eb)
+		}
+	}
+
+	sort.Sort(object.TreeEntrySorter(merged))
+	newTree := &object.Tree{Entries: merged}
+	obj := r.Storer.NewEncodedObject()
+	if err := newTree.Encode(obj); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return r.Storer.SetEncodedObject(obj)
+}
+
+// mergeEntry resolves a single tree entry from treeA against the entries of
+// treeB. treeA wins on conflict unless opts says otherwise for this entry's
+// path; directories are merged recursively.
+func mergeEntry(r *git.Repository, ea object.TreeEntry, bEntries map[string]object.TreeEntry, prefix string, opts *MergeOpts) (object.TreeEntry, error) {
+	eb, exists := bEntries[ea.Name]
+	if !exists || ea.Hash == eb.Hash {
+		return ea, nil
+	}
+	path := ea.Name
+	if prefix != "" {
+		path = prefix + "/" + ea.Name
+	}
+	if merger := opts.merger(path); merger != nil && ea.Mode != filemode.Dir && eb.Mode != filemode.Dir {
+		h, err := mergeBlobContents(r, ea.Hash, eb.Hash, path, merger)
+		if err != nil {
+			return ea, err
+		}
+		ea.Hash = h
+		return ea, nil
+	}
+	if opts.preferTheirs(path) {
+		return eb, nil
+	}
+	if err := checkModeCompatible(ea, eb, path); err != nil {
+		return ea, err
+	}
+	if ea.Mode == filemode.Dir {
+		h, err := mergeTrees(r, ea.Hash, eb.Hash, path, opts)
+		if err != nil {
+			return ea, err
+		}
+		ea.Hash = h
+	}
+	return ea, nil
+}
+
+// checkModeCompatible returns an error when the two entries' modes represent
+// a genuine type conflict (e.g. file vs directory). A bare mode-bit change
+// between regular and executable files is not a conflict.
+func checkModeCompatible(ea, eb object.TreeEntry, path string) error {
+	if ea.Mode == eb.Mode {
+		return nil
+	}
+	isRegularOrExec := func(m filemode.FileMode) bool {
+		return m == filemode.Regular || m == filemode.Deprecated || m == filemode.Executable
+	}
+	if !isRegularOrExec(ea.Mode) || !isRegularOrExec(eb.Mode) {
+		return fmt.Errorf("entry %q has conflicting types: %s vs %s", path, ea.Mode, eb.Mode)
+	}
+	return nil
+}
+
+// mergeBlobContents runs merger over both sides' blob contents and stores the
+// result as a new blob, returning its hash.
+func mergeBlobContents(r *git.Repository, oursHash, theirsHash plumbing.Hash, path string, merger ContentMerger) (plumbing.Hash, error) {
+	ours, err := readBlob(r, oursHash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("reading %s (ours): %w", path, err)
+	}
+	theirs, err := readBlob(r, theirsHash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("reading %s (theirs): %w", path, err)
+	}
+	mergedBytes, err := merger(ours, theirs)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("merging %s: %w", path, err)
+	}
+	h, err := writeBlob(r, mergedBytes)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("writing merged %s: %w", path, err)
+	}
+	return h, nil
+}
+
+// readBlob returns the full contents of the blob with the given hash.
+func readBlob(r *git.Repository, h plumbing.Hash) ([]byte, error) {
+	blob, err := r.BlobObject(h)
+	if err != nil {
+		return nil, err
+	}
+	rd, err := blob.Reader()
+	if err != nil {
+		return nil, err
+	}
+	defer rd.Close() //nolint:errcheck
+	return io.ReadAll(rd)
+}
+
+// writeBlob stores content as a new blob object and returns its hash.
+func writeBlob(r *git.Repository, content []byte) (plumbing.Hash, error) {
+	obj := r.Storer.NewEncodedObject()
+	obj.SetType(plumbing.BlobObject)
+	w, err := obj.Writer()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if _, err := w.Write(content); err != nil {
+		_ = w.Close()
+		return plumbing.ZeroHash, err
+	}
+	if err := w.Close(); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return r.Storer.SetEncodedObject(obj)
+}
+
+// BranchHistoryHasFileContent reports whether any commit reachable from the
+// named branch's tip carried exactly content at repoRelPath. Promote uses it
+// to tell content this machine has previously held (its own past promotes,
+// or versions it accepted from main) apart from foreign content it has never
+// seen.
+func (r *Repo) BranchHistoryHasFileContent(branch, repoRelPath string, content []byte) (bool, error) {
+	ref, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	target := plumbing.ComputeHash(plumbing.BlobObject, content)
+	iter, err := r.r.Log(&git.LogOptions{From: ref.Hash()})
+	if err != nil {
+		return false, err
+	}
+	defer iter.Close()
+	found := false
+	err = iter.ForEach(func(c *object.Commit) error {
+		tree, err := c.Tree()
+		if err != nil {
+			return err
+		}
+		entry, err := tree.FindEntry(repoRelPath)
+		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+			return nil // path absent in this commit — keep walking
+		}
+		if err != nil {
+			return err
+		}
+		if entry.Hash == target {
+			found = true
+			return errStop
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStop) {
+		return false, err
+	}
+	return found, nil
+}
+
+// filesMissingFromHeadStillInTarget returns the repo-relative paths of files
+// that existed in baseTree, were removed in headTree, but are still present in
+// targetTree. These are files the machine branch intentionally deleted that
+// the target branch (main) still holds — a signal to pull first and decide.
+func filesMissingFromHeadStillInTarget(r *git.Repository, baseHash, headHash, targetHash plumbing.Hash) ([]string, error) {
+	collectPaths := func(hash plumbing.Hash) (map[string]struct{}, error) {
+		tree, err := r.TreeObject(hash)
+		if err != nil {
+			return nil, err
+		}
+		iter := tree.Files()
+		paths := make(map[string]struct{})
+		err = iter.ForEach(func(f *object.File) error {
+			paths[f.Name] = struct{}{}
+			return nil
+		})
+		return paths, err
+	}
+
+	inBase, err := collectPaths(baseHash)
+	if err != nil {
+		return nil, err
+	}
+	inHead, err := collectPaths(headHash)
+	if err != nil {
+		return nil, err
+	}
+	inTarget, err := collectPaths(targetHash)
+	if err != nil {
+		return nil, err
+	}
+
+	var deleted []string
+	for path := range inBase {
+		if _, ok := inHead[path]; ok {
+			continue
+		}
+		if _, ok := inTarget[path]; ok {
+			deleted = append(deleted, path)
+		}
+	}
+	sort.Strings(deleted)
+	return deleted, nil
 }
 
 // HasUnpushedCommits returns true if branch has commits that are not reachable from base.
