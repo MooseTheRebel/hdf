@@ -898,12 +898,10 @@ func applyEnroll(r *repo.Repo, expanded, tildeFile, relName, filePath, homeDir s
 	if err := pushBranches(r, cfg); err != nil {
 		return err
 	}
-	state, err := config.LoadState(statePath)
-	if err != nil {
-		return fmt.Errorf("loading state: %w", err)
-	}
-	state.LastCommit = sha
-	if err := config.SaveState(statePath, state); err != nil {
+	if err := config.UpdateState(statePath, func(s *config.State) error {
+		s.LastCommit = sha
+		return nil
+	}); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
 	fmt.Printf("Enrolled %s (commit %s)\n", filePath, sha[:8])

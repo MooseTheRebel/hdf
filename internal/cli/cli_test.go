@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -860,6 +861,96 @@ func TestEnrollRegistersFileInMainRegistry(t *testing.T) {
 	}
 	if mainReg2 == nil {
 		t.Error("main registry not pushed to bare remote")
+	}
+}
+
+// Regression: applyEnroll's final state write (recording LastCommit) must go
+// through config.UpdateState rather than a bare LoadState/SaveState pair.
+// Previously, a daemon warning appended concurrently in that window could be
+// silently lost. This races a warning-appending goroutine (simulating the
+// daemon) against applyEnroll and checks that both the enroll's LastCommit
+// and every concurrent warning survive.
+//
+// applyEnroll is called directly (rather than through runEnroll) because
+// runEnroll surfaces any pending warnings via a confirmation prompt before
+// it ever reaches applyEnroll; racing the warning writer against that prompt
+// would test unrelated behavior instead of the state write this regression
+// covers.
+func TestApplyEnrollPreservesConcurrentWarning(t *testing.T) {
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("# test config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	expanded, tildeFile, err := expandAndValidate(tildeTestRC, homeDir)
+	if err != nil {
+		t.Fatalf("expandAndValidate: %v", err)
+	}
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatalf("opening repo: %v", err)
+	}
+	if err := ensureOnMachineBranch(r, cfg); err != nil {
+		t.Fatalf("ensureOnMachineBranch: %v", err)
+	}
+	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	if err != nil {
+		t.Fatalf("RepoPathForHome: %v", err)
+	}
+	relName := mustRel(t, cfg.LocalDotfilesDir, repoFilePath)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var appended int
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := config.UpdateState(statePath, func(s *config.State) error {
+				s.PendingWarnings = append(s.PendingWarnings, fmt.Sprintf("warning-%d", i))
+				return nil
+			}); err != nil {
+				t.Errorf("UpdateState: %v", err)
+				return
+			}
+			appended = i + 1
+		}
+	}()
+
+	err = applyEnroll(r, expanded, tildeFile, relName, dotfile, homeDir, cfg, statePath)
+	close(stop)
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("applyEnroll: %v", err)
+	}
+
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if state.LastCommit == "" {
+		t.Error("LastCommit not recorded after enroll")
+	}
+	if len(state.PendingWarnings) != appended {
+		t.Errorf("PendingWarnings len = %d, want %d — a concurrent warning was lost", len(state.PendingWarnings), appended)
 	}
 }
 
