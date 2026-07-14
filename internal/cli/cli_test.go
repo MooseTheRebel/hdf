@@ -946,8 +946,12 @@ func TestApplyEnrollPreservesConcurrentWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	if state.LastCommit == "" {
-		t.Error("LastCommit not recorded after enroll")
+	headSHA, err := r.HeadSHA()
+	if err != nil {
+		t.Fatalf("getting head SHA: %v", err)
+	}
+	if state.LastCommit != headSHA {
+		t.Errorf("state.LastCommit = %q, want %q", state.LastCommit, headSHA)
 	}
 	if len(state.PendingWarnings) != appended {
 		t.Errorf("PendingWarnings len = %d, want %d — a concurrent warning was lost", len(state.PendingWarnings), appended)
