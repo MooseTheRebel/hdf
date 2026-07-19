@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"hdf/config"
 	"hdf/link"
@@ -3674,5 +3675,108 @@ func TestResolveRepoPathRejectsTraversal(t *testing.T) {
 		if got != tc.wantPath {
 			t.Errorf("%s: path = %q, want %q", tc.desc, got, tc.wantPath)
 		}
+	}
+}
+
+// TestDaemonInstallCmd_CallsSvcInstall verifies the "daemon install" RunE
+// delegates to svcInstall with the default config path and surfaces errors.
+func TestDaemonInstallCmd_CallsSvcInstall(t *testing.T) {
+	origInstall := svcInstall
+	defer func() { svcInstall = origInstall }()
+
+	var gotCfgPath string
+	svcInstall = func(cfgPath string) error {
+		gotCfgPath = cfgPath
+		return nil
+	}
+	if err := daemonInstallCmd.RunE(daemonInstallCmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v, want nil", err)
+	}
+	if gotCfgPath != config.DefaultPath() {
+		t.Errorf("cfgPath = %q, want %q", gotCfgPath, config.DefaultPath())
+	}
+
+	svcInstall = func(cfgPath string) error { return errors.New("boom") }
+	if err := daemonInstallCmd.RunE(daemonInstallCmd, nil); err == nil {
+		t.Fatal("expected error to propagate, got nil")
+	}
+}
+
+// TestDaemonUninstallCmd_CallsSvcUninstall verifies the "daemon uninstall"
+// RunE delegates to svcUninstall.
+func TestDaemonUninstallCmd_CallsSvcUninstall(t *testing.T) {
+	origUninstall := svcUninstall
+	defer func() { svcUninstall = origUninstall }()
+
+	called := false
+	svcUninstall = func(cfgPath string) error {
+		called = true
+		return nil
+	}
+	if err := daemonUninstallCmd.RunE(daemonUninstallCmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v, want nil", err)
+	}
+	if !called {
+		t.Error("expected svcUninstall to be called")
+	}
+}
+
+// TestDaemonStartCmd_CallsSvcStart verifies the "daemon start" RunE
+// delegates to svcStart.
+func TestDaemonStartCmd_CallsSvcStart(t *testing.T) {
+	origStart := svcStart
+	defer func() { svcStart = origStart }()
+
+	called := false
+	svcStart = func(cfgPath string) error {
+		called = true
+		return nil
+	}
+	if err := daemonStartCmd.RunE(daemonStartCmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v, want nil", err)
+	}
+	if !called {
+		t.Error("expected svcStart to be called")
+	}
+}
+
+// TestDaemonStopCmd_CallsSvcStop verifies the "daemon stop" RunE delegates
+// to svcStop.
+func TestDaemonStopCmd_CallsSvcStop(t *testing.T) {
+	origStop := svcStop
+	defer func() { svcStop = origStop }()
+
+	called := false
+	svcStop = func(cfgPath string) error {
+		called = true
+		return nil
+	}
+	if err := daemonStopCmd.RunE(daemonStopCmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v, want nil", err)
+	}
+	if !called {
+		t.Error("expected svcStop to be called")
+	}
+}
+
+// TestDaemonStatusCmd_PrintsSvcStatus verifies the "daemon status" RunE
+// prints whatever svcStatus reports and propagates errors.
+func TestDaemonStatusCmd_PrintsSvcStatus(t *testing.T) {
+	origStatus := svcStatus
+	defer func() { svcStatus = origStatus }()
+
+	svcStatus = func(cfgPath string) (string, error) { return "running", nil }
+	var buf bytes.Buffer
+	daemonStatusCmd.SetOut(&buf)
+	if err := daemonStatusCmd.RunE(daemonStatusCmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v, want nil", err)
+	}
+	if !strings.Contains(buf.String(), "running") {
+		t.Errorf("output = %q, want it to contain %q", buf.String(), "running")
+	}
+
+	svcStatus = func(cfgPath string) (string, error) { return "", errors.New("boom") }
+	if err := daemonStatusCmd.RunE(daemonStatusCmd, nil); err == nil {
+		t.Fatal("expected error to propagate, got nil")
 	}
 }
