@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -230,5 +231,57 @@ func TestRun_PropagatesError(t *testing.T) {
 
 	if err := Run("/cfg"); err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestRunDaemonLoop_ExitsProcessOnUnexpectedError(t *testing.T) {
+	origRun, origExit := runFn, exitFn
+	defer func() { runFn, exitFn = origRun, origExit }()
+
+	runFn = func(context.Context, string) error { return errors.New("repo gone") }
+	var gotCode int
+	exitCalled := false
+	exitFn = func(code int) {
+		exitCalled = true
+		gotCode = code
+	}
+
+	runDaemonLoop(context.Background(), "/cfg")
+
+	if !exitCalled {
+		t.Fatal("expected exitFn to be called on unexpected daemon error")
+	}
+	if gotCode != 1 {
+		t.Errorf("exit code = %d, want 1", gotCode)
+	}
+}
+
+func TestRunDaemonLoop_DoesNotExitOnContextCanceled(t *testing.T) {
+	origRun, origExit := runFn, exitFn
+	defer func() { runFn, exitFn = origRun, origExit }()
+
+	runFn = func(context.Context, string) error { return context.Canceled }
+	exitCalled := false
+	exitFn = func(int) { exitCalled = true }
+
+	runDaemonLoop(context.Background(), "/cfg")
+
+	if exitCalled {
+		t.Error("expected exitFn not to be called on graceful context.Canceled")
+	}
+}
+
+func TestRunDaemonLoop_DoesNotExitOnNilError(t *testing.T) {
+	origRun, origExit := runFn, exitFn
+	defer func() { runFn, exitFn = origRun, origExit }()
+
+	runFn = func(context.Context, string) error { return nil }
+	exitCalled := false
+	exitFn = func(int) { exitCalled = true }
+
+	runDaemonLoop(context.Background(), "/cfg")
+
+	if exitCalled {
+		t.Error("expected exitFn not to be called on nil error")
 	}
 }
