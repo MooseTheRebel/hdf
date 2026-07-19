@@ -49,14 +49,18 @@ var runFn = daemon.Run
 var exitFn = os.Exit
 
 // runDaemonLoop runs the sync loop and, if it exits with anything other
-// than context.Canceled (a graceful Stop), exits the process. Without this,
-// an unexpected daemon.Run error (e.g. the dotfiles repo disappearing)
-// would leave the goroutine dead while s.Run() keeps blocking on the
-// signal channel, so the OS service manager keeps reporting "running" and
-// never restarts it.
+// than a graceful Stop, exits the process. Without this, an unexpected
+// daemon.Run error (e.g. the dotfiles repo disappearing) would leave the
+// goroutine dead while s.Run() keeps blocking on the signal channel, so
+// the OS service manager keeps reporting "running" and never restarts it.
+//
+// A graceful Stop is detected two ways: the error wraps context.Canceled,
+// or ctx.Err() is already non-nil (the context was canceled even though
+// the returned error doesn't wrap it — e.g. a platform-specific "use of
+// closed network connection" from an operation cut short mid-flight).
 func runDaemonLoop(ctx context.Context, cfgPath string) {
 	err := runFn(ctx, cfgPath)
-	if err != nil && !errors.Is(err, context.Canceled) {
+	if err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "hdf daemon exited unexpectedly: %v\n", err)
 		exitFn(1)
 	}

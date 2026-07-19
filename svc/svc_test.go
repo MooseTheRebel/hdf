@@ -3,6 +3,7 @@ package svc
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	kservice "github.com/kardianos/service"
@@ -87,201 +88,199 @@ func TestBuildConfig_Fields(t *testing.T) {
 	}
 }
 
-func TestInstall_InstallsThenStarts(t *testing.T) {
-	fake := &fakeService{}
-	withFakeService(t, fake)
-
-	if err := Install("/cfg"); err != nil {
-		t.Fatalf("Install() error = %v, want nil", err)
+func TestInstallUninstall(t *testing.T) {
+	cases := []struct {
+		name        string
+		fake        *fakeService
+		call        func(cfgPath string) error
+		wantErr     bool
+		wantCalls   []string // exact expected call sequence, checked when non-nil
+		mustHave    string   // a call that must still happen despite an earlier error
+		mustNotHave string   // a call that must not happen when the sequence aborts early
+	}{
+		{
+			name:      "Install installs then starts",
+			fake:      &fakeService{},
+			call:      Install,
+			wantCalls: []string{"install", "start"},
+		},
+		{
+			name:        "Install propagates install error without starting",
+			fake:        &fakeService{installErr: errors.New("already installed")},
+			call:        Install,
+			wantErr:     true,
+			mustNotHave: "start",
+		},
+		{
+			name:      "Uninstall stops then uninstalls",
+			fake:      &fakeService{},
+			call:      Uninstall,
+			wantCalls: []string{"stop", "uninstall"},
+		},
+		{
+			name:     "Uninstall ignores stop error and still uninstalls",
+			fake:     &fakeService{stopErr: errors.New("not running")},
+			call:     Uninstall,
+			mustHave: "uninstall",
+		},
 	}
-	want := []string{"install", "start"}
-	if len(fake.calls) != len(want) || fake.calls[0] != want[0] || fake.calls[1] != want[1] {
-		t.Errorf("calls = %v, want %v", fake.calls, want)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFakeService(t, tc.fake)
 
-func TestInstall_PropagatesInstallError(t *testing.T) {
-	fake := &fakeService{installErr: errors.New("already installed")}
-	withFakeService(t, fake)
-
-	err := Install("/cfg")
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	for _, c := range fake.calls {
-		if c == "start" {
-			t.Errorf("Start should not be called when Install fails, calls = %v", fake.calls)
-		}
-	}
-}
-
-func TestUninstall_StopsThenUninstalls(t *testing.T) {
-	fake := &fakeService{}
-	withFakeService(t, fake)
-
-	if err := Uninstall("/cfg"); err != nil {
-		t.Fatalf("Uninstall() error = %v, want nil", err)
-	}
-	want := []string{"stop", "uninstall"}
-	if len(fake.calls) != len(want) || fake.calls[0] != want[0] || fake.calls[1] != want[1] {
-		t.Errorf("calls = %v, want %v", fake.calls, want)
-	}
-}
-
-func TestUninstall_IgnoresStopErrorAndStillUninstalls(t *testing.T) {
-	fake := &fakeService{stopErr: errors.New("not running")}
-	withFakeService(t, fake)
-
-	if err := Uninstall("/cfg"); err != nil {
-		t.Fatalf("Uninstall() error = %v, want nil", err)
-	}
-	found := false
-	for _, c := range fake.calls {
-		if c == "uninstall" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected Uninstall to be called despite Stop error, calls = %v", fake.calls)
-	}
-}
-
-func TestStart_Delegates(t *testing.T) {
-	fake := &fakeService{startErr: errors.New("boom")}
-	withFakeService(t, fake)
-
-	if err := Start("/cfg"); err == nil {
-		t.Fatal("expected error, got nil")
+			err := tc.call("/cfg")
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+			if tc.wantCalls != nil && !slices.Equal(tc.fake.calls, tc.wantCalls) {
+				t.Errorf("calls = %v, want %v", tc.fake.calls, tc.wantCalls)
+			}
+			if tc.mustHave != "" && !slices.Contains(tc.fake.calls, tc.mustHave) {
+				t.Errorf("expected calls to include %q, got %v", tc.mustHave, tc.fake.calls)
+			}
+			if tc.mustNotHave != "" && slices.Contains(tc.fake.calls, tc.mustNotHave) {
+				t.Errorf("expected calls not to include %q, got %v", tc.mustNotHave, tc.fake.calls)
+			}
+		})
 	}
 }
 
-func TestStop_Delegates(t *testing.T) {
-	fake := &fakeService{stopErr: errors.New("boom")}
-	withFakeService(t, fake)
-
-	if err := Stop("/cfg"); err == nil {
-		t.Fatal("expected error, got nil")
+func TestStartStop_Delegate(t *testing.T) {
+	cases := []struct {
+		name string
+		fake *fakeService
+		call func(cfgPath string) error
+	}{
+		{name: "Start", fake: &fakeService{startErr: errors.New("boom")}, call: Start},
+		{name: "Stop", fake: &fakeService{stopErr: errors.New("boom")}, call: Stop},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFakeService(t, tc.fake)
+			if err := tc.call("/cfg"); err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
 	}
 }
 
-func TestStatus_Running(t *testing.T) {
-	fake := &fakeService{statusVal: kservice.StatusRunning}
-	withFakeService(t, fake)
-
-	got, err := Status("/cfg")
-	if err != nil {
-		t.Fatalf("Status() error = %v, want nil", err)
+func TestStatus(t *testing.T) {
+	cases := []struct {
+		name      string
+		statusVal kservice.Status
+		statusErr error
+		want      string
+		wantErr   bool
+	}{
+		{name: "service is running", statusVal: kservice.StatusRunning, want: "running"},
+		{name: "service is stopped", statusVal: kservice.StatusStopped, want: "stopped"},
+		{name: "not installed is not an error", statusErr: kservice.ErrNotInstalled, want: "not installed"},
+		{name: "other error propagates", statusErr: errors.New("dbus unreachable"), wantErr: true},
 	}
-	if got != "running" {
-		t.Errorf("Status() = %q, want %q", got, "running")
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeService{statusVal: tc.statusVal, statusErr: tc.statusErr}
+			withFakeService(t, fake)
 
-func TestStatus_Stopped(t *testing.T) {
-	fake := &fakeService{statusVal: kservice.StatusStopped}
-	withFakeService(t, fake)
-
-	got, err := Status("/cfg")
-	if err != nil {
-		t.Fatalf("Status() error = %v, want nil", err)
-	}
-	if got != "stopped" {
-		t.Errorf("Status() = %q, want %q", got, "stopped")
-	}
-}
-
-func TestStatus_NotInstalled(t *testing.T) {
-	fake := &fakeService{statusErr: kservice.ErrNotInstalled}
-	withFakeService(t, fake)
-
-	got, err := Status("/cfg")
-	if err != nil {
-		t.Fatalf("Status() error = %v, want nil (not-installed is not a command error)", err)
-	}
-	if got != "not installed" {
-		t.Errorf("Status() = %q, want %q", got, "not installed")
+			got, err := Status("/cfg")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Status() error = %v, want nil", err)
+			}
+			if got != tc.want {
+				t.Errorf("Status() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestStatus_OtherErrorPropagates(t *testing.T) {
-	fake := &fakeService{statusErr: errors.New("dbus unreachable")}
-	withFakeService(t, fake)
+func TestRun(t *testing.T) {
+	cases := []struct {
+		name    string
+		fake    *fakeService
+		wantErr bool
+	}{
+		{name: "delegates to service Run", fake: &fakeService{}},
+		{name: "propagates error", fake: &fakeService{runErr: errors.New("boom")}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFakeService(t, tc.fake)
 
-	_, err := Status("/cfg")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+			err := Run("/cfg")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run() error = %v, want nil", err)
+			}
+			if !slices.Equal(tc.fake.calls, []string{"run"}) {
+				t.Errorf("calls = %v, want [run]", tc.fake.calls)
+			}
+		})
 	}
 }
 
-func TestRun_DelegatesToServiceRun(t *testing.T) {
-	fake := &fakeService{}
-	withFakeService(t, fake)
-
-	if err := Run("/cfg"); err != nil {
-		t.Fatalf("Run() error = %v, want nil", err)
+func TestRunDaemonLoop(t *testing.T) {
+	cases := []struct {
+		name      string
+		runErr    error
+		ctxCancel bool // cancel ctx before calling runDaemonLoop
+		wantExit  bool
+	}{
+		{name: "exits process on unexpected error", runErr: errors.New("repo gone"), wantExit: true},
+		{name: "does not exit on graceful context.Canceled", runErr: context.Canceled},
+		{
+			// Covers a daemon.Run error that doesn't wrap context.Canceled
+			// (e.g. a platform-specific "use of closed network connection"
+			// from an in-flight operation cut short by Stop), but where the
+			// context itself shows the shutdown was already requested —
+			// that should still be treated as graceful, not a crash.
+			name:      "does not exit when context already canceled",
+			runErr:    errors.New("use of closed network connection"),
+			ctxCancel: true,
+		},
+		{name: "does not exit on nil error"},
 	}
-	if len(fake.calls) != 1 || fake.calls[0] != "run" {
-		t.Errorf("calls = %v, want [run]", fake.calls)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			origRun, origExit := runFn, exitFn
+			defer func() { runFn, exitFn = origRun, origExit }()
 
-func TestRun_PropagatesError(t *testing.T) {
-	fake := &fakeService{runErr: errors.New("boom")}
-	withFakeService(t, fake)
+			runFn = func(context.Context, string) error { return tc.runErr }
+			var gotCode int
+			exitCalled := false
+			exitFn = func(code int) {
+				exitCalled = true
+				gotCode = code
+			}
 
-	if err := Run("/cfg"); err == nil {
-		t.Fatal("expected error, got nil")
-	}
-}
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.ctxCancel {
+				cancel()
+			} else {
+				defer cancel()
+			}
 
-func TestRunDaemonLoop_ExitsProcessOnUnexpectedError(t *testing.T) {
-	origRun, origExit := runFn, exitFn
-	defer func() { runFn, exitFn = origRun, origExit }()
+			runDaemonLoop(ctx, "/cfg")
 
-	runFn = func(context.Context, string) error { return errors.New("repo gone") }
-	var gotCode int
-	exitCalled := false
-	exitFn = func(code int) {
-		exitCalled = true
-		gotCode = code
-	}
-
-	runDaemonLoop(context.Background(), "/cfg")
-
-	if !exitCalled {
-		t.Fatal("expected exitFn to be called on unexpected daemon error")
-	}
-	if gotCode != 1 {
-		t.Errorf("exit code = %d, want 1", gotCode)
-	}
-}
-
-func TestRunDaemonLoop_DoesNotExitOnContextCanceled(t *testing.T) {
-	origRun, origExit := runFn, exitFn
-	defer func() { runFn, exitFn = origRun, origExit }()
-
-	runFn = func(context.Context, string) error { return context.Canceled }
-	exitCalled := false
-	exitFn = func(int) { exitCalled = true }
-
-	runDaemonLoop(context.Background(), "/cfg")
-
-	if exitCalled {
-		t.Error("expected exitFn not to be called on graceful context.Canceled")
-	}
-}
-
-func TestRunDaemonLoop_DoesNotExitOnNilError(t *testing.T) {
-	origRun, origExit := runFn, exitFn
-	defer func() { runFn, exitFn = origRun, origExit }()
-
-	runFn = func(context.Context, string) error { return nil }
-	exitCalled := false
-	exitFn = func(int) { exitCalled = true }
-
-	runDaemonLoop(context.Background(), "/cfg")
-
-	if exitCalled {
-		t.Error("expected exitFn not to be called on nil error")
+			if tc.wantExit != exitCalled {
+				t.Errorf("exitFn called = %v, want %v", exitCalled, tc.wantExit)
+			}
+			if tc.wantExit && gotCode != 1 {
+				t.Errorf("exit code = %d, want 1", gotCode)
+			}
+		})
 	}
 }
