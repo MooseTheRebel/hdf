@@ -3681,6 +3681,10 @@ func TestResolveRepoPathRejectsTraversal(t *testing.T) {
 // TestDaemonInstallCmd_CallsSvcInstall verifies the "daemon install" RunE
 // delegates to svcInstall with the default config path and surfaces errors.
 func TestDaemonInstallCmd_CallsSvcInstall(t *testing.T) {
+	origRunDaemon := runDaemon
+	defer func() { runDaemon = origRunDaemon }()
+	runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
+
 	origInstall := svcInstall
 	defer func() { svcInstall = origInstall }()
 
@@ -3724,6 +3728,10 @@ func TestDaemonUninstallCmd_CallsSvcUninstall(t *testing.T) {
 // TestDaemonStartCmd_CallsSvcStart verifies the "daemon start" RunE
 // delegates to svcStart.
 func TestDaemonStartCmd_CallsSvcStart(t *testing.T) {
+	origRunDaemon := runDaemon
+	defer func() { runDaemon = origRunDaemon }()
+	runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
+
 	origStart := svcStart
 	defer func() { svcStart = origStart }()
 

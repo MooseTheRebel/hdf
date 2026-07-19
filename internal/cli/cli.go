@@ -1454,8 +1454,9 @@ var svcRun = svc.Run
 
 // runDaemon checks that hdf is initialized before handing off to run, so
 // the service doesn't start under OS supervision in a broken state and
-// fail silently.
-func runDaemon(cfgPath string, run func(string) error) error {
+// fail silently. It's a var so tests can substitute it without touching
+// the real default config path.
+var runDaemon = func(cfgPath string, run func(string) error) error {
 	if _, err := config.Load(cfgPath); err != nil {
 		return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
 	}
@@ -1475,7 +1476,7 @@ var daemonInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install and start the hdf sync daemon as a per-user background service",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return svcInstall(config.DefaultPath())
+		return runDaemon(config.DefaultPath(), svcInstall)
 	},
 }
 
@@ -1491,7 +1492,7 @@ var daemonStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the already-installed hdf sync daemon service",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return svcStart(config.DefaultPath())
+		return runDaemon(config.DefaultPath(), svcStart)
 	},
 }
 

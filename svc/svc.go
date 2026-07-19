@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hdf/daemon"
+	"os"
 	"time"
 
 	kservice "github.com/kardianos/service"
@@ -41,6 +42,26 @@ type program struct {
 	done    chan struct{}
 }
 
+// runFn is a seam over daemon.Run for tests.
+var runFn = daemon.Run
+
+// exitFn is a seam over os.Exit for tests.
+var exitFn = os.Exit
+
+// runDaemonLoop runs the sync loop and, if it exits with anything other
+// than context.Canceled (a graceful Stop), exits the process. Without this,
+// an unexpected daemon.Run error (e.g. the dotfiles repo disappearing)
+// would leave the goroutine dead while s.Run() keeps blocking on the
+// signal channel, so the OS service manager keeps reporting "running" and
+// never restarts it.
+func runDaemonLoop(ctx context.Context, cfgPath string) {
+	err := runFn(ctx, cfgPath)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintf(os.Stderr, "hdf daemon exited unexpectedly: %v\n", err)
+		exitFn(1)
+	}
+}
+
 // Start is called by the OS service manager. It must not block.
 func (p *program) Start(s kservice.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -48,7 +69,7 @@ func (p *program) Start(s kservice.Service) error {
 	p.done = make(chan struct{})
 	go func() {
 		defer close(p.done)
-		_ = daemon.Run(ctx, p.cfgPath)
+		runDaemonLoop(ctx, p.cfgPath)
 	}()
 	return nil
 }
