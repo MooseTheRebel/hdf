@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"hdf/config"
 	"hdf/link"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -3674,5 +3677,131 @@ func TestResolveRepoPathRejectsTraversal(t *testing.T) {
 		if got != tc.wantPath {
 			t.Errorf("%s: path = %q, want %q", tc.desc, got, tc.wantPath)
 		}
+	}
+}
+
+// TestDaemonServiceCmds_DelegateToSvcFuncs verifies that the "daemon
+// install/uninstall/start/stop" RunE funcs delegate to their respective
+// svc func var with the default config path and surface errors. install
+// and start also go through runDaemon's preflight check, so it's mocked
+// through for those two.
+func TestDaemonServiceCmds_DelegateToSvcFuncs(t *testing.T) {
+	cases := []struct {
+		name         string
+		cmd          *cobra.Command
+		svcFunc      *func(string) error
+		viaRunDaemon bool
+	}{
+		{name: "install", cmd: daemonInstallCmd, svcFunc: &svcInstall, viaRunDaemon: true},
+		{name: "uninstall", cmd: daemonUninstallCmd, svcFunc: &svcUninstall},
+		{name: "start", cmd: daemonStartCmd, svcFunc: &svcStart, viaRunDaemon: true},
+		{name: "stop", cmd: daemonStopCmd, svcFunc: &svcStop},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.viaRunDaemon {
+				origRunDaemon := runDaemon
+				defer func() { runDaemon = origRunDaemon }()
+				runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
+			}
+
+			origFunc := *tc.svcFunc
+			defer func() { *tc.svcFunc = origFunc }()
+
+			var gotCfgPath string
+			*tc.svcFunc = func(cfgPath string) error {
+				gotCfgPath = cfgPath
+				return nil
+			}
+			if err := tc.cmd.RunE(tc.cmd, nil); err != nil {
+				t.Fatalf("RunE() error = %v, want nil", err)
+			}
+			if gotCfgPath != config.DefaultPath() {
+				t.Errorf("cfgPath = %q, want %q", gotCfgPath, config.DefaultPath())
+			}
+
+			*tc.svcFunc = func(string) error { return errors.New("boom") }
+			if err := tc.cmd.RunE(tc.cmd, nil); err == nil {
+				t.Fatal("expected error to propagate, got nil")
+			}
+		})
+	}
+}
+
+// TestDaemonStatusCmd_PrintsSvcStatus verifies the "daemon status" RunE
+// prints whatever svcStatus reports and propagates errors.
+func TestDaemonStatusCmd_PrintsSvcStatus(t *testing.T) {
+	origStatus := svcStatus
+	defer func() { svcStatus = origStatus }()
+
+	svcStatus = func(cfgPath string) (string, error) { return "running", nil }
+	var buf bytes.Buffer
+	daemonStatusCmd.SetOut(&buf)
+	if err := daemonStatusCmd.RunE(daemonStatusCmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v, want nil", err)
+	}
+	if !strings.Contains(buf.String(), "running") {
+		t.Errorf("output = %q, want it to contain %q", buf.String(), "running")
+	}
+
+	svcStatus = func(cfgPath string) (string, error) { return "", errors.New("boom") }
+	if err := daemonStatusCmd.RunE(daemonStatusCmd, nil); err == nil {
+		t.Fatal("expected error to propagate, got nil")
+	}
+}
+
+// TestRunDaemon verifies runDaemon refuses to start the service runner
+// when hdf hasn't been initialized yet (so the service doesn't start in a
+// broken state and fail silently under OS supervision), and otherwise
+// calls the injected run function, forwarding its error.
+func TestRunDaemon(t *testing.T) {
+	cases := []struct {
+		name        string
+		initialized bool
+		runErr      error // returned by the injected run func, when called
+	}{
+		{name: "fails preflight when not initialized", initialized: false},
+		{name: "calls run when initialized", initialized: true},
+		{name: "propagates run error when initialized", initialized: true, runErr: errors.New("boom")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			if tc.initialized {
+				if err := config.Save(cfgPath, &config.Config{Branch: testBranch, LocalDotfilesDir: t.TempDir()}); err != nil {
+					t.Fatalf("config.Save: %v", err)
+				}
+			}
+
+			var called bool
+			var gotCfgPath string
+			err := runDaemon(cfgPath, func(p string) error {
+				called = true
+				gotCfgPath = p
+				return tc.runErr
+			})
+
+			if !tc.initialized {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if called {
+					t.Error("run func should not be called when hdf is not initialized")
+				}
+				return
+			}
+			if tc.runErr == nil && err != nil {
+				t.Fatalf("runDaemon() error = %v, want nil", err)
+			}
+			if tc.runErr != nil && err == nil {
+				t.Fatal("expected error from run func to propagate, got nil")
+			}
+			if !called {
+				t.Error("expected run func to be called when hdf is initialized")
+			}
+			if gotCfgPath != cfgPath {
+				t.Errorf("cfgPath passed to run = %q, want %q", gotCfgPath, cfgPath)
+			}
+		})
 	}
 }

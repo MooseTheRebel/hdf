@@ -10,6 +10,7 @@ import (
 	"hdf/daemon"
 	"hdf/link"
 	"hdf/repo"
+	"hdf/svc"
 	"io"
 	"os"
 	"path/filepath"
@@ -1430,14 +1431,94 @@ func fileStatus(f config.ManagedFile, branch, homeDir string) string {
 	return "ok"
 }
 
+// svcInstall, svcUninstall, svcStart, svcStop, and svcStatus are indirections
+// over the svc package so tests can substitute fakes instead of touching a
+// real OS service manager.
+var (
+	svcInstall   = svc.Install
+	svcUninstall = svc.Uninstall
+	svcStart     = svc.Start
+	svcStop      = svc.Stop
+	svcStatus    = svc.Status
+)
+
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
-	Short: "Start the hdf sync daemon",
-	Long:  `Runs a background loop that syncs every 30 minutes and sends OS notifications when action is needed.`,
+	Short: "Manage the hdf sync daemon",
+	Long:  `Run the hdf sync daemon in the foreground, or install/control it as a per-user background service.`,
+}
+
+// svcRun is an indirection over svc.Run so tests can substitute a fake
+// instead of touching a real OS service manager.
+var svcRun = svc.Run
+
+// runDaemon checks that hdf is initialized before handing off to run, so
+// the service doesn't start under OS supervision in a broken state and
+// fail silently. It's a var so tests can substitute it without touching
+// the real default config path.
+var runDaemon = func(cfgPath string, run func(string) error) error {
+	if _, err := config.Load(cfgPath); err != nil {
+		return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
+	}
+	return run(cfgPath)
+}
+
+var daemonRunCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Run the hdf sync daemon in the foreground",
+	Long:  `Runs a background loop that syncs every 30 minutes and sends OS notifications when action is needed. Also used internally as the entry point for the installed background service.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfgPath := config.DefaultPath()
-		return daemon.Run(cmd.Context(), cfgPath)
+		return runDaemon(config.DefaultPath(), svcRun)
 	},
+}
+
+var daemonInstallCmd = &cobra.Command{
+	Use:   "install",
+	Short: "Install and start the hdf sync daemon as a per-user background service",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runDaemon(config.DefaultPath(), svcInstall)
+	},
+}
+
+var daemonUninstallCmd = &cobra.Command{
+	Use:   "uninstall",
+	Short: "Stop and remove the installed hdf sync daemon service",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return svcUninstall(config.DefaultPath())
+	},
+}
+
+var daemonStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the already-installed hdf sync daemon service",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runDaemon(config.DefaultPath(), svcStart)
+	},
+}
+
+var daemonStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop the already-installed hdf sync daemon service",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return svcStop(config.DefaultPath())
+	},
+}
+
+var daemonStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Report whether the hdf sync daemon service is installed/running",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		status, err := svcStatus(config.DefaultPath())
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), status)
+		return err
+	},
+}
+
+func init() {
+	daemonCmd.AddCommand(daemonRunCmd, daemonInstallCmd, daemonUninstallCmd, daemonStartCmd, daemonStopCmd, daemonStatusCmd)
 }
 
 // printDiff writes ANSI-colored unified diff content to stdout.
