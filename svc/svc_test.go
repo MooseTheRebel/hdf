@@ -9,6 +9,16 @@ import (
 	kservice "github.com/kardianos/service"
 )
 
+// Call tags recorded by fakeService, shared with the tests that assert on
+// call sequences below.
+const (
+	callRun       = "run"
+	callStart     = "start"
+	callStop      = "stop"
+	callInstall   = "install"
+	callUninstall = "uninstall"
+)
+
 // fakeService implements kservice.Service and records calls for tests,
 // without touching any real OS service manager.
 type fakeService struct {
@@ -24,27 +34,27 @@ type fakeService struct {
 }
 
 func (f *fakeService) Run() error {
-	f.calls = append(f.calls, "run")
+	f.calls = append(f.calls, callRun)
 	return f.runErr
 }
 
 func (f *fakeService) Start() error {
-	f.calls = append(f.calls, "start")
+	f.calls = append(f.calls, callStart)
 	return f.startErr
 }
 
 func (f *fakeService) Stop() error {
-	f.calls = append(f.calls, "stop")
+	f.calls = append(f.calls, callStop)
 	return f.stopErr
 }
 func (f *fakeService) Restart() error { return nil }
 func (f *fakeService) Install() error {
-	f.calls = append(f.calls, "install")
+	f.calls = append(f.calls, callInstall)
 	return f.installErr
 }
 
 func (f *fakeService) Uninstall() error {
-	f.calls = append(f.calls, "uninstall")
+	f.calls = append(f.calls, callUninstall)
 	return f.uninstallErr
 }
 func (f *fakeService) Logger(errs chan<- error) (kservice.Logger, error)       { return nil, nil }
@@ -102,26 +112,32 @@ func TestInstallUninstall(t *testing.T) {
 			name:      "Install installs then starts",
 			fake:      &fakeService{},
 			call:      Install,
-			wantCalls: []string{"install", "start"},
+			wantCalls: []string{callInstall, callStart},
 		},
 		{
 			name:        "Install propagates install error without starting",
 			fake:        &fakeService{installErr: errors.New("already installed")},
 			call:        Install,
 			wantErr:     true,
-			mustNotHave: "start",
+			mustNotHave: callStart,
 		},
 		{
 			name:      "Uninstall stops then uninstalls",
 			fake:      &fakeService{},
 			call:      Uninstall,
-			wantCalls: []string{"stop", "uninstall"},
+			wantCalls: []string{callStop, callUninstall},
 		},
 		{
 			name:     "Uninstall ignores stop error and still uninstalls",
 			fake:     &fakeService{stopErr: errors.New("not running")},
 			call:     Uninstall,
-			mustHave: "uninstall",
+			mustHave: callUninstall,
+		},
+		{
+			name:     "Uninstall ignores ErrNotInstalled and is idempotent",
+			fake:     &fakeService{uninstallErr: kservice.ErrNotInstalled},
+			call:     Uninstall,
+			mustHave: callUninstall,
 		},
 	}
 	for _, tc := range cases {
@@ -225,7 +241,7 @@ func TestRun(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Run() error = %v, want nil", err)
 			}
-			if !slices.Equal(tc.fake.calls, []string{"run"}) {
+			if !slices.Equal(tc.fake.calls, []string{callRun}) {
 				t.Errorf("calls = %v, want [run]", tc.fake.calls)
 			}
 		})

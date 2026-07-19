@@ -84,9 +84,11 @@ func (p *program) Stop(s kservice.Service) error {
 		p.cancel()
 	}
 	if p.done != nil {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
 		select {
 		case <-p.done:
-		case <-time.After(5 * time.Second):
+		case <-timer.C:
 		}
 	}
 	return nil
@@ -129,14 +131,15 @@ func Install(cfgPath string) error {
 }
 
 // Uninstall stops and removes the installed service. A failure to stop
-// (e.g. it wasn't running) does not prevent uninstall.
+// (e.g. it wasn't running) does not prevent uninstall, and uninstalling an
+// already-uninstalled service is treated as success (idempotent).
 func Uninstall(cfgPath string) error {
 	s, err := buildService(cfgPath)
 	if err != nil {
 		return fmt.Errorf("building service: %w", err)
 	}
 	_ = s.Stop()
-	if err := s.Uninstall(); err != nil {
+	if err := s.Uninstall(); err != nil && !errors.Is(err, kservice.ErrNotInstalled) {
 		return fmt.Errorf("uninstalling service: %w", err)
 	}
 	return nil

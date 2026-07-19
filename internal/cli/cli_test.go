@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -3678,92 +3680,51 @@ func TestResolveRepoPathRejectsTraversal(t *testing.T) {
 	}
 }
 
-// TestDaemonInstallCmd_CallsSvcInstall verifies the "daemon install" RunE
-// delegates to svcInstall with the default config path and surfaces errors.
-func TestDaemonInstallCmd_CallsSvcInstall(t *testing.T) {
-	origRunDaemon := runDaemon
-	defer func() { runDaemon = origRunDaemon }()
-	runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
+// TestDaemonServiceCmds_DelegateToSvcFuncs verifies that the "daemon
+// install/uninstall/start/stop" RunE funcs delegate to their respective
+// svc func var with the default config path and surface errors. install
+// and start also go through runDaemon's preflight check, so it's mocked
+// through for those two.
+func TestDaemonServiceCmds_DelegateToSvcFuncs(t *testing.T) {
+	cases := []struct {
+		name         string
+		cmd          *cobra.Command
+		svcFunc      *func(string) error
+		viaRunDaemon bool
+	}{
+		{name: "install", cmd: daemonInstallCmd, svcFunc: &svcInstall, viaRunDaemon: true},
+		{name: "uninstall", cmd: daemonUninstallCmd, svcFunc: &svcUninstall},
+		{name: "start", cmd: daemonStartCmd, svcFunc: &svcStart, viaRunDaemon: true},
+		{name: "stop", cmd: daemonStopCmd, svcFunc: &svcStop},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.viaRunDaemon {
+				origRunDaemon := runDaemon
+				defer func() { runDaemon = origRunDaemon }()
+				runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
+			}
 
-	origInstall := svcInstall
-	defer func() { svcInstall = origInstall }()
+			origFunc := *tc.svcFunc
+			defer func() { *tc.svcFunc = origFunc }()
 
-	var gotCfgPath string
-	svcInstall = func(cfgPath string) error {
-		gotCfgPath = cfgPath
-		return nil
-	}
-	if err := daemonInstallCmd.RunE(daemonInstallCmd, nil); err != nil {
-		t.Fatalf("RunE() error = %v, want nil", err)
-	}
-	if gotCfgPath != config.DefaultPath() {
-		t.Errorf("cfgPath = %q, want %q", gotCfgPath, config.DefaultPath())
-	}
+			var gotCfgPath string
+			*tc.svcFunc = func(cfgPath string) error {
+				gotCfgPath = cfgPath
+				return nil
+			}
+			if err := tc.cmd.RunE(tc.cmd, nil); err != nil {
+				t.Fatalf("RunE() error = %v, want nil", err)
+			}
+			if gotCfgPath != config.DefaultPath() {
+				t.Errorf("cfgPath = %q, want %q", gotCfgPath, config.DefaultPath())
+			}
 
-	svcInstall = func(cfgPath string) error { return errors.New("boom") }
-	if err := daemonInstallCmd.RunE(daemonInstallCmd, nil); err == nil {
-		t.Fatal("expected error to propagate, got nil")
-	}
-}
-
-// TestDaemonUninstallCmd_CallsSvcUninstall verifies the "daemon uninstall"
-// RunE delegates to svcUninstall.
-func TestDaemonUninstallCmd_CallsSvcUninstall(t *testing.T) {
-	origUninstall := svcUninstall
-	defer func() { svcUninstall = origUninstall }()
-
-	called := false
-	svcUninstall = func(cfgPath string) error {
-		called = true
-		return nil
-	}
-	if err := daemonUninstallCmd.RunE(daemonUninstallCmd, nil); err != nil {
-		t.Fatalf("RunE() error = %v, want nil", err)
-	}
-	if !called {
-		t.Error("expected svcUninstall to be called")
-	}
-}
-
-// TestDaemonStartCmd_CallsSvcStart verifies the "daemon start" RunE
-// delegates to svcStart.
-func TestDaemonStartCmd_CallsSvcStart(t *testing.T) {
-	origRunDaemon := runDaemon
-	defer func() { runDaemon = origRunDaemon }()
-	runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
-
-	origStart := svcStart
-	defer func() { svcStart = origStart }()
-
-	called := false
-	svcStart = func(cfgPath string) error {
-		called = true
-		return nil
-	}
-	if err := daemonStartCmd.RunE(daemonStartCmd, nil); err != nil {
-		t.Fatalf("RunE() error = %v, want nil", err)
-	}
-	if !called {
-		t.Error("expected svcStart to be called")
-	}
-}
-
-// TestDaemonStopCmd_CallsSvcStop verifies the "daemon stop" RunE delegates
-// to svcStop.
-func TestDaemonStopCmd_CallsSvcStop(t *testing.T) {
-	origStop := svcStop
-	defer func() { svcStop = origStop }()
-
-	called := false
-	svcStop = func(cfgPath string) error {
-		called = true
-		return nil
-	}
-	if err := daemonStopCmd.RunE(daemonStopCmd, nil); err != nil {
-		t.Fatalf("RunE() error = %v, want nil", err)
-	}
-	if !called {
-		t.Error("expected svcStop to be called")
+			*tc.svcFunc = func(string) error { return errors.New("boom") }
+			if err := tc.cmd.RunE(tc.cmd, nil); err == nil {
+				t.Fatal("expected error to propagate, got nil")
+			}
+		})
 	}
 }
 
