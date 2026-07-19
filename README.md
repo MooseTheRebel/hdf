@@ -13,79 +13,93 @@ managing a user's `$HOME` directory (dot files).
 - **Hybrid Design**: Seamlessly switches between CLI and GUI modes based on the command
 - **Viewing diffs**: in a windowed interface while maintaining CLI accessibility.
 
+## Installation
+
+Download the latest release for your platform from the
+[GitHub releases page](https://github.com/MooseTheRebel/hdf/releases), extract
+it, and put the `hdf` binary somewhere on your `PATH`.
+
+The examples below use `hdf` directly. If you're building from source instead
+of using a release, see [Development](#development) for how to set `HDF_CLI`
+in place of `hdf`.
+
 ## CLI Commands
-
-Build first, then set `HDF_CLI` for your platform:
-
-```bash
-just install
-
-# macOS
-HDF_CLI="./build/bin/hdf.app/Contents/MacOS/hdf"
-
-# Linux
-HDF_CLI="./build/bin/hdf"
-```
 
 ### init
 Initialize hdf. Prompts for a git URL or local path, sets up the repository, and creates a per-machine branch named after your hostname.
 
 ```bash
-"$HDF_CLI" init
+hdf init
 ```
 
 ### changes-push (alias: enroll)
 Enroll a dot file. Copies it into the hdf repo, replaces the original with a symlink, commits to your machine branch, and registers it on main.
 
 ```bash
-"$HDF_CLI" changes-push ~/.bashrc
-"$HDF_CLI" changes-push ~/.vimrc
+hdf changes-push ~/.bashrc
+hdf changes-push ~/.vimrc
 ```
 
 ### changes-pull (alias: link)
 Fetch main, review each incoming file (accept or skip per file), and re-create all managed symlinks (safe to re-run after cloning on a new machine).
 
 ```bash
-"$HDF_CLI" changes-pull
+hdf changes-pull
 ```
 
 ### promote
 Merge your machine branch into main and push. Content you have never reviewed (another machine's promote you haven't pulled, or a newer version of a file you both changed) is shown first and needs explicit consent. See [docs/state-machine.md](docs/state-machine.md) for the full state machine, guards, and multi-machine model.
 
 ```bash
-"$HDF_CLI" promote
+hdf promote
 ```
 
 ### status
 Show managed files, their sync state, and the current branch.
 
 ```bash
-"$HDF_CLI" status
+hdf status
 ```
 
 ### daemon
-Start the background sync daemon. Runs every 30 minutes and sends OS notifications when commits, pushes, or merges are needed.
+Run the background sync daemon in the foreground, or install it as a per-user background service. Runs every 30 minutes and sends OS notifications when commits, pushes, or merges are needed.
 
 ```bash
-"$HDF_CLI" daemon
+hdf daemon run
+```
+
+#### Install as a background service
+
+Installs a per-user service (a launchd agent on macOS, a systemd user unit on Linux) that starts the daemon now, restarts it on crash, and starts it again at login/boot. No `sudo` required.
+
+```bash
+hdf daemon install     # install and start
+hdf daemon status      # "not installed" / "stopped" / "running"
+hdf daemon stop        # stop without uninstalling
+hdf daemon start       # start an installed-but-stopped service
+hdf daemon uninstall   # stop and remove the service
 ```
 
 ### diff
 Opens a window to display a diff from a URL.
 
 ```bash
-"$HDF_CLI" diff
-"$HDF_CLI" diff https://patch-diff.githubusercontent.com/raw/spf13/cobra/pull/2285.diff
+hdf diff
+hdf diff https://patch-diff.githubusercontent.com/raw/spf13/cobra/pull/2285.diff
 ```
 
 ### config
 Show the current hdf configuration file.
 
 ```bash
-"$HDF_CLI" config
+hdf config
 ```
 
 ## Development
+
+Building from source instead of using a release binary? Substitute `HDF_CLI`
+for `hdf` in the commands above (e.g. `"$HDF_CLI" init` instead of `hdf
+init`).
 
 ### Prerequisites
 
@@ -104,6 +118,16 @@ just install
 
 # Build and add hdf to /usr/local/bin
 just install --path
+```
+
+Set `HDF_CLI` for your platform:
+
+```bash
+# macOS
+HDF_CLI="./build/bin/hdf.app/Contents/MacOS/hdf"
+
+# Linux
+HDF_CLI="./build/bin/hdf"
 ```
 
 ### Live Development
