@@ -17,12 +17,16 @@ import (
 // systemd unit.
 const ServiceName = "com.moosetherebel.hdf"
 
+// RunSubcommand is the cobra subcommand the installed service re-invokes
+// the binary with ("hdf daemon run").
+const RunSubcommand = "run"
+
 func buildConfig() *kservice.Config {
 	return &kservice.Config{
 		Name:        ServiceName,
 		DisplayName: "hdf sync daemon",
 		Description: "Syncs dotfiles in the background",
-		Arguments:   []string{"daemon", "run"},
+		Arguments:   []string{"daemon", RunSubcommand},
 		Option: kservice.KeyValue{
 			"UserService": true,
 			"RunAtLoad":   true,
@@ -69,6 +73,18 @@ var newService = kservice.New
 
 func buildService(cfgPath string) (kservice.Service, error) {
 	return newService(&program{cfgPath: cfgPath}, buildConfig())
+}
+
+// Run runs the sync daemon via the service runner, blocking until stopped
+// by an OS signal (SIGINT/SIGTERM) or, when running under a service
+// manager, a stop request — either path calls program.Stop for a graceful
+// shutdown instead of an abrupt kill mid-sync.
+func Run(cfgPath string) error {
+	s, err := buildService(cfgPath)
+	if err != nil {
+		return fmt.Errorf("building service: %w", err)
+	}
+	return s.Run()
 }
 
 // Install installs hdf's sync daemon as a per-user background service and

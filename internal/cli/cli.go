@@ -1448,13 +1448,26 @@ var daemonCmd = &cobra.Command{
 	Long:  `Run the hdf sync daemon in the foreground, or install/control it as a per-user background service.`,
 }
 
+// svcRun is an indirection over svc.Run so tests can substitute a fake
+// instead of touching a real OS service manager.
+var svcRun = svc.Run
+
+// runDaemon checks that hdf is initialized before handing off to run, so
+// the service doesn't start under OS supervision in a broken state and
+// fail silently.
+func runDaemon(cfgPath string, run func(string) error) error {
+	if _, err := config.Load(cfgPath); err != nil {
+		return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
+	}
+	return run(cfgPath)
+}
+
 var daemonRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run the hdf sync daemon in the foreground",
-	Long:  `Runs a background loop that syncs every 30 minutes and sends OS notifications when action is needed.`,
+	Long:  `Runs a background loop that syncs every 30 minutes and sends OS notifications when action is needed. Also used internally as the entry point for the installed background service.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfgPath := config.DefaultPath()
-		return daemon.Run(cmd.Context(), cfgPath)
+		return runDaemon(config.DefaultPath(), svcRun)
 	},
 }
 

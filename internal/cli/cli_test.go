@@ -3780,3 +3780,48 @@ func TestDaemonStatusCmd_PrintsSvcStatus(t *testing.T) {
 		t.Fatal("expected error to propagate, got nil")
 	}
 }
+
+// TestRunDaemon_FailsPreflightWhenNotInitialized verifies runDaemon refuses
+// to start the service runner when hdf hasn't been initialized yet, so the
+// service doesn't start in a broken state and fail silently under OS
+// supervision.
+func TestRunDaemon_FailsPreflightWhenNotInitialized(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	called := false
+	err := runDaemon(cfgPath, func(string) error {
+		called = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if called {
+		t.Error("run func should not be called when hdf is not initialized")
+	}
+}
+
+// TestRunDaemon_CallsRunWhenInitialized verifies runDaemon calls the
+// injected run function once a config is present, forwarding its error.
+func TestRunDaemon_CallsRunWhenInitialized(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := config.Save(cfgPath, &config.Config{Branch: testBranch, LocalDotfilesDir: t.TempDir()}); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+
+	var gotCfgPath string
+	err := runDaemon(cfgPath, func(p string) error {
+		gotCfgPath = p
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("runDaemon() error = %v, want nil", err)
+	}
+	if gotCfgPath != cfgPath {
+		t.Errorf("cfgPath passed to run = %q, want %q", gotCfgPath, cfgPath)
+	}
+
+	err = runDaemon(cfgPath, func(string) error { return errors.New("boom") })
+	if err == nil {
+		t.Fatal("expected error from run func to propagate, got nil")
+	}
+}

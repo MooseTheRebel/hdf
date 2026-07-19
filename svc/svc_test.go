@@ -16,11 +16,16 @@ type fakeService struct {
 	uninstallErr error
 	startErr     error
 	stopErr      error
+	runErr       error
 	statusVal    kservice.Status
 	statusErr    error
 }
 
-func (f *fakeService) Run() error { return nil }
+func (f *fakeService) Run() error {
+	f.calls = append(f.calls, "run")
+	return f.runErr
+}
+
 func (f *fakeService) Start() error {
 	f.calls = append(f.calls, "start")
 	return f.startErr
@@ -64,7 +69,7 @@ func TestBuildConfig_Fields(t *testing.T) {
 	if cfg.Name != "com.moosetherebel.hdf" {
 		t.Errorf("Name = %q, want %q", cfg.Name, "com.moosetherebel.hdf")
 	}
-	wantArgs := []string{"daemon", "run"}
+	wantArgs := []string{"daemon", RunSubcommand}
 	if len(cfg.Arguments) != len(wantArgs) {
 		t.Fatalf("Arguments = %v, want %v", cfg.Arguments, wantArgs)
 	}
@@ -203,6 +208,27 @@ func TestStatus_OtherErrorPropagates(t *testing.T) {
 
 	_, err := Status("/cfg")
 	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestRun_DelegatesToServiceRun(t *testing.T) {
+	fake := &fakeService{}
+	withFakeService(t, fake)
+
+	if err := Run("/cfg"); err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+	if len(fake.calls) != 1 || fake.calls[0] != "run" {
+		t.Errorf("calls = %v, want [run]", fake.calls)
+	}
+}
+
+func TestRun_PropagatesError(t *testing.T) {
+	fake := &fakeService{runErr: errors.New("boom")}
+	withFakeService(t, fake)
+
+	if err := Run("/cfg"); err == nil {
 		t.Fatal("expected error, got nil")
 	}
 }
