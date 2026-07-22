@@ -3,7 +3,11 @@ package svc
 import (
 	"context"
 	"errors"
+	"hdf/config"
+	"hdf/eventlog"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	kservice "github.com/kardianos/service"
@@ -271,10 +275,11 @@ func TestRunDaemonLoop(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			origRun, origExit := runFn, exitFn
-			defer func() { runFn, exitFn = origRun, origExit }()
+			origRun, origExit, origStatePath := runFn, exitFn, statePathFn
+			defer func() { runFn, exitFn, statePathFn = origRun, origExit, origStatePath }()
 
 			runFn = func(context.Context, string) error { return tc.runErr }
+			statePathFn = func() string { return filepath.Join(t.TempDir(), "state.toml") }
 			var gotCode int
 			exitCalled := false
 			exitFn = func(code int) {
@@ -298,5 +303,33 @@ func TestRunDaemonLoop(t *testing.T) {
 				t.Errorf("exit code = %d, want 1", gotCode)
 			}
 		})
+	}
+}
+
+func TestRunDaemonLoop_RecordsPendingCrashOnUnexpectedExit(t *testing.T) {
+	origRun, origExit, origStatePath := runFn, exitFn, statePathFn
+	defer func() { runFn, exitFn, statePathFn = origRun, origExit, origStatePath }()
+
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	statePathFn = func() string { return statePath }
+	runFn = func(context.Context, string) error { return errors.New("repo vanished") }
+	exitFn = func(int) {} // don't actually exit the test process
+
+	runDaemonLoop(context.Background(), "/cfg")
+
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !strings.Contains(s.PendingCrashReport, "repo vanished") {
+		t.Errorf("PendingCrashReport = %q, want to contain %q", s.PendingCrashReport, "repo vanished")
+	}
+
+	entries, err := eventlog.ReadAll(eventlog.PathFor(statePath))
+	if err != nil {
+		t.Fatalf("eventlog.ReadAll: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event != "daemon_crash" {
+		t.Errorf("entries = %+v, want one daemon_crash entry", entries)
 	}
 }

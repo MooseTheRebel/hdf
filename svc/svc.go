@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hdf/config"
 	"hdf/daemon"
+	"hdf/eventlog"
 	"os"
 	"time"
 
@@ -48,6 +50,9 @@ var runFn = daemon.Run
 // exitFn is a seam over os.Exit for tests.
 var exitFn = os.Exit
 
+// statePathFn is a seam over config.DefaultStatePath for tests.
+var statePathFn = config.DefaultStatePath
+
 // runDaemonLoop runs the sync loop and, if it exits with anything other
 // than a graceful Stop, exits the process. Without this, an unexpected
 // daemon.Run error (e.g. the dotfiles repo disappearing) would leave the
@@ -61,7 +66,11 @@ var exitFn = os.Exit
 func runDaemonLoop(ctx context.Context, cfgPath string) {
 	err := runFn(ctx, cfgPath)
 	if err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
-		fmt.Fprintf(os.Stderr, "hdf daemon exited unexpectedly: %v\n", err)
+		msg := fmt.Sprintf("hdf daemon exited unexpectedly: %v", err)
+		fmt.Fprintf(os.Stderr, "%s\n", msg)
+		statePath := statePathFn()
+		_ = config.SetPendingCrash(statePath, msg)
+		_ = eventlog.Append(eventlog.PathFor(statePath), "daemon_crash", err.Error())
 		exitFn(1)
 	}
 }
