@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"hdf/config"
+	"hdf/eventlog"
 	"hdf/link"
 	"hdf/repo"
+	"hdf/report"
 	"io"
 	"os"
 	"path/filepath"
@@ -3803,5 +3805,157 @@ func TestRunDaemon(t *testing.T) {
 				t.Errorf("cfgPath passed to run = %q, want %q", gotCfgPath, cfgPath)
 			}
 		})
+	}
+}
+
+func TestHandlePanic_WritesPendingCrashAndEvent(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	msg := handlePanic("boom", statePath)
+	if !strings.Contains(msg, "boom") {
+		t.Errorf("handlePanic returned %q, want it to contain %q", msg, "boom")
+	}
+
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !strings.Contains(s.PendingCrashReport, "boom") {
+		t.Errorf("PendingCrashReport = %q, want to contain %q", s.PendingCrashReport, "boom")
+	}
+
+	entries, err := eventlog.ReadAll(eventlog.PathFor(statePath))
+	if err != nil {
+		t.Fatalf("eventlog.ReadAll: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event != "panic" {
+		t.Errorf("entries = %+v, want one panic entry", entries)
+	}
+}
+
+func TestRecoverPanic_RecordsCrashAndExits(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	origStatePathFn, origExit := statePathFn, cliExitFn
+	defer func() { statePathFn, cliExitFn = origStatePathFn, origExit }()
+	statePathFn = func() string { return statePath }
+	exitCode := -1
+	cliExitFn = func(code int) { exitCode = code }
+
+	func() {
+		defer recoverPanic()
+		panic("boom")
+	}()
+
+	if exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !strings.Contains(s.PendingCrashReport, "boom") {
+		t.Errorf("PendingCrashReport = %q, want to contain %q", s.PendingCrashReport, "boom")
+	}
+}
+
+func TestRecoverPanic_NoPanicIsNoop(t *testing.T) {
+	origStatePathFn, origExit := statePathFn, cliExitFn
+	defer func() { statePathFn, cliExitFn = origStatePathFn, origExit }()
+	exitCalled := false
+	cliExitFn = func(int) { exitCalled = true }
+
+	func() {
+		defer recoverPanic()
+	}()
+
+	if exitCalled {
+		t.Error("cliExitFn should not be called when there was no panic")
+	}
+}
+
+func TestRunReportIssue_Success(t *testing.T) {
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	var gotOpts report.BuildOptions
+	buildReport = func(opts report.BuildOptions, version string) (string, error) {
+		gotOpts = opts
+		return "/tmp/hdf-report-x.zip", nil
+	}
+
+	if err := runReportIssue(report.BuildOptions{Trigger: report.TriggerManual, UserText: "it broke"}); err != nil {
+		t.Fatalf("runReportIssue: %v", err)
+	}
+	if gotOpts.Trigger != report.TriggerManual || gotOpts.UserText != "it broke" {
+		t.Errorf("buildReport called with %+v", gotOpts)
+	}
+}
+
+func TestRunReportIssue_RepoTooLargeGivesFriendlyError(t *testing.T) {
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	buildReport = func(report.BuildOptions, string) (string, error) {
+		return "", report.ErrRepoTooLarge
+	}
+
+	err := runReportIssue(report.BuildOptions{})
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Errorf("runReportIssue err = %v, want a message containing \"too large\"", err)
+	}
+}
+
+func TestPromptPendingCrash_NoCrashIsNoop(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader(""))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+}
+
+func TestPromptPendingCrash_UserDeclinesDoesNotBuildReportButClearsMarker(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+		t.Fatal(err)
+	}
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	called := false
+	buildReport = func(report.BuildOptions, string) (string, error) {
+		called = true
+		return "", nil
+	}
+
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("n\n"))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+	if called {
+		t.Error("buildReport should not be called when the user declines")
+	}
+
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if s.PendingCrashReport != "" {
+		t.Errorf("PendingCrashReport = %q, want cleared after being surfaced once", s.PendingCrashReport)
+	}
+}
+
+func TestPromptPendingCrash_UserAcceptsBuildsReportWithDetectedTrigger(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+		t.Fatal(err)
+	}
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	var gotOpts report.BuildOptions
+	buildReport = func(opts report.BuildOptions, version string) (string, error) {
+		gotOpts = opts
+		return "/tmp/hdf-report-x.zip", nil
+	}
+
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("y\n"))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+	if gotOpts.Trigger != report.TriggerPanic || gotOpts.CrashDetail != "panic: boom" {
+		t.Errorf("buildReport called with %+v, want TriggerPanic/panic: boom", gotOpts)
 	}
 }

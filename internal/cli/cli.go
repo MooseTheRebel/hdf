@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"hdf/config"
 	"hdf/daemon"
+	"hdf/eventlog"
 	"hdf/link"
 	"hdf/repo"
+	"hdf/report"
 	"hdf/svc"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -38,7 +41,16 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return nil // no config yet (e.g. before hdf init), skip migration
 		}
-		return config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir)
+		if err := config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir); err != nil {
+			return err
+		}
+		// Skip the crash prompt for report-issue itself (avoid nagging while
+		// already reporting) and for the daemon service process (no
+		// interactive terminal to prompt on).
+		if cmd == reportIssueCmd || cmd == daemonRunCmd {
+			return nil
+		}
+		return promptPendingCrash(config.DefaultStatePath(), bufio.NewReader(os.Stdin))
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		launchGUI([]string{})
@@ -1362,6 +1374,52 @@ Skipping is an accepted workflow — run hdf changes-pull again when ready.`,
 	},
 }
 
+// buildReport is a seam over report.Build so tests can substitute a fake.
+var buildReport = report.Build
+
+// reportOutDir is a var so tests can redirect report output to a temp dir.
+// Defaults to the user's home directory, which is always writable and easy
+// to find, unlike the current working directory a CLI command runs from.
+var reportOutDir = func() string {
+	dir, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return dir
+}
+
+// runReportIssue builds a diagnostic report from opts and prints its path,
+// translating ErrRepoTooLarge into an actionable message instead of a raw
+// error dump.
+func runReportIssue(opts report.BuildOptions) error {
+	path, err := buildReport(opts, version)
+	if err != nil {
+		if errors.Is(err, report.ErrRepoTooLarge) {
+			return fmt.Errorf("dotfiles repo is too large to include in a report (compressed size over %d bytes) — prune history or contact your admin another way", report.MaxRepoZipBytes)
+		}
+		return fmt.Errorf("building report: %w", err)
+	}
+	fmt.Printf("Report written to %s\n", path)
+	return nil
+}
+
+var reportIssueCmd = &cobra.Command{
+	Use:   "report-issue",
+	Short: "Package diagnostics into a .zip for sharing with an admin",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Print("What was expected? What actually happened? (optional, press Enter to skip)\n> ")
+		text, _ := reader.ReadString('\n')
+		return runReportIssue(report.BuildOptions{
+			CfgPath:   config.DefaultPath(),
+			StatePath: config.DefaultStatePath(),
+			Trigger:   report.TriggerManual,
+			UserText:  strings.TrimSpace(text),
+			OutDir:    reportOutDir(),
+		})
+	},
+}
+
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show managed files and sync state",
@@ -1574,6 +1632,38 @@ func promptPendingWarnings(statePath string, reader *bufio.Reader) error {
 	return nil
 }
 
+// promptPendingCrash checks for a crash recorded by a previous hdf process
+// (a panic, or an unexpected daemon exit recorded by svc.runDaemonLoop) and,
+// if present, offers to build a report. Mirrors promptPendingWarnings'
+// take-and-clear pattern so a crash is only ever surfaced once. Unlike
+// promptPendingWarnings, declining is not itself an error — an old crash
+// shouldn't block every future command from running.
+func promptPendingCrash(statePath string, reader *bufio.Reader) error {
+	msg, err := config.TakePendingCrash(statePath)
+	if err != nil {
+		return fmt.Errorf("reading pending crash report: %w", err)
+	}
+	if msg == "" {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "Warning: an error occurred in hdf. Would you like to report an issue? [y/N]:")
+	answer, _ := reader.ReadString('\n')
+	if !isYes(strings.TrimSpace(answer)) {
+		return nil
+	}
+	trigger := report.TriggerDaemonCrash
+	if strings.HasPrefix(msg, "panic:") {
+		trigger = report.TriggerPanic
+	}
+	return runReportIssue(report.BuildOptions{
+		CfgPath:     config.DefaultPath(),
+		StatePath:   statePath,
+		Trigger:     trigger,
+		CrashDetail: msg,
+		OutDir:      reportOutDir(),
+	})
+}
+
 // resolveRepoPath returns the repo file path for a managed file with variants,
 // choosing the variant matching branch, or empty string if no variant matches.
 func resolveRepoPath(f config.ManagedFile, branch, localDotfilesDir string) (string, error) {
@@ -1624,14 +1714,43 @@ func launchGUI(diffURLs []string) {
 // plain `go build` binaries report "dev".
 var version = "dev"
 
+// statePathFn is a seam over config.DefaultStatePath for tests.
+var statePathFn = config.DefaultStatePath
+
+// cliExitFn is a seam over os.Exit for tests.
+var cliExitFn = os.Exit
+
+// handlePanic records rec (from recover()) as a pending crash report and
+// event-log entry, returning the message that was recorded. Factored out of
+// recoverPanic so it's testable without triggering an os.Exit.
+func handlePanic(rec any, statePath string) string {
+	msg := fmt.Sprintf("panic: %v\n%s", rec, debug.Stack())
+	_ = config.SetPendingCrash(statePath, msg)
+	_ = eventlog.Append(eventlog.PathFor(statePath), "panic", fmt.Sprintf("%v", rec))
+	return msg
+}
+
+// recoverPanic is deferred once around rootCmd.Execute in Execute. It
+// records any panic as a pending crash report — surfaced as a prompt on the
+// next hdf invocation via promptPendingCrash — before exiting, instead of
+// letting the process crash with no trace.
+func recoverPanic() {
+	if rec := recover(); rec != nil {
+		handlePanic(rec, statePathFn())
+		fmt.Fprintln(os.Stderr, "hdf encountered an unexpected error and exited. Run 'hdf report-issue' next time to help diagnose it.")
+		cliExitFn(1)
+	}
+}
+
 // Execute runs the hdf CLI. frontendAssets is the embedded frontend bundle,
 // passed in by package main. Exits the process with status 1 on error.
 func Execute(frontendAssets embed.FS) {
 	assets = frontendAssets
 	rootCmd.Version = version
+	defer recoverPanic()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		cliExitFn(1)
 	}
 }
 
@@ -1656,4 +1775,5 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(promoteCmd)
+	rootCmd.AddCommand(reportIssueCmd)
 }

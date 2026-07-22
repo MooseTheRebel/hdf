@@ -409,6 +409,54 @@ func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
 	return ref.Hash().String(), nil
 }
 
+// LocalBranches returns the short names of all local branches, sorted.
+func (r *Repo) LocalBranches() ([]string, error) {
+	iter, err := r.r.Branches()
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	err = iter.ForEach(func(ref *plumbing.Reference) error {
+		names = append(names, ref.Name().Short())
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// RemoteTrackingBranches returns the short branch names of all
+// remote-tracking refs for remote (e.g. "host-laptop" for
+// refs/remotes/origin/host-laptop), sorted. Call Fetch first for a fresh
+// answer.
+func (r *Repo) RemoteTrackingBranches(remote string) ([]string, error) {
+	refs, err := r.r.References()
+	if err != nil {
+		return nil, err
+	}
+	prefix := fmt.Sprintf("refs/remotes/%s/", remote)
+	var names []string
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		name := string(ref.Name())
+		if !strings.HasPrefix(name, prefix) {
+			return nil
+		}
+		short := strings.TrimPrefix(name, prefix)
+		if short == "HEAD" {
+			return nil
+		}
+		names = append(names, short)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 // RemoteHasBranch reports whether the remote tracking ref for branch exists
 // (refs/remotes/<remote>/<branch>). Call Fetch first for a fresh answer.
 func (r *Repo) RemoteHasBranch(remote, branch string) (bool, error) {
