@@ -3902,3 +3902,60 @@ func TestRunReportIssue_RepoTooLargeGivesFriendlyError(t *testing.T) {
 		t.Errorf("runReportIssue err = %v, want a message containing \"too large\"", err)
 	}
 }
+
+func TestPromptPendingCrash_NoCrashIsNoop(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader(""))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+}
+
+func TestPromptPendingCrash_UserDeclinesDoesNotBuildReportButClearsMarker(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+		t.Fatal(err)
+	}
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	called := false
+	buildReport = func(report.BuildOptions, string) (string, error) {
+		called = true
+		return "", nil
+	}
+
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("n\n"))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+	if called {
+		t.Error("buildReport should not be called when the user declines")
+	}
+
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if s.PendingCrashReport != "" {
+		t.Errorf("PendingCrashReport = %q, want cleared after being surfaced once", s.PendingCrashReport)
+	}
+}
+
+func TestPromptPendingCrash_UserAcceptsBuildsReportWithDetectedTrigger(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+		t.Fatal(err)
+	}
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	var gotOpts report.BuildOptions
+	buildReport = func(opts report.BuildOptions, version string) (string, error) {
+		gotOpts = opts
+		return "/tmp/hdf-report-x.zip", nil
+	}
+
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("y\n"))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+	if gotOpts.Trigger != report.TriggerPanic || gotOpts.CrashDetail != "panic: boom" {
+		t.Errorf("buildReport called with %+v, want TriggerPanic/panic: boom", gotOpts)
+	}
+}

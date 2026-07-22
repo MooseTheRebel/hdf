@@ -41,7 +41,16 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return nil // no config yet (e.g. before hdf init), skip migration
 		}
-		return config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir)
+		if err := config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir); err != nil {
+			return err
+		}
+		// Skip the crash prompt for report-issue itself (avoid nagging while
+		// already reporting) and for the daemon service process (no
+		// interactive terminal to prompt on).
+		if cmd == reportIssueCmd || cmd == daemonRunCmd {
+			return nil
+		}
+		return promptPendingCrash(config.DefaultStatePath(), bufio.NewReader(os.Stdin))
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		launchGUI([]string{})
@@ -1621,6 +1630,38 @@ func promptPendingWarnings(statePath string, reader *bufio.Reader) error {
 		return fmt.Errorf("aborted — address the warnings above before continuing")
 	}
 	return nil
+}
+
+// promptPendingCrash checks for a crash recorded by a previous hdf process
+// (a panic, or an unexpected daemon exit recorded by svc.runDaemonLoop) and,
+// if present, offers to build a report. Mirrors promptPendingWarnings'
+// take-and-clear pattern so a crash is only ever surfaced once. Unlike
+// promptPendingWarnings, declining is not itself an error — an old crash
+// shouldn't block every future command from running.
+func promptPendingCrash(statePath string, reader *bufio.Reader) error {
+	msg, err := config.TakePendingCrash(statePath)
+	if err != nil {
+		return fmt.Errorf("reading pending crash report: %w", err)
+	}
+	if msg == "" {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "Warning: an error occurred in hdf. Would you like to report an issue? [y/N]:")
+	answer, _ := reader.ReadString('\n')
+	if !isYes(strings.TrimSpace(answer)) {
+		return nil
+	}
+	trigger := report.TriggerDaemonCrash
+	if strings.HasPrefix(msg, "panic:") {
+		trigger = report.TriggerPanic
+	}
+	return runReportIssue(report.BuildOptions{
+		CfgPath:     config.DefaultPath(),
+		StatePath:   statePath,
+		Trigger:     trigger,
+		CrashDetail: msg,
+		OutDir:      reportOutDir(),
+	})
 }
 
 // resolveRepoPath returns the repo file path for a managed file with variants,
