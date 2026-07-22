@@ -61,3 +61,38 @@ func TestUpdateStateCreatesFile(t *testing.T) {
 		t.Errorf("LastMainCommit = %q, want abc123", s.LastMainCommit)
 	}
 }
+
+func TestSetPendingCrash_ThenTakePendingCrash_ReturnsAndClears(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.toml")
+	if err := SetPendingCrash(path, "panic: boom"); err != nil {
+		t.Fatalf("SetPendingCrash: %v", err)
+	}
+
+	got, err := TakePendingCrash(path)
+	if err != nil {
+		t.Fatalf("TakePendingCrash: %v", err)
+	}
+	if got != "panic: boom" {
+		t.Errorf("TakePendingCrash = %q, want %q", got, "panic: boom")
+	}
+
+	// Second take must return empty — a crash is only ever surfaced once.
+	got2, err := TakePendingCrash(path)
+	if err != nil {
+		t.Fatalf("TakePendingCrash (2nd): %v", err)
+	}
+	if got2 != "" {
+		t.Errorf("TakePendingCrash (2nd) = %q, want empty", got2)
+	}
+}
+
+func TestTakePendingCrash_NoneReturnsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.toml")
+	got, err := TakePendingCrash(path)
+	if err != nil {
+		t.Fatalf("TakePendingCrash: %v", err)
+	}
+	if got != "" {
+		t.Errorf("TakePendingCrash = %q, want empty", got)
+	}
+}

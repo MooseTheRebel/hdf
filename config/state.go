@@ -27,6 +27,11 @@ type State struct {
 	// While main still holds exactly that content, promote keeps main's
 	// version without re-prompting; new content on main prompts again.
 	DeclinedOverwrites map[string]string `toml:"declined_overwrites,omitempty"`
+	// PendingCrashReport holds the message from the most recent unhandled
+	// panic or daemon crash, set by the CLI's panic-recovery wrapper or by
+	// svc.runDaemonLoop, and surfaced once (then cleared) via
+	// TakePendingCrash on the next hdf invocation.
+	PendingCrashReport string `toml:"pending_crash_report,omitempty"`
 }
 
 // DefaultStatePath returns the default path to the hdf state file.
@@ -69,6 +74,31 @@ func UpdateState(path string, fn func(*State) error) error {
 		return err
 	}
 	return SaveState(path, s)
+}
+
+// SetPendingCrash records msg as a pending crash report, overwriting any
+// previous one.
+func SetPendingCrash(path, msg string) error {
+	return UpdateState(path, func(s *State) error {
+		s.PendingCrashReport = msg
+		return nil
+	})
+}
+
+// TakePendingCrash returns and clears the pending crash report at path, if
+// any. Mirrors daemon.PendingWarnings' take-and-clear pattern so a crash is
+// only ever surfaced once.
+func TakePendingCrash(path string) (string, error) {
+	var msg string
+	err := UpdateState(path, func(s *State) error {
+		msg = s.PendingCrashReport
+		s.PendingCrashReport = ""
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return msg, nil
 }
 
 // SaveState writes s to path atomically (via a temp file + rename), creating
