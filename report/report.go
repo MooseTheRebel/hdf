@@ -3,6 +3,7 @@ package report
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"hdf/config"
@@ -11,7 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
+
+// configEntryName is the name the redacted config.toml is stored under
+// inside the report zip.
+const configEntryName = "config.toml"
 
 // TriggerType classifies what caused a report to be built.
 type TriggerType string
@@ -105,10 +112,13 @@ func gatherReportContents(opts BuildOptions, version string) (*reportContents, e
 		return nil, err
 	}
 
-	cfgBytes, err := os.ReadFile(opts.CfgPath)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("reading config file: %w", err)
+	redactedCfg := *cfg
+	redactedCfg.GitPushTarget = redactURL(cfg.GitPushTarget)
+	var cfgBuf bytes.Buffer
+	if err := toml.NewEncoder(&cfgBuf).Encode(redactedCfg); err != nil {
+		return nil, fmt.Errorf("encoding redacted config: %w", err)
 	}
+	cfgBytes := cfgBuf.Bytes()
 	stateBytes, err := os.ReadFile(opts.StatePath)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("reading state file: %w", err)
@@ -145,7 +155,7 @@ func writeReportZip(outPath string, rc *reportContents) error {
 		{"summary.json", rc.summaryJSON},
 		{"hosts.json", rc.hostsJSON},
 		{"state_transitions.log", rc.eventLogBytes},
-		{"config.toml", rc.cfgBytes},
+		{configEntryName, rc.cfgBytes},
 		{"state.toml", rc.stateBytes},
 	}
 	for _, file := range plainFiles {

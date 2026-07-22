@@ -50,6 +50,16 @@ func CompressRepo(repoPath string) ([]byte, error) {
 			return err
 		}
 		defer func() { _ = f.Close() }()
+
+		if filepath.ToSlash(rel) == "config" {
+			data, readErr := io.ReadAll(f)
+			if readErr != nil {
+				return readErr
+			}
+			_, err = w.Write(redactGitConfigBytes(data))
+			return err
+		}
+
 		_, err = io.Copy(w, f)
 		return err
 	})
