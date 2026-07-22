@@ -49,15 +49,8 @@ func CompressRepo(repoPath string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		defer func() {
-			if closeErr := f.Close(); closeErr != nil && err == nil {
-				err = closeErr
-			}
-		}()
-		_, copyErr := io.Copy(w, f)
-		if copyErr != nil {
-			return copyErr
-		}
+		defer func() { _ = f.Close() }()
+		_, err = io.Copy(w, f)
 		return err
 	})
 	if err != nil {
