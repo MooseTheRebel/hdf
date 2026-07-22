@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"hdf/config"
 	"hdf/daemon"
+	"hdf/eventlog"
 	"hdf/link"
 	"hdf/repo"
 	"hdf/svc"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -1624,14 +1626,43 @@ func launchGUI(diffURLs []string) {
 // plain `go build` binaries report "dev".
 var version = "dev"
 
+// statePathFn is a seam over config.DefaultStatePath for tests.
+var statePathFn = config.DefaultStatePath
+
+// cliExitFn is a seam over os.Exit for tests.
+var cliExitFn = os.Exit
+
+// handlePanic records rec (from recover()) as a pending crash report and
+// event-log entry, returning the message that was recorded. Factored out of
+// recoverPanic so it's testable without triggering an os.Exit.
+func handlePanic(rec any, statePath string) string {
+	msg := fmt.Sprintf("panic: %v\n%s", rec, debug.Stack())
+	_ = config.SetPendingCrash(statePath, msg)
+	_ = eventlog.Append(eventlog.PathFor(statePath), "panic", fmt.Sprintf("%v", rec))
+	return msg
+}
+
+// recoverPanic is deferred once around rootCmd.Execute in Execute. It
+// records any panic as a pending crash report — surfaced as a prompt on the
+// next hdf invocation via promptPendingCrash — before exiting, instead of
+// letting the process crash with no trace.
+func recoverPanic() {
+	if rec := recover(); rec != nil {
+		handlePanic(rec, statePathFn())
+		fmt.Fprintln(os.Stderr, "hdf encountered an unexpected error and exited. Run 'hdf report-issue' next time to help diagnose it.")
+		cliExitFn(1)
+	}
+}
+
 // Execute runs the hdf CLI. frontendAssets is the embedded frontend bundle,
 // passed in by package main. Exits the process with status 1 on error.
 func Execute(frontendAssets embed.FS) {
 	assets = frontendAssets
 	rootCmd.Version = version
+	defer recoverPanic()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		cliExitFn(1)
 	}
 }
 
