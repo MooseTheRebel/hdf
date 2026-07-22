@@ -9,6 +9,7 @@ import (
 	"hdf/eventlog"
 	"hdf/link"
 	"hdf/repo"
+	"hdf/report"
 	"io"
 	"os"
 	"path/filepath"
@@ -3869,5 +3870,35 @@ func TestRecoverPanic_NoPanicIsNoop(t *testing.T) {
 
 	if exitCalled {
 		t.Error("cliExitFn should not be called when there was no panic")
+	}
+}
+
+func TestRunReportIssue_Success(t *testing.T) {
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	var gotOpts report.BuildOptions
+	buildReport = func(opts report.BuildOptions, version string) (string, error) {
+		gotOpts = opts
+		return "/tmp/hdf-report-x.zip", nil
+	}
+
+	if err := runReportIssue(report.BuildOptions{Trigger: report.TriggerManual, UserText: "it broke"}); err != nil {
+		t.Fatalf("runReportIssue: %v", err)
+	}
+	if gotOpts.Trigger != report.TriggerManual || gotOpts.UserText != "it broke" {
+		t.Errorf("buildReport called with %+v", gotOpts)
+	}
+}
+
+func TestRunReportIssue_RepoTooLargeGivesFriendlyError(t *testing.T) {
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	buildReport = func(report.BuildOptions, string) (string, error) {
+		return "", report.ErrRepoTooLarge
+	}
+
+	err := runReportIssue(report.BuildOptions{})
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Errorf("runReportIssue err = %v, want a message containing \"too large\"", err)
 	}
 }

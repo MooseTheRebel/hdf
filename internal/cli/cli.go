@@ -11,6 +11,7 @@ import (
 	"hdf/eventlog"
 	"hdf/link"
 	"hdf/repo"
+	"hdf/report"
 	"hdf/svc"
 	"io"
 	"os"
@@ -1364,6 +1365,52 @@ Skipping is an accepted workflow — run hdf changes-pull again when ready.`,
 	},
 }
 
+// buildReport is a seam over report.Build so tests can substitute a fake.
+var buildReport = report.Build
+
+// reportOutDir is a var so tests can redirect report output to a temp dir.
+// Defaults to the user's home directory, which is always writable and easy
+// to find, unlike the current working directory a CLI command runs from.
+var reportOutDir = func() string {
+	dir, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return dir
+}
+
+// runReportIssue builds a diagnostic report from opts and prints its path,
+// translating ErrRepoTooLarge into an actionable message instead of a raw
+// error dump.
+func runReportIssue(opts report.BuildOptions) error {
+	path, err := buildReport(opts, version)
+	if err != nil {
+		if errors.Is(err, report.ErrRepoTooLarge) {
+			return fmt.Errorf("dotfiles repo is too large to include in a report (compressed size over %d bytes) — prune history or contact your admin another way", report.MaxRepoZipBytes)
+		}
+		return fmt.Errorf("building report: %w", err)
+	}
+	fmt.Printf("Report written to %s\n", path)
+	return nil
+}
+
+var reportIssueCmd = &cobra.Command{
+	Use:   "report-issue",
+	Short: "Package diagnostics into a .zip for sharing with an admin",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Print("What was expected? What actually happened? (optional, press Enter to skip)\n> ")
+		text, _ := reader.ReadString('\n')
+		return runReportIssue(report.BuildOptions{
+			CfgPath:   config.DefaultPath(),
+			StatePath: config.DefaultStatePath(),
+			Trigger:   report.TriggerManual,
+			UserText:  strings.TrimSpace(text),
+			OutDir:    reportOutDir(),
+		})
+	},
+}
+
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show managed files and sync state",
@@ -1687,4 +1734,5 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(promoteCmd)
+	rootCmd.AddCommand(reportIssueCmd)
 }

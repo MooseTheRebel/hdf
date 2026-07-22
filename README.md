@@ -95,6 +95,13 @@ Show the current hdf configuration file.
 hdf config
 ```
 
+### report-issue
+Package diagnostics — a summary, recent daemon activity, known host branches, and a compressed copy of your dotfiles repo (all branches + HEAD) — into a local `.zip` you can hand to an admin. Nothing is uploaded. Refuses to run if the compressed repo would exceed 4MB.
+
+```bash
+hdf report-issue
+```
+
 ## Development
 
 Building from source instead of using a release binary? Substitute `HDF_CLI`
