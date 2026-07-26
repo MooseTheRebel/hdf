@@ -32,8 +32,19 @@ func PathFor(statePath string) string {
 // Append records one event, trimming the log to the most recent MaxEntries
 // entries. Each call rewrites the whole file; hdf's event volume (daemon
 // sync cycles every 30 minutes, occasional crashes) is far too low for that
-// to matter.
+// to matter. The read-modify-write cycle is serialized by an exclusive file
+// lock so concurrent callers (the daemon and a CLI command, or two daemon
+// cycles) don't race on the shared path+".tmp" file and lose entries.
 func Append(path, event, detail string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	unlock, err := lockFile(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	entries, err := ReadAll(path)
 	if err != nil {
 		return err

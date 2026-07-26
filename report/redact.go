@@ -20,18 +20,20 @@ func redactURL(rawURL string) string {
 }
 
 // redactGitConfigBytes scans git config file content line-by-line,
-// redacting credentials embedded in any "url = ..." value (the form
-// go-git's AddRemote writes), so a report never leaks them via the
-// bundled .git directory.
+// redacting credentials embedded in any "url" or "pushurl" value (the keys
+// go-git's AddRemote and `git remote set-url --push` write), so a report
+// never leaks them via the bundled .git directory. Matches the key exactly
+// (not by prefix) so it catches "pushurl" without also matching unrelated
+// keys that merely start with "url".
 func redactGitConfigBytes(data []byte) []byte {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "url") {
-			continue
-		}
 		idx := strings.Index(line, "=")
 		if idx == -1 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		if key != "url" && key != "pushurl" {
 			continue
 		}
 		prefix := line[:idx+1]

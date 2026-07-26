@@ -1655,13 +1655,20 @@ func promptPendingCrash(statePath string, reader *bufio.Reader) error {
 	if strings.HasPrefix(msg, "panic:") {
 		trigger = report.TriggerPanic
 	}
-	return runReportIssue(report.BuildOptions{
+	if err := runReportIssue(report.BuildOptions{
 		CfgPath:     config.DefaultPath(),
 		StatePath:   statePath,
 		Trigger:     trigger,
 		CrashDetail: msg,
 		OutDir:      reportOutDir(),
-	})
+	}); err != nil {
+		// The report was never successfully produced (e.g. the repo is too
+		// large) — restore the marker so the next invocation prompts again
+		// instead of losing the crash detail forever.
+		_ = config.SetPendingCrash(statePath, msg)
+		return err
+	}
+	return nil
 }
 
 // resolveRepoPath returns the repo file path for a managed file with variants,

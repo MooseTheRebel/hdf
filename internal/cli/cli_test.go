@@ -3939,6 +3939,37 @@ func TestPromptPendingCrash_UserDeclinesDoesNotBuildReportButClearsMarker(t *tes
 	}
 }
 
+// TestPromptPendingCrash_BuildFailureRestoresMarkerForRetry verifies that a
+// failed report build (e.g. the repo is too large) does not permanently
+// lose the crash detail. The marker is taken up front to decide whether to
+// prompt at all, but a build failure means the user still hasn't
+// successfully reported the crash — the marker must be restored so the next
+// invocation prompts again instead of silently never mentioning it.
+func TestPromptPendingCrash_BuildFailureRestoresMarkerForRetry(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+		t.Fatal(err)
+	}
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	buildReport = func(report.BuildOptions, string) (string, error) {
+		return "", report.ErrRepoTooLarge
+	}
+
+	err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("y\n")))
+	if err == nil {
+		t.Fatal("promptPendingCrash: want error when the report build fails, got nil")
+	}
+
+	s, loadErr := config.LoadState(statePath)
+	if loadErr != nil {
+		t.Fatalf("LoadState: %v", loadErr)
+	}
+	if s.PendingCrashReport != "panic: boom" {
+		t.Errorf("PendingCrashReport = %q, want restored to %q so the user can retry", s.PendingCrashReport, "panic: boom")
+	}
+}
+
 func TestPromptPendingCrash_UserAcceptsBuildsReportWithDetectedTrigger(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.toml")
 	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {

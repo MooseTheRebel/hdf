@@ -1,7 +1,9 @@
 package eventlog
 
 import (
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -41,6 +43,40 @@ func TestAppend_CreatesFileAndReadsBack(t *testing.T) {
 	}
 	if entries[0].Event != "sync_start" || entries[1].Event != "sync_error" || entries[1].Detail != "fetch failed" {
 		t.Errorf("entries = %+v, want sync_start then sync_error/fetch failed", entries)
+	}
+}
+
+// TestAppend_ConcurrentAppendsDoNotLoseEntries verifies Append serializes
+// concurrent callers (e.g. the daemon and a CLI command appending at the
+// same time). Without locking, concurrent read-modify-write cycles race and
+// silently drop entries.
+func TestAppend_ConcurrentAppendsDoNotLoseEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.log")
+	const writers = 20
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			errs <- Append(path, "event", fmt.Sprintf("detail-%d", n))
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	entries, err := ReadAll(path)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(entries) != writers {
+		t.Errorf("got %d entries, want %d — concurrent Appends lost entries", len(entries), writers)
 	}
 }
 

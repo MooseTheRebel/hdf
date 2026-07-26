@@ -60,6 +60,27 @@ func TestRedactGitConfigBytes(t *testing.T) {
 	}
 }
 
+// TestRedactGitConfigBytes_RedactsPushURL verifies pushurl entries (written
+// by e.g. `git remote set-url --push origin <url>`) are redacted too, not
+// just url — a separate credential-bearing key that a plain "url" prefix
+// match would miss.
+func TestRedactGitConfigBytes_RedactsPushURL(t *testing.T) {
+	const pushCredentialedURL = "https://pushuser:pushtoken@example.com/other-repo.git" //nolint:gosec // test fixture, not a real credential
+	const pushRedactedURL = "https://example.com/other-repo.git"
+
+	in := []byte("[remote \"origin\"]\n\turl = " + testCredentialedURL + "\n\tpushurl = " + pushCredentialedURL + "\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n")
+	got := string(redactGitConfigBytes(in))
+	if contains(got, "pushuser") || contains(got, "pushtoken") {
+		t.Errorf("redactGitConfigBytes output still contains pushurl credentials:\n%s", got)
+	}
+	if !contains(got, pushRedactedURL) {
+		t.Errorf("redactGitConfigBytes output missing redacted pushurl:\n%s", got)
+	}
+	if contains(got, testCredentialedURL) {
+		t.Errorf("redactGitConfigBytes output still contains url credentials:\n%s", got)
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && (func() bool {
 		for i := 0; i+len(needle) <= len(haystack); i++ {
