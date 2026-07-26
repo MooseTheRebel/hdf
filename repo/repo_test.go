@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1387,5 +1388,81 @@ func TestMergeIntoBranchContentMerger(t *testing.T) {
 	}
 	if string(got) != "ours\ntheirs\n" {
 		t.Errorf("merged content = %q, want %q", got, "ours\ntheirs\n")
+	}
+}
+
+func TestLocalBranches(t *testing.T) {
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("f.txt", "initial"); err != nil {
+		t.Fatalf("CommitFile: %v", err)
+	}
+	if err := r.CreateAndCheckoutBranch("host-laptop"); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+
+	got, err := r.LocalBranches()
+	if err != nil {
+		t.Fatalf("LocalBranches: %v", err)
+	}
+	want := []string{"host-laptop", "main"}
+	if !slices.Equal(got, want) {
+		t.Errorf("LocalBranches() = %v, want %v", got, want)
+	}
+}
+
+func TestRemoteTrackingBranches(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	bareURL := "file://" + bareDir
+
+	seedDir := t.TempDir()
+	seed, err := Init(seedDir)
+	if err != nil {
+		t.Fatalf("seed Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, "seed.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CommitFile("seed.txt", "initial"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+	if err := seed.AddRemote("origin", bareURL); err != nil {
+		t.Fatalf("seed AddRemote: %v", err)
+	}
+	if err := seed.Push("main"); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+	if err := seed.CreateAndCheckoutBranch("host-desktop"); err != nil {
+		t.Fatalf("CreateAndCheckoutBranch: %v", err)
+	}
+	if err := seed.Push("host-desktop"); err != nil {
+		t.Fatalf("seed Push host-desktop: %v", err)
+	}
+
+	localDir := t.TempDir()
+	local, err := Clone(bareURL, localDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := local.Fetch(); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	got, err := local.RemoteTrackingBranches("origin")
+	if err != nil {
+		t.Fatalf("RemoteTrackingBranches: %v", err)
+	}
+	want := []string{"host-desktop", "main"}
+	if !slices.Equal(got, want) {
+		t.Errorf("RemoteTrackingBranches() = %v, want %v", got, want)
 	}
 }

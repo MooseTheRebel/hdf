@@ -3,15 +3,21 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"hdf/config"
+	"hdf/eventlog"
 	"hdf/link"
 	"hdf/repo"
+	"hdf/report"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -860,6 +866,100 @@ func TestEnrollRegistersFileInMainRegistry(t *testing.T) {
 	}
 	if mainReg2 == nil {
 		t.Error("main registry not pushed to bare remote")
+	}
+}
+
+// Regression: applyEnroll's final state write (recording LastCommit) must go
+// through config.UpdateState rather than a bare LoadState/SaveState pair.
+// Previously, a daemon warning appended concurrently in that window could be
+// silently lost. This races a warning-appending goroutine (simulating the
+// daemon) against applyEnroll and checks that both the enroll's LastCommit
+// and every concurrent warning survive.
+//
+// applyEnroll is called directly (rather than through runEnroll) because
+// runEnroll surfaces any pending warnings via a confirmation prompt before
+// it ever reaches applyEnroll; racing the warning writer against that prompt
+// would test unrelated behavior instead of the state write this regression
+// covers.
+func TestApplyEnrollPreservesConcurrentWarning(t *testing.T) {
+	workDir := t.TempDir()
+	bareDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+
+	homeDir := t.TempDir()
+	dotfile := filepath.Join(homeDir, ".testrc")
+	if err := os.WriteFile(dotfile, []byte("# test config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	expanded, tildeFile, err := expandAndValidate(tildeTestRC, homeDir)
+	if err != nil {
+		t.Fatalf("expandAndValidate: %v", err)
+	}
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatalf("opening repo: %v", err)
+	}
+	if err := ensureOnMachineBranch(r, cfg); err != nil {
+		t.Fatalf("ensureOnMachineBranch: %v", err)
+	}
+	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
+	if err != nil {
+		t.Fatalf("RepoPathForHome: %v", err)
+	}
+	relName := mustRel(t, cfg.LocalDotfilesDir, repoFilePath)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var appended int
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := config.UpdateState(statePath, func(s *config.State) error {
+				s.PendingWarnings = append(s.PendingWarnings, fmt.Sprintf("warning-%d", i))
+				return nil
+			}); err != nil {
+				t.Errorf("UpdateState: %v", err)
+				return
+			}
+			appended = i + 1
+		}
+	}()
+
+	err = applyEnroll(r, expanded, tildeFile, relName, dotfile, homeDir, cfg, statePath)
+	close(stop)
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("applyEnroll: %v", err)
+	}
+
+	state, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	headSHA, err := r.HeadSHA()
+	if err != nil {
+		t.Fatalf("getting head SHA: %v", err)
+	}
+	if state.LastCommit != headSHA {
+		t.Errorf("state.LastCommit = %q, want %q", state.LastCommit, headSHA)
+	}
+	if len(state.PendingWarnings) != appended {
+		t.Errorf("PendingWarnings len = %d, want %d — a concurrent warning was lost", len(state.PendingWarnings), appended)
 	}
 }
 
@@ -3579,5 +3679,331 @@ func TestResolveRepoPathRejectsTraversal(t *testing.T) {
 		if got != tc.wantPath {
 			t.Errorf("%s: path = %q, want %q", tc.desc, got, tc.wantPath)
 		}
+	}
+}
+
+// TestDaemonServiceCmds_DelegateToSvcFuncs verifies that the "daemon
+// install/uninstall/start/stop" RunE funcs delegate to their respective
+// svc func var with the default config path and surface errors. install
+// and start also go through runDaemon's preflight check, so it's mocked
+// through for those two.
+func TestDaemonServiceCmds_DelegateToSvcFuncs(t *testing.T) {
+	cases := []struct {
+		name         string
+		cmd          *cobra.Command
+		svcFunc      *func(string) error
+		viaRunDaemon bool
+	}{
+		{name: "install", cmd: daemonInstallCmd, svcFunc: &svcInstall, viaRunDaemon: true},
+		{name: "uninstall", cmd: daemonUninstallCmd, svcFunc: &svcUninstall},
+		{name: "start", cmd: daemonStartCmd, svcFunc: &svcStart, viaRunDaemon: true},
+		{name: "stop", cmd: daemonStopCmd, svcFunc: &svcStop},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.viaRunDaemon {
+				origRunDaemon := runDaemon
+				defer func() { runDaemon = origRunDaemon }()
+				runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
+			}
+
+			origFunc := *tc.svcFunc
+			defer func() { *tc.svcFunc = origFunc }()
+
+			var gotCfgPath string
+			*tc.svcFunc = func(cfgPath string) error {
+				gotCfgPath = cfgPath
+				return nil
+			}
+			if err := tc.cmd.RunE(tc.cmd, nil); err != nil {
+				t.Fatalf("RunE() error = %v, want nil", err)
+			}
+			if gotCfgPath != config.DefaultPath() {
+				t.Errorf("cfgPath = %q, want %q", gotCfgPath, config.DefaultPath())
+			}
+
+			*tc.svcFunc = func(string) error { return errors.New("boom") }
+			if err := tc.cmd.RunE(tc.cmd, nil); err == nil {
+				t.Fatal("expected error to propagate, got nil")
+			}
+		})
+	}
+}
+
+// TestDaemonStatusCmd_PrintsSvcStatus verifies the "daemon status" RunE
+// prints whatever svcStatus reports and propagates errors.
+func TestDaemonStatusCmd_PrintsSvcStatus(t *testing.T) {
+	origStatus := svcStatus
+	defer func() { svcStatus = origStatus }()
+
+	svcStatus = func(cfgPath string) (string, error) { return "running", nil }
+	var buf bytes.Buffer
+	daemonStatusCmd.SetOut(&buf)
+	if err := daemonStatusCmd.RunE(daemonStatusCmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v, want nil", err)
+	}
+	if !strings.Contains(buf.String(), "running") {
+		t.Errorf("output = %q, want it to contain %q", buf.String(), "running")
+	}
+
+	svcStatus = func(cfgPath string) (string, error) { return "", errors.New("boom") }
+	if err := daemonStatusCmd.RunE(daemonStatusCmd, nil); err == nil {
+		t.Fatal("expected error to propagate, got nil")
+	}
+}
+
+// TestRunDaemon verifies runDaemon refuses to start the service runner
+// when hdf hasn't been initialized yet (so the service doesn't start in a
+// broken state and fail silently under OS supervision), and otherwise
+// calls the injected run function, forwarding its error.
+func TestRunDaemon(t *testing.T) {
+	cases := []struct {
+		name        string
+		initialized bool
+		runErr      error // returned by the injected run func, when called
+	}{
+		{name: "fails preflight when not initialized", initialized: false},
+		{name: "calls run when initialized", initialized: true},
+		{name: "propagates run error when initialized", initialized: true, runErr: errors.New("boom")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			if tc.initialized {
+				if err := config.Save(cfgPath, &config.Config{Branch: testBranch, LocalDotfilesDir: t.TempDir()}); err != nil {
+					t.Fatalf("config.Save: %v", err)
+				}
+			}
+
+			var called bool
+			var gotCfgPath string
+			err := runDaemon(cfgPath, func(p string) error {
+				called = true
+				gotCfgPath = p
+				return tc.runErr
+			})
+
+			if !tc.initialized {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if called {
+					t.Error("run func should not be called when hdf is not initialized")
+				}
+				return
+			}
+			if tc.runErr == nil && err != nil {
+				t.Fatalf("runDaemon() error = %v, want nil", err)
+			}
+			if tc.runErr != nil && err == nil {
+				t.Fatal("expected error from run func to propagate, got nil")
+			}
+			if !called {
+				t.Error("expected run func to be called when hdf is initialized")
+			}
+			if gotCfgPath != cfgPath {
+				t.Errorf("cfgPath passed to run = %q, want %q", gotCfgPath, cfgPath)
+			}
+		})
+	}
+}
+
+func TestHandlePanic_WritesPendingCrashAndEvent(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+
+	msg := handlePanic("boom", statePath)
+	if !strings.Contains(msg, "boom") {
+		t.Errorf("handlePanic returned %q, want it to contain %q", msg, "boom")
+	}
+
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !strings.Contains(s.PendingCrashReport, "boom") {
+		t.Errorf("PendingCrashReport = %q, want to contain %q", s.PendingCrashReport, "boom")
+	}
+
+	entries, err := eventlog.ReadAll(eventlog.PathFor(statePath))
+	if err != nil {
+		t.Fatalf("eventlog.ReadAll: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event != "panic" {
+		t.Errorf("entries = %+v, want one panic entry", entries)
+	}
+}
+
+func TestRecoverPanic_RecordsCrashAndExits(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	origStatePathFn, origExit := statePathFn, cliExitFn
+	defer func() { statePathFn, cliExitFn = origStatePathFn, origExit }()
+	statePathFn = func() string { return statePath }
+	exitCode := -1
+	cliExitFn = func(code int) { exitCode = code }
+
+	func() {
+		defer recoverPanic()
+		panic("boom")
+	}()
+
+	if exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !strings.Contains(s.PendingCrashReport, "boom") {
+		t.Errorf("PendingCrashReport = %q, want to contain %q", s.PendingCrashReport, "boom")
+	}
+}
+
+func TestRecoverPanic_NoPanicIsNoop(t *testing.T) {
+	origStatePathFn, origExit := statePathFn, cliExitFn
+	defer func() { statePathFn, cliExitFn = origStatePathFn, origExit }()
+	exitCalled := false
+	cliExitFn = func(int) { exitCalled = true }
+
+	func() {
+		defer recoverPanic()
+	}()
+
+	if exitCalled {
+		t.Error("cliExitFn should not be called when there was no panic")
+	}
+}
+
+func TestRunReportIssue_Success(t *testing.T) {
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	var gotOpts report.BuildOptions
+	buildReport = func(opts report.BuildOptions, version string) (string, error) {
+		gotOpts = opts
+		return "/tmp/hdf-report-x.zip", nil
+	}
+
+	if err := runReportIssue(report.BuildOptions{Trigger: report.TriggerManual, UserText: "it broke"}); err != nil {
+		t.Fatalf("runReportIssue: %v", err)
+	}
+	if gotOpts.Trigger != report.TriggerManual || gotOpts.UserText != "it broke" {
+		t.Errorf("buildReport called with %+v", gotOpts)
+	}
+}
+
+func TestRunReportIssue_RepoTooLargeGivesFriendlyError(t *testing.T) {
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	buildReport = func(report.BuildOptions, string) (string, error) {
+		return "", report.ErrRepoTooLarge
+	}
+
+	err := runReportIssue(report.BuildOptions{})
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Errorf("runReportIssue err = %v, want a message containing \"too large\"", err)
+	}
+}
+
+// TestReportIssueWarning_MentionsRedactionLimitsAndOptIn verifies the
+// warning shown before a report is built covers both required points:
+// redaction is limited (the user must still review before sharing), and
+// reporting is entirely optional (securing their own systems comes first).
+func TestReportIssueWarning_MentionsRedactionLimitsAndOptIn(t *testing.T) {
+	msg := strings.ToLower(reportIssueWarning)
+	if !strings.Contains(msg, "redaction") || !strings.Contains(msg, "limited") {
+		t.Errorf("reportIssueWarning = %q, want it to warn that redaction is limited", reportIssueWarning)
+	}
+	if !strings.Contains(msg, "optional") && !strings.Contains(msg, "voluntary") {
+		t.Errorf("reportIssueWarning = %q, want it to state reporting is optional/voluntary", reportIssueWarning)
+	}
+	if !strings.Contains(msg, "review") {
+		t.Errorf("reportIssueWarning = %q, want it to tell the user to review the report before sharing", reportIssueWarning)
+	}
+}
+
+func TestPromptPendingCrash_NoCrashIsNoop(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader(""))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+}
+
+func TestPromptPendingCrash_UserDeclinesDoesNotBuildReportButClearsMarker(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+		t.Fatal(err)
+	}
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	called := false
+	buildReport = func(report.BuildOptions, string) (string, error) {
+		called = true
+		return "", nil
+	}
+
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("n\n"))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+	if called {
+		t.Error("buildReport should not be called when the user declines")
+	}
+
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if s.PendingCrashReport != "" {
+		t.Errorf("PendingCrashReport = %q, want cleared after being surfaced once", s.PendingCrashReport)
+	}
+}
+
+// TestPromptPendingCrash_BuildFailureRestoresMarkerForRetry verifies that a
+// failed report build (e.g. the repo is too large) does not permanently
+// lose the crash detail. The marker is taken up front to decide whether to
+// prompt at all, but a build failure means the user still hasn't
+// successfully reported the crash — the marker must be restored so the next
+// invocation prompts again instead of silently never mentioning it.
+func TestPromptPendingCrash_BuildFailureRestoresMarkerForRetry(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+		t.Fatal(err)
+	}
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	buildReport = func(report.BuildOptions, string) (string, error) {
+		return "", report.ErrRepoTooLarge
+	}
+
+	err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("y\n")))
+	if err == nil {
+		t.Fatal("promptPendingCrash: want error when the report build fails, got nil")
+	}
+
+	s, loadErr := config.LoadState(statePath)
+	if loadErr != nil {
+		t.Fatalf("LoadState: %v", loadErr)
+	}
+	if s.PendingCrashReport != "panic: boom" {
+		t.Errorf("PendingCrashReport = %q, want restored to %q so the user can retry", s.PendingCrashReport, "panic: boom")
+	}
+}
+
+func TestPromptPendingCrash_UserAcceptsBuildsReportWithDetectedTrigger(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+		t.Fatal(err)
+	}
+	origBuild := buildReport
+	defer func() { buildReport = origBuild }()
+	var gotOpts report.BuildOptions
+	buildReport = func(opts report.BuildOptions, version string) (string, error) {
+		gotOpts = opts
+		return "/tmp/hdf-report-x.zip", nil
+	}
+
+	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("y\n"))); err != nil {
+		t.Fatalf("promptPendingCrash: %v", err)
+	}
+	if gotOpts.Trigger != report.TriggerPanic || gotOpts.CrashDetail != "panic: boom" {
+		t.Errorf("buildReport called with %+v, want TriggerPanic/panic: boom", gotOpts)
 	}
 }
