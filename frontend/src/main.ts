@@ -1,8 +1,9 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus} from '../wailsjs/go/cli/App';
 import {renderDiffContent} from './diff';
+import {renderStatus} from './status';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -35,10 +36,10 @@ function displayHomeScreen() {
                             <code class="cmd">hdf link</code>
                             <span class="cmd-desc">Re-create all managed symlinks</span>
                         </div>
-                        <div class="command-row">
+                        <button class="command-row command-row-clickable" id="status-btn">
                             <code class="cmd">hdf status</code>
                             <span class="cmd-desc">Show managed files and sync state</span>
-                        </div>
+                        </button>
                         <div class="command-row">
                             <code class="cmd">hdf daemon</code>
                             <span class="cmd-desc">Start the background sync daemon</span>
@@ -99,6 +100,7 @@ function displayHomeScreen() {
         }
 
         document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
+        document.getElementById('status-btn')?.addEventListener('click', () => displayStatusView());
     }).catch((err) => {
         app.innerHTML = `
             <div class="home-container">
@@ -114,6 +116,37 @@ function displayHomeScreen() {
         const errorMsgEl = document.getElementById('error-message');
         if (errorMsgEl) errorMsgEl.textContent = String(err);
         document.getElementById('error-close-btn')?.addEventListener('click', () => CloseWindow());
+    });
+}
+
+function displayStatusView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="status-container">
+            <div class="status-header-section">
+                <h1>Status</h1>
+            </div>
+            <div id="status-loading">Loading status...</div>
+            <div id="status-content" style="display: none;"></div>
+            <div class="status-controls">
+                <button id="status-back-btn" class="control-btn">Back</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('status-back-btn')?.addEventListener('click', () => displayHomeScreen());
+
+    GetStatus().then((info) => {
+        const loadingEl = document.getElementById('status-loading');
+        const contentEl = document.getElementById('status-content');
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.innerHTML = renderStatus(info);
+            contentEl.style.display = 'block';
+        }
+    }).catch((err) => {
+        const loadingEl = document.getElementById('status-loading');
+        if (loadingEl) loadingEl.textContent = 'Error loading status: ' + err;
     });
 }
 

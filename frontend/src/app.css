@@ -360,3 +360,99 @@
 .control-btn.close-btn:hover {
     background-color: #c9302c;
 }
+
+/* Command row as a clickable button (status, etc.) */
+
+.command-row-clickable {
+    border: none;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    color: inherit;
+}
+
+/* Status view */
+
+.status-container {
+    max-width: 700px;
+    margin: 20px auto;
+    padding: 20px;
+}
+
+.status-header-section h1 {
+    color: #ffffff;
+    margin: 0 0 20px;
+    font-size: 24px;
+}
+
+.status-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 28px;
+}
+
+.status-field {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 16px;
+    padding: 6px 10px;
+}
+
+.status-label {
+    color: #8a9bb0;
+    font-size: 13px;
+}
+
+.status-value {
+    color: #dde6f0;
+    font-size: 13px;
+    font-family: 'Courier New', Courier, monospace;
+    word-break: break-all;
+}
+
+.status-files-heading {
+    color: #ffffff;
+    font-size: 16px;
+    margin: 0 0 10px;
+}
+
+.status-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 24px;
+}
+
+.status-file-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.04);
+    font-size: 13px;
+}
+
+.status-file-path {
+    color: #c3dafe;
+    font-family: 'Courier New', Courier, monospace;
+}
+
+.status-file-state {
+    color: #8a9bb0;
+}
+
+.status-empty {
+    color: #8a9bb0;
+    font-size: 13px;
+    padding: 8px 10px;
+}
+
+.status-controls {
+    display: flex;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}
