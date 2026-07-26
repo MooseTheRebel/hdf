@@ -79,6 +79,37 @@ func TestCompressRepo_TooLargeReturnsErrRepoTooLarge(t *testing.T) {
 	}
 }
 
+// TestLimitWriter_RejectsWriteOnceLimitExceeded proves the cap is enforced
+// as data streams in, not after the fact: once the buffer would exceed
+// limit, Write must reject immediately (0 bytes written, ErrRepoTooLarge)
+// without growing the buffer any further. This is what lets CompressRepo
+// abort an oversized repo without first buffering it entirely into memory.
+func TestLimitWriter_RejectsWriteOnceLimitExceeded(t *testing.T) {
+	var buf bytes.Buffer
+	lw := &limitWriter{buf: &buf, limit: 10}
+
+	if _, err := lw.Write([]byte("12345")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := lw.Write([]byte("67890")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if buf.Len() != 10 {
+		t.Fatalf("buf.Len() = %d, want 10 after filling to the limit", buf.Len())
+	}
+
+	n, err := lw.Write([]byte("x"))
+	if !errors.Is(err, ErrRepoTooLarge) {
+		t.Fatalf("Write err = %v, want ErrRepoTooLarge", err)
+	}
+	if n != 0 {
+		t.Errorf("Write n = %d, want 0 on rejection", n)
+	}
+	if buf.Len() != 10 {
+		t.Errorf("buf.Len() = %d, want unchanged at 10 — a rejected write must not grow the buffer", buf.Len())
+	}
+}
+
 func TestCompressRepo_RedactsGitConfigCredentials(t *testing.T) {
 	repoDir := t.TempDir()
 	gitDir := filepath.Join(repoDir, ".git")

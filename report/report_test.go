@@ -122,6 +122,124 @@ func TestBuild_RepoTooLargeReturnsErrorAndWritesNothing(t *testing.T) {
 	}
 }
 
+// TestBuild_ProducesUniqueFilenamesForRepeatedCalls verifies that two
+// reports built back-to-back (which can land in the same second, since the
+// filename's timestamp component only has 1-second resolution) don't
+// collide and silently overwrite one another.
+func TestBuild_ProducesUniqueFilenamesForRepeatedCalls(t *testing.T) {
+	opts := setupReportFixture(t)
+
+	path1, err := Build(opts, "1.2.3")
+	if err != nil {
+		t.Fatalf("Build (1st): %v", err)
+	}
+	path2, err := Build(opts, "1.2.3")
+	if err != nil {
+		t.Fatalf("Build (2nd): %v", err)
+	}
+
+	if path1 == path2 {
+		t.Fatalf("Build produced the same path twice: %s", path1)
+	}
+	for _, p := range []string{path1, path2} {
+		if _, err := zip.OpenReader(p); err != nil {
+			t.Errorf("zip.OpenReader(%s): %v — expected a valid, complete report", p, err)
+		}
+	}
+}
+
+// TestWriteReportZip_SuccessLeavesNoTempFileBehind verifies that once a
+// report is successfully written, the output directory contains only the
+// final report — no leftover temp file from the atomic-rename process.
+func TestWriteReportZip_SuccessLeavesNoTempFileBehind(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "report.zip")
+	rc := &reportContents{
+		summaryJSON: []byte("{}"),
+		hostsJSON:   []byte("[]"),
+	}
+
+	if err := writeReportZip(outPath, rc); err != nil {
+		t.Fatalf("writeReportZip: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "report.zip" {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Errorf("dir entries = %v, want exactly [report.zip]", names)
+	}
+}
+
+// TestWriteReportZip_FailedCreateLeavesNoPartialFile verifies that when the
+// temp file can't even be created (simulating a disk/permission failure),
+// writeReportZip fails cleanly: no file at outPath, no leftover temp file.
+func TestWriteReportZip_FailedCreateLeavesNoPartialFile(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses DAC — permission test not meaningful")
+	}
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "report.zip")
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) }) //nolint:gosec // restoring test directory to a removable state
+
+	rc := &reportContents{summaryJSON: []byte("{}")}
+	writeErr := writeReportZip(outPath, rc)
+
+	// Restore permissions before checking os.Stat below: with dir at 0o000,
+	// Stat can't even traverse the directory to tell "doesn't exist" from
+	// "can't check," so it would misreport either way.
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // restoring test directory to a readable state
+		t.Fatal(err)
+	}
+
+	if writeErr == nil {
+		t.Fatal("writeReportZip: want error when the output directory isn't writable")
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Errorf("outPath should not exist after a failed write")
+	}
+}
+
+// TestWriteZipTo_PropagatesWriteError verifies the archive-content writer
+// surfaces a failure from the underlying writer instead of swallowing it —
+// the condition writeReportZip relies on to know it must clean up the temp
+// file rather than rename it into place.
+func TestWriteZipTo_PropagatesWriteError(t *testing.T) {
+	rc := &reportContents{
+		summaryJSON: []byte("{}"),
+		hostsJSON:   []byte("[]"),
+	}
+	wantErr := errors.New("disk full")
+	err := writeZipTo(&failingWriter{failAfter: 0, err: wantErr}, rc)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("writeZipTo err = %v, want %v", err, wantErr)
+	}
+}
+
+// failingWriter is an io.Writer that succeeds for failAfter bytes total,
+// then returns err on every subsequent Write.
+type failingWriter struct {
+	written   int
+	failAfter int
+	err       error
+}
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if w.written >= w.failAfter {
+		return 0, w.err
+	}
+	w.written += len(p)
+	return len(p), nil
+}
+
 func TestBuild_RedactsConfigCredentials(t *testing.T) {
 	opts := setupReportFixture(t)
 	// Overwrite the fixture's config.toml with one that has credentials

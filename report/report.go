@@ -4,11 +4,14 @@ package report
 import (
 	"archive/zip"
 	"bytes"
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hdf/config"
 	"hdf/eventlog"
 	"hdf/repo"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -135,19 +138,13 @@ func gatherReportContents(opts BuildOptions, version string) (*reportContents, e
 	}, nil
 }
 
-// writeReportZip creates outPath and writes rc's contents into it as a zip
-// archive. repo.zip is stored uncompressed since it's already
-// deflate-compressed by CompressRepo.
-func writeReportZip(outPath string, rc *reportContents) error {
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	zw := zip.NewWriter(f)
+// writeZipTo writes rc's contents into w as a zip archive. repo.zip is
+// stored uncompressed since it's already deflate-compressed by
+// CompressRepo. Factored out of writeReportZip so the archive-building
+// logic is independently testable against any io.Writer, including one
+// that injects a write failure.
+func writeZipTo(w io.Writer, rc *reportContents) error {
+	zw := zip.NewWriter(w)
 	plainFiles := []struct {
 		name string
 		data []byte
@@ -159,11 +156,11 @@ func writeReportZip(outPath string, rc *reportContents) error {
 		{"state.toml", rc.stateBytes},
 	}
 	for _, file := range plainFiles {
-		w, err := zw.Create(file.name)
+		fw, err := zw.Create(file.name)
 		if err != nil {
 			return err
 		}
-		if _, err := w.Write(file.data); err != nil {
+		if _, err := fw.Write(file.data); err != nil {
 			return err
 		}
 	}
@@ -175,6 +172,51 @@ func writeReportZip(outPath string, rc *reportContents) error {
 		return err
 	}
 	return zw.Close()
+}
+
+// writeReportZip writes rc's contents to a uniquely-named temporary file in
+// outPath's directory, then atomically renames it to outPath only once the
+// archive has been fully and successfully written. This avoids leaving a
+// partial or corrupt zip at the final path if a write fails partway
+// through — the temp file is removed instead. The temp file's own
+// uniqueness (via os.CreateTemp) also means two concurrent or same-second
+// build attempts never clobber each other's in-progress output.
+func writeReportZip(outPath string, rc *reportContents) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(outPath), ".hdf-report-*.zip.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err = writeZipTo(tmp, rc); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmpPath, outPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+// randomHex returns a short random hex string for disambiguating filenames
+// generated within the same second. Falls back to a nanosecond timestamp in
+// the vanishingly unlikely event the system CSPRNG is unavailable, so
+// Build never fails outright just because a filename couldn't be
+// randomized.
+func randomHex() string {
+	b := make([]byte, 4)
+	if _, err := crand.Read(b); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // Build assembles a diagnostic report and writes it to a timestamped .zip in
@@ -193,7 +235,7 @@ func Build(opts BuildOptions, version string) (string, error) {
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
 		return "", fmt.Errorf("creating output directory: %w", err)
 	}
-	outPath := filepath.Join(opts.OutDir, fmt.Sprintf("hdf-report-%s.zip", rc.time.Format("20060102-150405")))
+	outPath := filepath.Join(opts.OutDir, fmt.Sprintf("hdf-report-%s-%s.zip", rc.time.Format("20060102-150405"), randomHex()))
 	if err := writeReportZip(outPath, rc); err != nil {
 		return "", err
 	}
