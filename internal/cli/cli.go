@@ -1437,69 +1437,27 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show managed files and sync state",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfgPath := config.DefaultPath()
-		cfg, err := config.Load(cfgPath)
-		if err != nil {
-			return fmt.Errorf("loading config (run 'hdf init' first): %w", err)
-		}
-
-		r, err := repo.Open(cfg.LocalDotfilesDir)
-		if err != nil {
-			return fmt.Errorf("opening repo: %w", err)
-		}
-		branch, _ := r.CurrentBranch()
-		state, _ := config.LoadState(config.DefaultStatePath())
-
-		reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
-		if err != nil {
-			return fmt.Errorf("loading registry: %w", err)
-		}
-
-		fmt.Printf("Git push target:    %s\n", cfg.GitPushTarget)
-		fmt.Printf("Local dotfiles dir: %s\n", cfg.LocalDotfilesDir)
-		fmt.Printf("Branch:      %s\n", branch)
-		fmt.Printf("Last commit: %s\n", state.LastCommit)
-		fmt.Printf("Last sync:   %s\n", state.LastSync.Format("2006-01-02 15:04:05"))
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
+		info, err := computeStatus(config.DefaultPath(), config.DefaultStatePath(), homeDir)
+		if err != nil {
+			return err
+		}
 
-		fmt.Printf("\nManaged files (%d):\n", len(reg.Files))
+		fmt.Printf("Git push target:    %s\n", info.GitPushTarget)
+		fmt.Printf("Local dotfiles dir: %s\n", info.LocalDotfilesDir)
+		fmt.Printf("Branch:      %s\n", info.Branch)
+		fmt.Printf("Last commit: %s\n", info.LastCommit)
+		fmt.Printf("Last sync:   %s\n", info.LastSync)
 
-		for _, f := range reg.Files {
-			fmt.Printf("  %-40s %s\n", f.Path, fileStatus(f, cfg.Branch, homeDir))
+		fmt.Printf("\nManaged files (%d):\n", len(info.Files))
+		for _, f := range info.Files {
+			fmt.Printf("  %-40s %s\n", f.Path, f.Status)
 		}
 		return nil
 	},
-}
-
-// statusNoVariant is the status label for a file that has variants but none
-// for this machine's branch.
-const statusNoVariant = "no variant for this branch"
-
-// fileStatus returns the status label for one managed file on the given
-// branch. A file whose variants have no entry for this branch is not managed
-// on this machine, so it gets its own state rather than being misreported as
-// drift or as missing.
-func fileStatus(f config.ManagedFile, branch, homeDir string) string {
-	v, res := f.ResolveVariant(branch)
-	if res == config.VariantNoBranchMatch {
-		return statusNoVariant
-	}
-	expectedHash := f.Hash
-	if res == config.VariantMatch {
-		expectedHash = v.Hash
-	}
-	expanded := config.ExpandPathIn(f.Path, homeDir)
-	currentHash, err := link.HashFile(expanded)
-	if err != nil {
-		return "missing"
-	}
-	if currentHash != expectedHash {
-		return "CHANGED (uncommitted)"
-	}
-	return "ok"
 }
 
 // svcInstall, svcUninstall, svcStart, svcStop, and svcStatus are indirections
