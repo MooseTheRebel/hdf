@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hdf/config"
+	"hdf/eventlog"
 	"hdf/link"
 	"hdf/notify"
 	"hdf/repo"
@@ -124,7 +125,16 @@ func Sync(cfgPath, statePath string, n notify.Notifier) error {
 // n is the standard notifier (drift/unpushed); cn is the critical notifier
 // (fetch failures, repo errors). Pass nil to use the package-level defaults.
 // Returns the next sync interval derived from SharedSettings.
-func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir string) (time.Duration, error) {
+func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir string) (interval time.Duration, err error) {
+	defer func() {
+		eventLogPath := eventlog.PathFor(statePath)
+		if err != nil {
+			_ = eventlog.Append(eventLogPath, "daemon_sync_error", err.Error())
+		} else {
+			_ = eventlog.Append(eventLogPath, "daemon_sync_success", "")
+		}
+	}()
+
 	if n == nil {
 		n = notify.Default
 	}
@@ -169,7 +179,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	if err != nil {
 		return 0, err
 	}
-	interval := time.Duration(ss.SyncIntervalMinutes) * time.Minute
+	interval = time.Duration(ss.SyncIntervalMinutes) * time.Minute
 	threshold := ss.NotifyThreshold
 	cooldown := time.Duration(ss.NotifyCooldownMinutes) * time.Minute
 

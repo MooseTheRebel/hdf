@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"hdf/config"
+	"hdf/eventlog"
 	"hdf/link"
 	"hdf/repo"
 	"os"
@@ -1058,5 +1059,80 @@ func TestFileDriftMatchedVariantUsesVariantPath(t *testing.T) {
 
 	if got := fileDrift(f, cfg, r, homeDir); got != 0 {
 		t.Errorf("fileDrift = %d, want 0 — disk matches the committed variant content", got)
+	}
+}
+
+func TestSyncWithHome_RecordsEventLogEntries(t *testing.T) {
+	homeDir := t.TempDir()
+	cfgPath := filepath.Join(homeDir, "config.toml")
+	statePath := filepath.Join(homeDir, "state.toml")
+
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatalf("InitOrOpenBare: %v", err)
+	}
+	repoDir := filepath.Join(homeDir, "dotfiles")
+	r, err := repo.Init(repoDir)
+	if err != nil {
+		t.Fatalf("repo.Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "seed.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("seed.txt", "initial"); err != nil {
+		t.Fatalf("CommitFile: %v", err)
+	}
+	if err := r.AddRemote("origin", "file://"+bareDir); err != nil {
+		t.Fatalf("AddRemote: %v", err)
+	}
+	if err := r.Push("main"); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	cfg := &config.Config{GitPushTarget: "file://" + bareDir, LocalDotfilesDir: repoDir, Branch: "main"}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+
+	if _, err := syncWithHome(cfgPath, statePath, nil, nil, homeDir); err != nil {
+		t.Fatalf("syncWithHome: %v", err)
+	}
+
+	entries, err := eventlog.ReadAll(eventlog.PathFor(statePath))
+	if err != nil {
+		t.Fatalf("eventlog.ReadAll: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event != "daemon_sync_success" {
+		t.Errorf("entries = %+v, want one daemon_sync_success entry", entries)
+	}
+}
+
+func TestSyncWithHome_RecordsEventLogEntryOnError(t *testing.T) {
+	homeDir := t.TempDir()
+	cfgPath := filepath.Join(homeDir, "config.toml")
+	statePath := filepath.Join(homeDir, "state.toml")
+	repoDir := filepath.Join(homeDir, "dotfiles")
+	r, err := repo.Init(repoDir)
+	if err != nil {
+		t.Fatalf("repo.Init: %v", err)
+	}
+	cfg := &config.Config{GitPushTarget: "file:///nonexistent", LocalDotfilesDir: repoDir, Branch: "main"}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+	if err := r.AddRemote("origin", "file:///nonexistent"); err != nil {
+		t.Fatalf("AddRemote: %v", err)
+	}
+
+	if _, err := syncWithHome(cfgPath, statePath, nil, nil, homeDir); err == nil {
+		t.Fatal("syncWithHome: want error (bad remote), got nil")
+	}
+
+	entries, err := eventlog.ReadAll(eventlog.PathFor(statePath))
+	if err != nil {
+		t.Fatalf("eventlog.ReadAll: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event != "daemon_sync_error" {
+		t.Errorf("entries = %+v, want one daemon_sync_error entry", entries)
 	}
 }
