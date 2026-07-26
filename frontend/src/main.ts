@@ -1,7 +1,7 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow} from '../wailsjs/go/main/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow} from '../wailsjs/go/cli/App';
 import {renderDiffContent} from './diff';
 
 HasDiff().then((hasDiff) => {

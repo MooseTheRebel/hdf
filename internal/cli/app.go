@@ -43,6 +43,17 @@ func (a *App) IsInitialized() (bool, error) {
 	return isInitialized(config.DefaultPath())
 }
 
+// GetStatus returns hdf's current status — config summary, branch, last
+// sync, and each managed file's state — the GUI's equivalent of `hdf
+// status`.
+func (a *App) GetStatus() (*StatusInfo, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	return computeStatus(config.DefaultPath(), config.DefaultStatePath(), homeDir)
+}
+
 func isInitialized(path string) (bool, error) {
 	_, err := config.Load(path)
 	if err == nil {
