@@ -98,6 +98,8 @@ hdf config
 ### report-issue
 Package diagnostics — a summary, recent daemon activity, known host branches, and a compressed copy of your dotfiles repo (all branches + HEAD) — into a local `.zip` you can hand to an admin. Nothing is uploaded. Refuses to run if the compressed repo would exceed 4MB.
 
+Redaction is best-effort (known git credential patterns only) — not a guarantee. Review the report's contents yourself before sharing it, and only share it if you're comfortable doing so; reporting is entirely optional and voluntary, and securing your own systems always comes first.
+
 ```bash
 hdf report-issue
 ```

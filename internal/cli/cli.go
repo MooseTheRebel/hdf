@@ -1391,6 +1391,18 @@ var reportOutDir = func() string {
 // runReportIssue builds a diagnostic report from opts and prints its path,
 // translating ErrRepoTooLarge into an actionable message instead of a raw
 // error dump.
+// reportIssueWarning is shown before a report is built, at every point a
+// user can decide whether to proceed (the manual report-issue command and
+// the post-crash prompt). Redaction is best-effort — it strips known
+// credential patterns, but hdf cannot guarantee no sensitive data is left
+// in the report — so the user must review it themselves, and reporting is
+// never required.
+const reportIssueWarning = "Warning: hdf's automatic redaction is limited — it strips a few known " +
+	"credential patterns, but this is not a guarantee that all sensitive information is removed. " +
+	"Review the report's contents yourself before sharing it with anyone.\n" +
+	"Reporting an issue is entirely optional and voluntary. Securing your own systems should " +
+	"always be your first priority."
+
 func runReportIssue(opts report.BuildOptions) error {
 	path, err := buildReport(opts, version)
 	if err != nil {
@@ -1407,6 +1419,7 @@ var reportIssueCmd = &cobra.Command{
 	Use:   "report-issue",
 	Short: "Package diagnostics into a .zip for sharing with an admin",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Fprintln(os.Stderr, reportIssueWarning)
 		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("What was expected? What actually happened? (optional, press Enter to skip)\n> ")
 		text, _ := reader.ReadString('\n')
@@ -1646,7 +1659,9 @@ func promptPendingCrash(statePath string, reader *bufio.Reader) error {
 	if msg == "" {
 		return nil
 	}
-	fmt.Fprintln(os.Stderr, "Warning: an error occurred in hdf. Would you like to report an issue? [y/N]:")
+	fmt.Fprintln(os.Stderr, "Warning: an error occurred in hdf.")
+	fmt.Fprintln(os.Stderr, reportIssueWarning)
+	fmt.Fprint(os.Stderr, "Would you like to report an issue? [y/N]: ")
 	answer, _ := reader.ReadString('\n')
 	if !isYes(strings.TrimSpace(answer)) {
 		return nil

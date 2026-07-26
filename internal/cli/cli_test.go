@@ -3903,6 +3903,23 @@ func TestRunReportIssue_RepoTooLargeGivesFriendlyError(t *testing.T) {
 	}
 }
 
+// TestReportIssueWarning_MentionsRedactionLimitsAndOptIn verifies the
+// warning shown before a report is built covers both required points:
+// redaction is limited (the user must still review before sharing), and
+// reporting is entirely optional (securing their own systems comes first).
+func TestReportIssueWarning_MentionsRedactionLimitsAndOptIn(t *testing.T) {
+	msg := strings.ToLower(reportIssueWarning)
+	if !strings.Contains(msg, "redaction") || !strings.Contains(msg, "limited") {
+		t.Errorf("reportIssueWarning = %q, want it to warn that redaction is limited", reportIssueWarning)
+	}
+	if !strings.Contains(msg, "optional") && !strings.Contains(msg, "voluntary") {
+		t.Errorf("reportIssueWarning = %q, want it to state reporting is optional/voluntary", reportIssueWarning)
+	}
+	if !strings.Contains(msg, "review") {
+		t.Errorf("reportIssueWarning = %q, want it to tell the user to review the report before sharing", reportIssueWarning)
+	}
+}
+
 func TestPromptPendingCrash_NoCrashIsNoop(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.toml")
 	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader(""))); err != nil {
