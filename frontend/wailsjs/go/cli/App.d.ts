@@ -4,6 +4,8 @@ import {cli} from '../models';
 
 export function CloseWindow():Promise<void>;
 
+export function GetConfig():Promise<cli.ConfigInfo>;
+
 export function GetCurrentIndex():Promise<number>;
 
 export function GetDiffContent():Promise<string>;

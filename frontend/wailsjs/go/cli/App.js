@@ -6,6 +6,10 @@ export function CloseWindow() {
   return window['go']['cli']['App']['CloseWindow']();
 }
 
+export function GetConfig() {
+  return window['go']['cli']['App']['GetConfig']();
+}
+
 export function GetCurrentIndex() {
   return window['go']['cli']['App']['GetCurrentIndex']();
 }

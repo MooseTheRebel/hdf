@@ -54,6 +54,13 @@ func (a *App) GetStatus() (*StatusInfo, error) {
 	return computeStatus(config.DefaultPath(), config.DefaultStatePath(), homeDir)
 }
 
+// GetConfig returns hdf's current config file — path and raw contents (or
+// an indication it doesn't exist yet) — the GUI's equivalent of `hdf
+// config`.
+func (a *App) GetConfig() (*ConfigInfo, error) {
+	return computeConfigInfo(config.DefaultPath())
+}
+
 func isInitialized(path string) (bool, error) {
 	_, err := config.Load(path)
 	if err == nil {
