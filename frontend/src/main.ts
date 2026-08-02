@@ -1,9 +1,10 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig} from '../wailsjs/go/cli/App';
 import {renderDiffContent} from './diff';
 import {renderStatus} from './status';
+import {renderConfig} from './configinfo';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -48,6 +49,10 @@ function displayHomeScreen() {
                             <code class="cmd">hdf diff [url]</code>
                             <span class="cmd-desc">View a diff in this window</span>
                         </div>
+                        <button class="command-row command-row-clickable" id="config-btn">
+                            <code class="cmd">hdf config</code>
+                            <span class="cmd-desc">Show the current configuration</span>
+                        </button>
                     </div>
                     <button class="close-button" id="close-btn">Close</button>
                 </div>
@@ -101,6 +106,7 @@ function displayHomeScreen() {
 
         document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
         document.getElementById('status-btn')?.addEventListener('click', () => displayStatusView());
+        document.getElementById('config-btn')?.addEventListener('click', () => displayConfigView());
     }).catch((err) => {
         app.innerHTML = `
             <div class="home-container">
@@ -147,6 +153,37 @@ function displayStatusView() {
     }).catch((err) => {
         const loadingEl = document.getElementById('status-loading');
         if (loadingEl) loadingEl.textContent = 'Error loading status: ' + err;
+    });
+}
+
+function displayConfigView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="config-container">
+            <div class="config-header-section">
+                <h1>Config</h1>
+            </div>
+            <div id="config-loading">Loading config...</div>
+            <div id="config-content" style="display: none;"></div>
+            <div class="config-controls">
+                <button id="config-back-btn" class="control-btn">Back</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('config-back-btn')?.addEventListener('click', () => displayHomeScreen());
+
+    GetConfig().then((info) => {
+        const loadingEl = document.getElementById('config-loading');
+        const contentEl = document.getElementById('config-content');
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.innerHTML = renderConfig(info);
+            contentEl.style.display = 'block';
+        }
+    }).catch((err) => {
+        const loadingEl = document.getElementById('config-loading');
+        if (loadingEl) loadingEl.textContent = 'Error loading config: ' + err;
     });
 }
 
