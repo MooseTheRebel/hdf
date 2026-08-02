@@ -61,11 +61,12 @@ var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Show the current hdf configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		info, err := computeConfigInfo(config.DefaultPath())
+		cfgPath := config.DefaultPath()
+		fmt.Printf("Config file: %s\n\n", cfgPath)
+		info, err := computeConfigInfo(cfgPath)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Config file: %s\n\n", info.Path)
 		if !info.Exists {
 			fmt.Println("No config found. Run 'hdf init' to get started.")
 			return nil
