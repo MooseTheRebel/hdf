@@ -1,5 +1,21 @@
 export namespace cli {
 
+	export class ConfigInfo {
+	    path: string;
+	    exists: boolean;
+	    content: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ConfigInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.exists = source["exists"];
+	        this.content = source["content"];
+	    }
+	}
 	export class FileStatus {
 	    path: string;
 	    status: string;
