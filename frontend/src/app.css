@@ -456,3 +456,69 @@
     padding-top: 10px;
     border-top: 1px solid #444;
 }
+
+/* Config view */
+
+.config-container {
+    max-width: 700px;
+    margin: 20px auto;
+    padding: 20px;
+}
+
+.config-header-section h1 {
+    color: #ffffff;
+    margin: 0 0 20px;
+    font-size: 24px;
+}
+
+.config-field {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 16px;
+    padding: 6px 10px;
+    margin-bottom: 12px;
+}
+
+.config-label {
+    color: #8a9bb0;
+    font-size: 13px;
+}
+
+.config-value {
+    color: #dde6f0;
+    font-size: 13px;
+    font-family: 'Courier New', Courier, monospace;
+    word-break: break-all;
+}
+
+.config-content {
+    background-color: #2d2d2d;
+    color: #d4d4d4;
+    padding: 16px;
+    border-radius: 4px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-x: auto;
+    margin: 0 0 24px;
+}
+
+.config-missing {
+    color: #8a9bb0;
+    font-size: 14px;
+    padding: 8px 10px 24px;
+}
+
+.config-missing code {
+    font-family: 'Courier New', Courier, monospace;
+    color: #c3dafe;
+}
+
+.config-controls {
+    display: flex;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}
