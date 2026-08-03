@@ -8,6 +8,8 @@ export function GetConfig():Promise<cli.ConfigInfo>;
 
 export function GetCurrentIndex():Promise<number>;
 
+export function GetDaemonStatus():Promise<string>;
+
 export function GetDiffContent():Promise<string>;
 
 export function GetStatus():Promise<cli.StatusInfo>;
