@@ -34,6 +34,10 @@ export function HasDiff() {
   return window['go']['cli']['App']['HasDiff']();
 }
 
+export function InstallDaemon() {
+  return window['go']['cli']['App']['InstallDaemon']();
+}
+
 export function IsInitialized() {
   return window['go']['cli']['App']['IsInitialized']();
 }
@@ -44,4 +48,16 @@ export function NextDiff() {
 
 export function PreviousDiff() {
   return window['go']['cli']['App']['PreviousDiff']();
+}
+
+export function StartDaemon() {
+  return window['go']['cli']['App']['StartDaemon']();
+}
+
+export function StopDaemon() {
+  return window['go']['cli']['App']['StopDaemon']();
+}
+
+export function UninstallDaemon() {
+  return window['go']['cli']['App']['UninstallDaemon']();
 }

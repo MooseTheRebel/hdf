@@ -1,11 +1,12 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon} from '../wailsjs/go/cli/App';
 import {renderDiffContent} from './diff';
 import {renderStatus} from './status';
 import {renderConfig} from './configinfo';
 import {renderDaemonStatus} from './daemonstatus';
+import {renderDaemonManagement} from './daemonmanagement';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -57,6 +58,10 @@ function displayHomeScreen() {
                         <button class="command-row command-row-clickable" id="daemon-status-btn">
                             <code class="cmd">hdf daemon status</code>
                             <span class="cmd-desc">Check whether the sync daemon service is running</span>
+                        </button>
+                        <button class="command-row command-row-clickable" id="daemon-management-btn">
+                            <code class="cmd">hdf daemon install/start/stop/uninstall</code>
+                            <span class="cmd-desc">Manage the sync daemon background service</span>
                         </button>
                     </div>
                     <button class="close-button" id="close-btn">Close</button>
@@ -113,6 +118,7 @@ function displayHomeScreen() {
         document.getElementById('status-btn')?.addEventListener('click', () => displayStatusView());
         document.getElementById('config-btn')?.addEventListener('click', () => displayConfigView());
         document.getElementById('daemon-status-btn')?.addEventListener('click', () => displayDaemonStatusView());
+        document.getElementById('daemon-management-btn')?.addEventListener('click', () => displayDaemonManagementView());
     }).catch((err) => {
         app.innerHTML = `
             <div class="home-container">
@@ -222,6 +228,63 @@ function displayDaemonStatusView() {
         const loadingEl = document.getElementById('daemon-status-loading');
         if (loadingEl) loadingEl.textContent = 'Error loading daemon status: ' + err;
     });
+}
+
+function displayDaemonManagementView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="daemon-management-container">
+            <div class="daemon-management-header-section">
+                <h1>Daemon Management</h1>
+            </div>
+            <div id="daemon-management-loading">Loading daemon status...</div>
+            <div id="daemon-management-content" style="display: none;"></div>
+            <div id="daemon-management-result"></div>
+            <div class="daemon-management-controls">
+                <button id="daemon-management-back-btn" class="control-btn">Back</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('daemon-management-back-btn')?.addEventListener('click', () => displayHomeScreen());
+
+    refreshDaemonManagementStatus();
+}
+
+function refreshDaemonManagementStatus() {
+    const loadingEl = document.getElementById('daemon-management-loading');
+    const contentEl = document.getElementById('daemon-management-content');
+    if (loadingEl) loadingEl.style.display = 'block';
+    if (contentEl) contentEl.style.display = 'none';
+
+    GetDaemonStatus().then((status) => {
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.innerHTML = renderDaemonManagement(status);
+            contentEl.style.display = 'block';
+        }
+        wireDaemonManagementActions();
+    }).catch((err) => {
+        if (loadingEl) loadingEl.textContent = 'Error loading daemon status: ' + err;
+    });
+}
+
+function wireDaemonManagementActions() {
+    const resultEl = document.getElementById('daemon-management-result');
+    const runAction = (action: () => Promise<void>, successMessage: string) => {
+        if (resultEl) resultEl.textContent = '';
+        action().then(() => {
+            if (resultEl) resultEl.textContent = successMessage;
+            refreshDaemonManagementStatus();
+        }).catch((err) => {
+            if (resultEl) resultEl.textContent = 'Error: ' + err;
+        });
+    };
+
+    document.getElementById('daemon-install-btn')?.addEventListener('click', () => runAction(InstallDaemon, 'Daemon installed and started.'));
+    document.getElementById('daemon-uninstall-btn')?.addEventListener('click', () => runAction(UninstallDaemon, 'Daemon uninstalled.'));
+    document.getElementById('daemon-start-btn')?.addEventListener('click', () => runAction(StartDaemon, 'Daemon started.'));
+    document.getElementById('daemon-stop-btn')?.addEventListener('click', () => runAction(StopDaemon, 'Daemon stopped.'));
 }
 
 function loadCurrentDiff() {
