@@ -67,6 +67,30 @@ func (a *App) GetDaemonStatus() (string, error) {
 	return svcStatus(config.DefaultPath())
 }
 
+// InstallDaemon installs and starts the hdf sync daemon as a per-user
+// background service — the GUI's equivalent of `hdf daemon install`.
+func (a *App) InstallDaemon() error {
+	return runDaemon(config.DefaultPath(), svcInstall)
+}
+
+// UninstallDaemon stops and removes the installed hdf sync daemon service —
+// the GUI's equivalent of `hdf daemon uninstall`.
+func (a *App) UninstallDaemon() error {
+	return svcUninstall(config.DefaultPath())
+}
+
+// StartDaemon starts the already-installed hdf sync daemon service — the
+// GUI's equivalent of `hdf daemon start`.
+func (a *App) StartDaemon() error {
+	return runDaemon(config.DefaultPath(), svcStart)
+}
+
+// StopDaemon stops the already-installed hdf sync daemon service — the
+// GUI's equivalent of `hdf daemon stop`.
+func (a *App) StopDaemon() error {
+	return svcStop(config.DefaultPath())
+}
+
 func isInitialized(path string) (bool, error) {
 	_, err := config.Load(path)
 	if err == nil {

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"hdf/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -228,5 +230,55 @@ func TestGetDiffContentLargeResponseTruncatedAt1MB(t *testing.T) {
 	}
 	if len(got) > limit {
 		t.Errorf("GetDiffContent() returned %d bytes, want at most %d", len(got), limit)
+	}
+}
+
+// TestDaemonActionMethods_DelegateToSvcFuncs verifies that the App's daemon
+// management methods delegate to their respective svc func var with the
+// default config path and surface errors. InstallDaemon and StartDaemon
+// also go through runDaemon's preflight check, so it's mocked through for
+// those two, mirroring TestDaemonServiceCmds_DelegateToSvcFuncs for the
+// cobra commands.
+func TestDaemonActionMethods_DelegateToSvcFuncs(t *testing.T) {
+	cases := []struct {
+		name         string
+		method       func(*App) error
+		svcFunc      *func(string) error
+		viaRunDaemon bool
+	}{
+		{name: daemonSubcmdInstall, method: (*App).InstallDaemon, svcFunc: &svcInstall, viaRunDaemon: true},
+		{name: daemonSubcmdUninstall, method: (*App).UninstallDaemon, svcFunc: &svcUninstall},
+		{name: daemonSubcmdStart, method: (*App).StartDaemon, svcFunc: &svcStart, viaRunDaemon: true},
+		{name: daemonSubcmdStop, method: (*App).StopDaemon, svcFunc: &svcStop},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.viaRunDaemon {
+				origRunDaemon := runDaemon
+				defer func() { runDaemon = origRunDaemon }()
+				runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
+			}
+
+			origFunc := *tc.svcFunc
+			defer func() { *tc.svcFunc = origFunc }()
+
+			var gotCfgPath string
+			*tc.svcFunc = func(cfgPath string) error {
+				gotCfgPath = cfgPath
+				return nil
+			}
+			app := &App{}
+			if err := tc.method(app); err != nil {
+				t.Fatalf("%s() error = %v, want nil", tc.name, err)
+			}
+			if gotCfgPath != config.DefaultPath() {
+				t.Errorf("cfgPath = %q, want %q", gotCfgPath, config.DefaultPath())
+			}
+
+			*tc.svcFunc = func(string) error { return errors.New("boom") }
+			if err := tc.method(app); err == nil {
+				t.Fatalf("expected %s() error to propagate, got nil", tc.name)
+			}
+		})
 	}
 }

@@ -558,3 +558,37 @@
     padding-top: 10px;
     border-top: 1px solid #444;
 }
+
+.daemon-management-container {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 32px 24px;
+}
+
+.daemon-management-header-section {
+    margin: 0 0 24px;
+}
+
+.daemon-management-status {
+    margin-bottom: 20px;
+}
+
+.daemon-management-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+#daemon-management-result {
+    min-height: 1.2em;
+    margin-bottom: 16px;
+    color: #ccc;
+}
+
+.daemon-management-controls {
+    display: flex;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}

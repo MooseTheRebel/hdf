@@ -18,8 +18,16 @@ export function GetTotalDiffs():Promise<number>;
 
 export function HasDiff():Promise<boolean>;
 
+export function InstallDaemon():Promise<void>;
+
 export function IsInitialized():Promise<boolean>;
 
 export function NextDiff():Promise<void>;
 
 export function PreviousDiff():Promise<void>;
+
+export function StartDaemon():Promise<void>;
+
+export function StopDaemon():Promise<void>;
+
+export function UninstallDaemon():Promise<void>;

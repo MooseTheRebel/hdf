@@ -3694,10 +3694,10 @@ func TestDaemonServiceCmds_DelegateToSvcFuncs(t *testing.T) {
 		svcFunc      *func(string) error
 		viaRunDaemon bool
 	}{
-		{name: "install", cmd: daemonInstallCmd, svcFunc: &svcInstall, viaRunDaemon: true},
-		{name: "uninstall", cmd: daemonUninstallCmd, svcFunc: &svcUninstall},
-		{name: "start", cmd: daemonStartCmd, svcFunc: &svcStart, viaRunDaemon: true},
-		{name: "stop", cmd: daemonStopCmd, svcFunc: &svcStop},
+		{name: daemonSubcmdInstall, cmd: daemonInstallCmd, svcFunc: &svcInstall, viaRunDaemon: true},
+		{name: daemonSubcmdUninstall, cmd: daemonUninstallCmd, svcFunc: &svcUninstall},
+		{name: daemonSubcmdStart, cmd: daemonStartCmd, svcFunc: &svcStart, viaRunDaemon: true},
+		{name: daemonSubcmdStop, cmd: daemonStopCmd, svcFunc: &svcStop},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

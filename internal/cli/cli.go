@@ -1492,6 +1492,17 @@ var runDaemon = func(cfgPath string, run func(string) error) error {
 	return run(cfgPath)
 }
 
+// daemonSubcmd* name the "hdf daemon" subcommands. They're shared with the
+// table-driven tests in cli_test.go and app_test.go that exercise the
+// install/uninstall/start/stop plumbing for both the cobra commands and
+// their GUI App-method equivalents.
+const (
+	daemonSubcmdInstall   = "install"
+	daemonSubcmdUninstall = "uninstall"
+	daemonSubcmdStart     = "start"
+	daemonSubcmdStop      = "stop"
+)
+
 var daemonRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run the hdf sync daemon in the foreground",
@@ -1502,7 +1513,7 @@ var daemonRunCmd = &cobra.Command{
 }
 
 var daemonInstallCmd = &cobra.Command{
-	Use:   "install",
+	Use:   daemonSubcmdInstall,
 	Short: "Install and start the hdf sync daemon as a per-user background service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runDaemon(config.DefaultPath(), svcInstall)
@@ -1510,7 +1521,7 @@ var daemonInstallCmd = &cobra.Command{
 }
 
 var daemonUninstallCmd = &cobra.Command{
-	Use:   "uninstall",
+	Use:   daemonSubcmdUninstall,
 	Short: "Stop and remove the installed hdf sync daemon service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return svcUninstall(config.DefaultPath())
@@ -1518,7 +1529,7 @@ var daemonUninstallCmd = &cobra.Command{
 }
 
 var daemonStartCmd = &cobra.Command{
-	Use:   "start",
+	Use:   daemonSubcmdStart,
 	Short: "Start the already-installed hdf sync daemon service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runDaemon(config.DefaultPath(), svcStart)
@@ -1526,7 +1537,7 @@ var daemonStartCmd = &cobra.Command{
 }
 
 var daemonStopCmd = &cobra.Command{
-	Use:   "stop",
+	Use:   daemonSubcmdStop,
 	Short: "Stop the already-installed hdf sync daemon service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return svcStop(config.DefaultPath())
