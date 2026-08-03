@@ -43,6 +43,25 @@
     border: 1px solid rgba(200, 130, 40, 0.35);
 }
 
+.home-badge.daemon-running {
+    background-color: rgba(46, 160, 67, 0.25);
+    color: #4caf70;
+    border: 1px solid rgba(46, 160, 67, 0.4);
+}
+
+.home-badge.daemon-stopped {
+    background-color: rgba(200, 130, 40, 0.2);
+    color: #e0a050;
+    border: 1px solid rgba(200, 130, 40, 0.35);
+}
+
+.home-badge.daemon-not-installed,
+.home-badge.daemon-unknown {
+    background-color: rgba(140, 150, 165, 0.18);
+    color: #a3adba;
+    border: 1px solid rgba(140, 150, 165, 0.35);
+}
+
 .home-subtitle {
     color: #8a9bb0;
     font-size: 15px;
@@ -517,6 +536,23 @@
 }
 
 .config-controls {
+    display: flex;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}
+
+.daemon-status-container {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 32px 24px;
+}
+
+.daemon-status-header-section {
+    margin: 0 0 24px;
+}
+
+.daemon-status-controls {
     display: flex;
     justify-content: center;
     padding-top: 10px;

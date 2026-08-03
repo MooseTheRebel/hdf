@@ -1,10 +1,11 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus} from '../wailsjs/go/cli/App';
 import {renderDiffContent} from './diff';
 import {renderStatus} from './status';
 import {renderConfig} from './configinfo';
+import {renderDaemonStatus} from './daemonstatus';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -52,6 +53,10 @@ function displayHomeScreen() {
                         <button class="command-row command-row-clickable" id="config-btn">
                             <code class="cmd">hdf config</code>
                             <span class="cmd-desc">Show the current configuration</span>
+                        </button>
+                        <button class="command-row command-row-clickable" id="daemon-status-btn">
+                            <code class="cmd">hdf daemon status</code>
+                            <span class="cmd-desc">Check whether the sync daemon service is running</span>
                         </button>
                     </div>
                     <button class="close-button" id="close-btn">Close</button>
@@ -107,6 +112,7 @@ function displayHomeScreen() {
         document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
         document.getElementById('status-btn')?.addEventListener('click', () => displayStatusView());
         document.getElementById('config-btn')?.addEventListener('click', () => displayConfigView());
+        document.getElementById('daemon-status-btn')?.addEventListener('click', () => displayDaemonStatusView());
     }).catch((err) => {
         app.innerHTML = `
             <div class="home-container">
@@ -184,6 +190,37 @@ function displayConfigView() {
     }).catch((err) => {
         const loadingEl = document.getElementById('config-loading');
         if (loadingEl) loadingEl.textContent = 'Error loading config: ' + err;
+    });
+}
+
+function displayDaemonStatusView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="daemon-status-container">
+            <div class="daemon-status-header-section">
+                <h1>Daemon Status</h1>
+            </div>
+            <div id="daemon-status-loading">Loading daemon status...</div>
+            <div id="daemon-status-content" style="display: none;"></div>
+            <div class="daemon-status-controls">
+                <button id="daemon-status-back-btn" class="control-btn">Back</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('daemon-status-back-btn')?.addEventListener('click', () => displayHomeScreen());
+
+    GetDaemonStatus().then((status) => {
+        const loadingEl = document.getElementById('daemon-status-loading');
+        const contentEl = document.getElementById('daemon-status-content');
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.innerHTML = renderDaemonStatus(status);
+            contentEl.style.display = 'block';
+        }
+    }).catch((err) => {
+        const loadingEl = document.getElementById('daemon-status-loading');
+        if (loadingEl) loadingEl.textContent = 'Error loading daemon status: ' + err;
     });
 }
 
