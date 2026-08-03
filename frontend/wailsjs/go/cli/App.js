@@ -14,6 +14,10 @@ export function GetCurrentIndex() {
   return window['go']['cli']['App']['GetCurrentIndex']();
 }
 
+export function GetDaemonStatus() {
+  return window['go']['cli']['App']['GetDaemonStatus']();
+}
+
 export function GetDiffContent() {
   return window['go']['cli']['App']['GetDiffContent']();
 }

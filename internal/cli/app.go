@@ -61,6 +61,12 @@ func (a *App) GetConfig() (*ConfigInfo, error) {
 	return computeConfigInfo(config.DefaultPath())
 }
 
+// GetDaemonStatus reports whether the hdf sync daemon service is
+// installed/running — the GUI's equivalent of `hdf daemon status`.
+func (a *App) GetDaemonStatus() (string, error) {
+	return svcStatus(config.DefaultPath())
+}
+
 func isInitialized(path string) (bool, error) {
 	_, err := config.Load(path)
 	if err == nil {
