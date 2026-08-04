@@ -18,11 +18,12 @@ import (
 
 // App struct
 type App struct {
-	ctx          context.Context
-	mu           sync.Mutex
-	diffURLs     []string
-	currentIndex int
-	linkPending  []pendingIncomingFile
+	ctx           context.Context
+	mu            sync.Mutex
+	diffURLs      []string
+	currentIndex  int
+	linkPending   []pendingIncomingFile
+	enrollPending *pendingEnroll
 }
 
 // NewApp creates a new App application struct
@@ -146,6 +147,61 @@ func (a *App) FinishLink() ([]LinkedFile, error) {
 	a.linkPending = nil
 	a.mu.Unlock()
 	return results, err
+}
+
+// PickFileToEnroll opens a native "choose file" dialog rooted at the user's
+// home directory and returns the selected path, or "" if the user
+// cancelled. Not unit-tested — it drives a real OS dialog, the same
+// untestable-by-design shape as CloseWindow.
+func (a *App) PickFileToEnroll() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select a file to enroll",
+		DefaultDirectory: homeDir,
+		ShowHiddenFiles:  true,
+	})
+}
+
+// StartEnroll begins enrolling path: computes the diff against any
+// currently committed version and stores the pending decision in App state
+// for ConfirmEnroll to apply — the GUI's equivalent of `hdf enroll`/`hdf
+// changes-push`'s setup and diff-preview phase.
+func (a *App) StartEnroll(path string) (*EnrollStartInfo, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	info, pending, err := computeEnrollStartFn(config.DefaultPath(), homeDir, path)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.enrollPending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// ConfirmEnroll applies the enroll started by the most recent StartEnroll
+// call: copies the file into the repo, commits, and pushes.
+func (a *App) ConfirmEnroll() (*EnrollResult, error) {
+	a.mu.Lock()
+	pending := a.enrollPending
+	a.mu.Unlock()
+	if pending == nil {
+		return nil, fmt.Errorf("confirm enroll: no pending enroll — call StartEnroll first")
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	result, err := computeApplyEnrollFn(config.DefaultPath(), homeDir, config.DefaultStatePath(), *pending)
+	a.mu.Lock()
+	a.enrollPending = nil
+	a.mu.Unlock()
+	return result, err
 }
 
 func isInitialized(path string) (bool, error) {

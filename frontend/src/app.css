@@ -699,3 +699,28 @@
     padding-top: 10px;
     border-top: 1px solid #444;
 }
+
+/* Enroll view (reuses .link-container/.link-controls layout) */
+
+.enroll-preview-path {
+    color: #c3dafe;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 15px;
+    margin-bottom: 12px;
+}
+
+.enroll-preview-note {
+    color: #dde6f0;
+}
+
+.enroll-preview-diff {
+    max-height: 400px;
+    overflow-y: auto;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.04);
+    padding: 8px 0;
+}
+
+.enroll-result-message {
+    color: #dde6f0;
+}

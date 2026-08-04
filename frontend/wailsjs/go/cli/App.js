@@ -10,6 +10,10 @@ export function CloseWindow() {
   return window['go']['cli']['App']['CloseWindow']();
 }
 
+export function ConfirmEnroll() {
+  return window['go']['cli']['App']['ConfirmEnroll']();
+}
+
 export function FinishLink() {
   return window['go']['cli']['App']['FinishLink']();
 }
@@ -58,12 +62,20 @@ export function NextDiff() {
   return window['go']['cli']['App']['NextDiff']();
 }
 
+export function PickFileToEnroll() {
+  return window['go']['cli']['App']['PickFileToEnroll']();
+}
+
 export function PreviousDiff() {
   return window['go']['cli']['App']['PreviousDiff']();
 }
 
 export function StartDaemon() {
   return window['go']['cli']['App']['StartDaemon']();
+}
+
+export function StartEnroll(arg1) {
+  return window['go']['cli']['App']['StartEnroll'](arg1);
 }
 
 export function StartLink(arg1) {

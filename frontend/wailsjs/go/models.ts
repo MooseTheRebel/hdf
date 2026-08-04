@@ -16,6 +16,34 @@ export namespace cli {
 	        this.content = source["content"];
 	    }
 	}
+	export class EnrollResult {
+	    message: string;
+
+	    static createFrom(source: any = {}) {
+	        return new EnrollResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.message = source["message"];
+	    }
+	}
+	export class EnrollStartInfo {
+	    path: string;
+	    isNewFile: boolean;
+	    diff: string;
+
+	    static createFrom(source: any = {}) {
+	        return new EnrollStartInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.isNewFile = source["isNewFile"];
+	        this.diff = source["diff"];
+	    }
+	}
 	export class FileStatus {
 	    path: string;
 	    status: string;

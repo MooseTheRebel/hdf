@@ -6,6 +6,8 @@ export function AcceptIncomingFile(arg1:number):Promise<void>;
 
 export function CloseWindow():Promise<void>;
 
+export function ConfirmEnroll():Promise<cli.EnrollResult>;
+
 export function FinishLink():Promise<Array<cli.LinkedFile>>;
 
 export function GetConfig():Promise<cli.ConfigInfo>;
@@ -30,9 +32,13 @@ export function IsInitialized():Promise<boolean>;
 
 export function NextDiff():Promise<void>;
 
+export function PickFileToEnroll():Promise<string>;
+
 export function PreviousDiff():Promise<void>;
 
 export function StartDaemon():Promise<void>;
+
+export function StartEnroll(arg1:string):Promise<cli.EnrollStartInfo>;
 
 export function StartLink(arg1:boolean):Promise<cli.LinkStartInfo>;
 

@@ -12,6 +12,15 @@ import (
 	"testing"
 )
 
+// Shared fixture paths for App-layer seam tests below (link/enroll session
+// state tests) — kept as constants so goconst doesn't flag their repeated
+// literal use across independent test functions.
+const (
+	tildeA      = "~/a.txt"
+	tildeB      = "~/b.txt"
+	relPathATxt = "a.txt"
+)
+
 func TestGetDiffContent_HTTPErrors(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -289,8 +298,6 @@ func TestDaemonActionMethods_DelegateToSvcFuncs(t *testing.T) {
 // index and forwards it to acceptIncomingFileFn, and that an out-of-range
 // index is rejected without calling acceptIncomingFileFn at all.
 func TestAppStartLink_StoresPendingForAcceptIncomingFile(t *testing.T) {
-	const tildeA, tildeB = "~/a.txt", "~/b.txt"
-
 	origStart := computeLinkStartFn
 	origAccept := acceptIncomingFileFn
 	defer func() {
@@ -299,7 +306,7 @@ func TestAppStartLink_StoresPendingForAcceptIncomingFile(t *testing.T) {
 	}()
 
 	wantPending := []pendingIncomingFile{
-		{relPath: "a.txt", tildePath: tildeA, mainBytes: []byte("a")},
+		{relPath: relPathATxt, tildePath: tildeA, mainBytes: []byte("a")},
 		{relPath: "b.txt", tildePath: tildeB, mainBytes: []byte("b")},
 	}
 	computeLinkStartFn = func(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []pendingIncomingFile, error) {
@@ -350,18 +357,91 @@ func TestAppFinishLink_ClearsPendingState(t *testing.T) {
 	defer func() { computeRelinkFn = origRelink }()
 
 	computeRelinkFn = func(cfgPath, homeDir string) ([]LinkedFile, error) {
-		return []LinkedFile{{Path: "~/a.txt"}}, nil
+		return []LinkedFile{{Path: tildeA}}, nil
 	}
 
-	app := &App{linkPending: []pendingIncomingFile{{relPath: "a.txt"}}}
+	app := &App{linkPending: []pendingIncomingFile{{relPath: relPathATxt}}}
 	results, err := app.FinishLink()
 	if err != nil {
 		t.Fatalf("FinishLink: %v", err)
 	}
-	if len(results) != 1 || results[0].Path != "~/a.txt" {
-		t.Errorf("results = %v, want one entry for ~/a.txt", results)
+	if len(results) != 1 || results[0].Path != tildeA {
+		t.Errorf("results = %v, want one entry for %s", results, tildeA)
 	}
 	if len(app.linkPending) != 0 {
 		t.Errorf("linkPending = %v, want cleared after FinishLink", app.linkPending)
+	}
+}
+
+// TestAppStartEnroll_StoresPendingForConfirmEnroll verifies that
+// App.StartEnroll stashes the pendingEnroll returned by
+// computeEnrollStartFn, and that ConfirmEnroll forwards it to
+// computeApplyEnrollFn and clears the stored state afterward.
+func TestAppStartEnroll_StoresPendingForConfirmEnroll(t *testing.T) {
+	origStart := computeEnrollStartFn
+	origApply := computeApplyEnrollFn
+	defer func() {
+		computeEnrollStartFn = origStart
+		computeApplyEnrollFn = origApply
+	}()
+
+	wantPending := &pendingEnroll{tildeFile: tildeA, relName: relPathATxt, filePath: "/home/a.txt"}
+	computeEnrollStartFn = func(cfgPath, homeDir, filePath string) (*EnrollStartInfo, *pendingEnroll, error) {
+		return &EnrollStartInfo{Path: tildeA, IsNewFile: true}, wantPending, nil
+	}
+
+	app := &App{}
+	info, err := app.StartEnroll("/home/a.txt")
+	if err != nil {
+		t.Fatalf("StartEnroll: %v", err)
+	}
+	if info.Path != tildeA {
+		t.Errorf("Path = %q, want %q", info.Path, tildeA)
+	}
+
+	var gotPending pendingEnroll
+	var called bool
+	computeApplyEnrollFn = func(cfgPath, homeDir, statePath string, p pendingEnroll) (*EnrollResult, error) {
+		called = true
+		gotPending = p
+		return &EnrollResult{Message: "Enrolled ~/a.txt (commit abc12345)"}, nil
+	}
+	result, err := app.ConfirmEnroll()
+	if err != nil {
+		t.Fatalf("ConfirmEnroll: %v", err)
+	}
+	if !called {
+		t.Fatal("computeApplyEnrollFn was not called")
+	}
+	if gotPending != *wantPending {
+		t.Errorf("computeApplyEnrollFn got %+v, want %+v", gotPending, *wantPending)
+	}
+	if result.Message != "Enrolled ~/a.txt (commit abc12345)" {
+		t.Errorf("Message = %q, want the enrolled message", result.Message)
+	}
+	if app.enrollPending != nil {
+		t.Errorf("enrollPending = %+v, want nil after ConfirmEnroll", app.enrollPending)
+	}
+}
+
+// TestAppConfirmEnroll_WithoutStartEnrollReturnsError verifies that
+// ConfirmEnroll rejects being called before StartEnroll has populated
+// pending state, rather than silently applying a zero-value pendingEnroll.
+func TestAppConfirmEnroll_WithoutStartEnrollReturnsError(t *testing.T) {
+	origApply := computeApplyEnrollFn
+	defer func() { computeApplyEnrollFn = origApply }()
+
+	var called bool
+	computeApplyEnrollFn = func(cfgPath, homeDir, statePath string, p pendingEnroll) (*EnrollResult, error) {
+		called = true
+		return &EnrollResult{}, nil
+	}
+
+	app := &App{}
+	if _, err := app.ConfirmEnroll(); err == nil {
+		t.Fatal("expected error when ConfirmEnroll is called without a prior StartEnroll, got nil")
+	}
+	if called {
+		t.Error("computeApplyEnrollFn should not be called without pending enroll state")
 	}
 }
