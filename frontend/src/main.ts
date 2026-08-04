@@ -1,7 +1,7 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink, PickFileToEnroll, StartEnroll, ConfirmEnroll} from '../wailsjs/go/cli/App';
 import type {cli} from '../wailsjs/go/models';
 import {renderDiffContent} from './diff';
 import {renderStatus} from './status';
@@ -9,6 +9,7 @@ import {renderConfig} from './configinfo';
 import {renderDaemonStatus} from './daemonstatus';
 import {renderDaemonManagement} from './daemonmanagement';
 import {renderPendingWarnings, renderIncomingFileReview, renderLinkResults} from './linkflow';
+import {renderEnrollPreview, renderEnrollResult} from './enrollflow';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -33,10 +34,10 @@ function displayHomeScreen() {
                     </div>
                     <p class="home-subtitle">Your dotfiles are managed by hdf.</p>
                     <div class="command-list">
-                        <div class="command-row">
+                        <button class="command-row command-row-clickable" id="enroll-btn">
                             <code class="cmd">hdf enroll &lt;path&gt;</code>
                             <span class="cmd-desc">Start managing a new dotfile</span>
-                        </div>
+                        </button>
                         <button class="command-row command-row-clickable" id="link-btn">
                             <code class="cmd">hdf link</code>
                             <span class="cmd-desc">Re-create all managed symlinks</span>
@@ -121,6 +122,7 @@ function displayHomeScreen() {
         }
 
         document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
+        document.getElementById('enroll-btn')?.addEventListener('click', () => startEnrollFlow());
         document.getElementById('link-btn')?.addEventListener('click', () => displayLinkView(false));
         document.getElementById('link-no-fetch-btn')?.addEventListener('click', () => displayLinkView(true));
         document.getElementById('status-btn')?.addEventListener('click', () => displayStatusView());
@@ -293,6 +295,115 @@ function wireDaemonManagementActions() {
     document.getElementById('daemon-uninstall-btn')?.addEventListener('click', () => runAction(UninstallDaemon, 'Daemon uninstalled.'));
     document.getElementById('daemon-start-btn')?.addEventListener('click', () => runAction(StartDaemon, 'Daemon started.'));
     document.getElementById('daemon-stop-btn')?.addEventListener('click', () => runAction(StopDaemon, 'Daemon stopped.'));
+}
+
+function startEnrollFlow() {
+    PickFileToEnroll().then((path) => {
+        if (!path) return;
+        displayEnrollView(path);
+    }).catch((err) => {
+        displayEnrollErrorScreen('Error picking a file: ' + err);
+    });
+}
+
+function displayEnrollView(path: string) {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Enroll</h1>
+            </div>
+            <div id="enroll-step-content">Checking for pending warnings...</div>
+            <div class="link-controls" id="enroll-controls"></div>
+        </div>
+    `;
+    runEnrollWarningsStep(path);
+}
+
+function displayEnrollErrorScreen(message: string) {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Enroll</h1>
+            </div>
+            <div id="enroll-step-content"></div>
+            <div class="link-controls" id="enroll-controls"></div>
+        </div>
+    `;
+    showEnrollError(message);
+}
+
+function runEnrollWarningsStep(path: string) {
+    GetPendingWarnings().then((warnings) => {
+        if (warnings.length > 0) {
+            showEnrollWarnings(warnings, path);
+        } else {
+            runEnrollStartStep(path);
+        }
+    }).catch((err) => {
+        showEnrollError('Error checking pending warnings: ' + err);
+    });
+}
+
+function showEnrollWarnings(warnings: string[], path: string) {
+    const contentEl = document.getElementById('enroll-step-content');
+    const controlsEl = document.getElementById('enroll-controls');
+    if (contentEl) contentEl.innerHTML = renderPendingWarnings(warnings);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="enroll-warnings-continue-btn" class="control-btn">Continue</button>
+            <button id="enroll-warnings-cancel-btn" class="control-btn">Cancel</button>
+        `;
+    }
+    document.getElementById('enroll-warnings-continue-btn')?.addEventListener('click', () => runEnrollStartStep(path));
+    document.getElementById('enroll-warnings-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runEnrollStartStep(path: string) {
+    const contentEl = document.getElementById('enroll-step-content');
+    const controlsEl = document.getElementById('enroll-controls');
+    if (contentEl) contentEl.textContent = 'Preparing enroll preview...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    StartEnroll(path).then((info) => {
+        if (contentEl) contentEl.innerHTML = renderEnrollPreview(info);
+        if (controlsEl) {
+            controlsEl.innerHTML = `
+                <button id="enroll-confirm-btn" class="control-btn">Enroll</button>
+                <button id="enroll-cancel-btn" class="control-btn">Cancel</button>
+            `;
+        }
+        document.getElementById('enroll-confirm-btn')?.addEventListener('click', () => runEnrollConfirmStep());
+        document.getElementById('enroll-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showEnrollError('Error starting enroll: ' + err);
+    });
+}
+
+function runEnrollConfirmStep() {
+    const contentEl = document.getElementById('enroll-step-content');
+    const controlsEl = document.getElementById('enroll-controls');
+    if (contentEl) contentEl.textContent = 'Enrolling...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    ConfirmEnroll().then((result) => {
+        if (contentEl) contentEl.innerHTML = renderEnrollResult(result);
+        if (controlsEl) controlsEl.innerHTML = '<button id="enroll-done-back-btn" class="control-btn">Back</button>';
+        document.getElementById('enroll-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showEnrollError('Error enrolling: ' + err);
+    });
+}
+
+function showEnrollError(message: string) {
+    const contentEl = document.getElementById('enroll-step-content');
+    const controlsEl = document.getElementById('enroll-controls');
+    if (contentEl) contentEl.textContent = message;
+    if (controlsEl) controlsEl.innerHTML = '<button id="enroll-error-back-btn" class="control-btn">Back</button>';
+    document.getElementById('enroll-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
 function displayLinkView(noFetch: boolean) {
