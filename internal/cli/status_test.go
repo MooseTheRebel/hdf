@@ -35,7 +35,7 @@ func TestComputeStatus(t *testing.T) {
 	}
 	reg := &config.Registry{Files: []config.ManagedFile{
 		{Path: "~/.okrc", Hash: link.HashBytes(okContent)},
-		{Path: "~/.missingrc", Hash: "whatever"},
+		{Path: tildeMissingRC, Hash: "whatever"},
 	}}
 	if err := config.SaveRegistry(repoDir, reg); err != nil {
 		t.Fatalf("SaveRegistry: %v", err)
@@ -80,7 +80,7 @@ func TestComputeStatus(t *testing.T) {
 
 	want := []FileStatus{
 		{Path: "~/.okrc", Status: statusOk},
-		{Path: "~/.missingrc", Status: statusMissing},
+		{Path: tildeMissingRC, Status: statusMissing},
 	}
 	if len(got.Files) != len(want) {
 		t.Fatalf("Files = %+v, want %d entries", got.Files, len(want))

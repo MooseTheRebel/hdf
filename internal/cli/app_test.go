@@ -282,3 +282,86 @@ func TestDaemonActionMethods_DelegateToSvcFuncs(t *testing.T) {
 		})
 	}
 }
+
+// TestAppStartLink_StoresPendingForAcceptIncomingFile verifies that
+// App.StartLink stashes the pending incoming files returned by
+// computeLinkStartFn, that AcceptIncomingFile looks up the right one by
+// index and forwards it to acceptIncomingFileFn, and that an out-of-range
+// index is rejected without calling acceptIncomingFileFn at all.
+func TestAppStartLink_StoresPendingForAcceptIncomingFile(t *testing.T) {
+	const tildeA, tildeB = "~/a.txt", "~/b.txt"
+
+	origStart := computeLinkStartFn
+	origAccept := acceptIncomingFileFn
+	defer func() {
+		computeLinkStartFn = origStart
+		acceptIncomingFileFn = origAccept
+	}()
+
+	wantPending := []pendingIncomingFile{
+		{relPath: "a.txt", tildePath: tildeA, mainBytes: []byte("a")},
+		{relPath: "b.txt", tildePath: tildeB, mainBytes: []byte("b")},
+	}
+	computeLinkStartFn = func(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []pendingIncomingFile, error) {
+		return &LinkStartInfo{IncomingFiles: []IncomingFile{{Path: tildeA}, {Path: tildeB}}}, wantPending, nil
+	}
+
+	app := &App{}
+	info, err := app.StartLink(false)
+	if err != nil {
+		t.Fatalf("StartLink: %v", err)
+	}
+	if len(info.IncomingFiles) != 2 {
+		t.Fatalf("IncomingFiles = %v, want 2 entries", info.IncomingFiles)
+	}
+
+	var gotItem pendingIncomingFile
+	var called bool
+	acceptIncomingFileFn = func(cfgPath string, item pendingIncomingFile) error {
+		called = true
+		gotItem = item
+		return nil
+	}
+	if err := app.AcceptIncomingFile(1); err != nil {
+		t.Fatalf("AcceptIncomingFile(1): %v", err)
+	}
+	if !called {
+		t.Fatal("acceptIncomingFileFn was not called")
+	}
+	if gotItem.relPath != wantPending[1].relPath || gotItem.tildePath != wantPending[1].tildePath || string(gotItem.mainBytes) != string(wantPending[1].mainBytes) {
+		t.Errorf("acceptIncomingFileFn got %+v, want %+v", gotItem, wantPending[1])
+	}
+
+	called = false
+	if err := app.AcceptIncomingFile(5); err == nil {
+		t.Fatal("expected error for out-of-range index, got nil")
+	}
+	if called {
+		t.Error("acceptIncomingFileFn should not be called for an out-of-range index")
+	}
+}
+
+// TestAppFinishLink_ClearsPendingState verifies that App.FinishLink returns
+// computeRelinkFn's results and clears the pending-incoming-files state
+// left over from a prior StartLink, so a stale accept can't be replayed
+// against a new link session.
+func TestAppFinishLink_ClearsPendingState(t *testing.T) {
+	origRelink := computeRelinkFn
+	defer func() { computeRelinkFn = origRelink }()
+
+	computeRelinkFn = func(cfgPath, homeDir string) ([]LinkedFile, error) {
+		return []LinkedFile{{Path: "~/a.txt"}}, nil
+	}
+
+	app := &App{linkPending: []pendingIncomingFile{{relPath: "a.txt"}}}
+	results, err := app.FinishLink()
+	if err != nil {
+		t.Fatalf("FinishLink: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != "~/a.txt" {
+		t.Errorf("results = %v, want one entry for ~/a.txt", results)
+	}
+	if len(app.linkPending) != 0 {
+		t.Errorf("linkPending = %v, want cleared after FinishLink", app.linkPending)
+	}
+}
