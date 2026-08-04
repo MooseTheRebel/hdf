@@ -1,12 +1,14 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink} from '../wailsjs/go/cli/App';
+import type {cli} from '../wailsjs/go/models';
 import {renderDiffContent} from './diff';
 import {renderStatus} from './status';
 import {renderConfig} from './configinfo';
 import {renderDaemonStatus} from './daemonstatus';
 import {renderDaemonManagement} from './daemonmanagement';
+import {renderPendingWarnings, renderIncomingFileReview, renderLinkResults} from './linkflow';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -35,10 +37,14 @@ function displayHomeScreen() {
                             <code class="cmd">hdf enroll &lt;path&gt;</code>
                             <span class="cmd-desc">Start managing a new dotfile</span>
                         </div>
-                        <div class="command-row">
+                        <button class="command-row command-row-clickable" id="link-btn">
                             <code class="cmd">hdf link</code>
                             <span class="cmd-desc">Re-create all managed symlinks</span>
-                        </div>
+                        </button>
+                        <button class="command-row command-row-clickable" id="link-no-fetch-btn">
+                            <code class="cmd">hdf link --no-fetch</code>
+                            <span class="cmd-desc">Re-create symlinks without fetching from remote</span>
+                        </button>
                         <button class="command-row command-row-clickable" id="status-btn">
                             <code class="cmd">hdf status</code>
                             <span class="cmd-desc">Show managed files and sync state</span>
@@ -115,6 +121,8 @@ function displayHomeScreen() {
         }
 
         document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
+        document.getElementById('link-btn')?.addEventListener('click', () => displayLinkView(false));
+        document.getElementById('link-no-fetch-btn')?.addEventListener('click', () => displayLinkView(true));
         document.getElementById('status-btn')?.addEventListener('click', () => displayStatusView());
         document.getElementById('config-btn')?.addEventListener('click', () => displayConfigView());
         document.getElementById('daemon-status-btn')?.addEventListener('click', () => displayDaemonStatusView());
@@ -285,6 +293,136 @@ function wireDaemonManagementActions() {
     document.getElementById('daemon-uninstall-btn')?.addEventListener('click', () => runAction(UninstallDaemon, 'Daemon uninstalled.'));
     document.getElementById('daemon-start-btn')?.addEventListener('click', () => runAction(StartDaemon, 'Daemon started.'));
     document.getElementById('daemon-stop-btn')?.addEventListener('click', () => runAction(StopDaemon, 'Daemon stopped.'));
+}
+
+function displayLinkView(noFetch: boolean) {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Link</h1>
+            </div>
+            <div id="link-step-content">Checking for pending warnings...</div>
+            <div class="link-controls" id="link-controls"></div>
+        </div>
+    `;
+    runLinkWarningsStep(noFetch);
+}
+
+function runLinkWarningsStep(noFetch: boolean) {
+    GetPendingWarnings().then((warnings) => {
+        if (warnings.length > 0) {
+            showLinkWarnings(warnings, noFetch);
+        } else {
+            runLinkStartStep(noFetch);
+        }
+    }).catch((err) => {
+        showLinkError('Error checking pending warnings: ' + err);
+    });
+}
+
+function showLinkWarnings(warnings: string[], noFetch: boolean) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.innerHTML = renderPendingWarnings(warnings);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="link-warnings-continue-btn" class="control-btn">Continue</button>
+            <button id="link-warnings-cancel-btn" class="control-btn">Cancel</button>
+        `;
+    }
+    document.getElementById('link-warnings-continue-btn')?.addEventListener('click', () => runLinkStartStep(noFetch));
+    document.getElementById('link-warnings-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runLinkStartStep(noFetch: boolean) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.textContent = noFetch ? 'Skipping fetch...' : 'Fetching from remote...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    StartLink(noFetch).then((info) => {
+        if (info.incomingFiles.length > 0) {
+            runLinkReviewStep(info.incomingFiles, 0);
+        } else {
+            runLinkFinishStep(info.message);
+        }
+    }).catch((err) => {
+        showLinkError('Error starting link: ' + err);
+    });
+}
+
+function runLinkReviewStep(files: cli.IncomingFile[], index: number) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.innerHTML = renderIncomingFileReview(files[index], index, files.length);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="link-accept-btn" class="control-btn">Accept</button>
+            <button id="link-skip-btn" class="control-btn">Skip</button>
+        `;
+    }
+    document.getElementById('link-accept-btn')?.addEventListener('click', () => {
+        AcceptIncomingFile(index).then(() => {
+            advanceLinkReview(files, index);
+        }).catch((err) => {
+            showLinkAcceptError(files, index, String(err));
+        });
+    });
+    document.getElementById('link-skip-btn')?.addEventListener('click', () => {
+        advanceLinkReview(files, index);
+    });
+}
+
+function advanceLinkReview(files: cli.IncomingFile[], index: number) {
+    const next = index + 1;
+    if (next < files.length) {
+        runLinkReviewStep(files, next);
+    } else {
+        runLinkFinishStep('');
+    }
+}
+
+function showLinkAcceptError(files: cli.IncomingFile[], index: number, errMessage: string) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) {
+        contentEl.innerHTML = '<p class="link-error"></p>';
+        const errorEl = contentEl.querySelector('.link-error');
+        if (errorEl) errorEl.textContent = `Error accepting ${files[index].path}: ${errMessage}`;
+    }
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="link-error-skip-btn" class="control-btn">Skip and continue</button>
+            <button id="link-error-cancel-btn" class="control-btn">Cancel</button>
+        `;
+    }
+    document.getElementById('link-error-skip-btn')?.addEventListener('click', () => advanceLinkReview(files, index));
+    document.getElementById('link-error-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runLinkFinishStep(message: string) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.textContent = 'Re-creating symlinks...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    FinishLink().then((results) => {
+        if (contentEl) contentEl.innerHTML = renderLinkResults(message, results);
+        if (controlsEl) controlsEl.innerHTML = '<button id="link-done-back-btn" class="control-btn">Back</button>';
+        document.getElementById('link-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showLinkError('Error finishing link: ' + err);
+    });
+}
+
+function showLinkError(message: string) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.textContent = message;
+    if (controlsEl) controlsEl.innerHTML = '<button id="link-error-back-btn" class="control-btn">Back</button>';
+    document.getElementById('link-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
 function loadCurrentDiff() {

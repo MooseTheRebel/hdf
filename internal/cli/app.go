@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hdf/config"
+	"hdf/daemon"
 	"io"
 	"log"
 	"net/http"
@@ -21,6 +22,7 @@ type App struct {
 	mu           sync.Mutex
 	diffURLs     []string
 	currentIndex int
+	linkPending  []pendingIncomingFile
 }
 
 // NewApp creates a new App application struct
@@ -89,6 +91,61 @@ func (a *App) StartDaemon() error {
 // GUI's equivalent of `hdf daemon stop`.
 func (a *App) StopDaemon() error {
 	return svcStop(config.DefaultPath())
+}
+
+// GetPendingWarnings returns and clears any daemon-recorded warnings — the
+// GUI's equivalent of the check `hdf link` runs before proceeding. Matches
+// daemon.PendingWarnings' take-and-clear semantics: calling this consumes
+// the warnings even if the caller then cancels.
+func (a *App) GetPendingWarnings() ([]string, error) {
+	return daemon.PendingWarnings(config.DefaultStatePath())
+}
+
+// StartLink begins a link operation: computes pending incoming file diffs
+// (unless noFetch) and stores them in App state for AcceptIncomingFile to
+// consume by index. Call FinishLink to complete the operation once all
+// incoming files have been reviewed (or immediately, if IncomingFiles is
+// empty) — the GUI's equivalent of `hdf link`.
+func (a *App) StartLink(noFetch bool) (*LinkStartInfo, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	info, pending, err := computeLinkStartFn(config.DefaultPath(), homeDir, noFetch)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.linkPending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// AcceptIncomingFile accepts main's version of the pending incoming file at
+// index, as computed by the most recent StartLink call.
+func (a *App) AcceptIncomingFile(index int) error {
+	a.mu.Lock()
+	if index < 0 || index >= len(a.linkPending) {
+		a.mu.Unlock()
+		return fmt.Errorf("accept incoming file: index %d out of range (0..%d)", index, len(a.linkPending)-1)
+	}
+	item := a.linkPending[index]
+	a.mu.Unlock()
+	return acceptIncomingFileFn(config.DefaultPath(), item)
+}
+
+// FinishLink re-creates symlinks for all managed files and clears the link
+// session state started by StartLink.
+func (a *App) FinishLink() ([]LinkedFile, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	results, err := computeRelinkFn(config.DefaultPath(), homeDir)
+	a.mu.Lock()
+	a.linkPending = nil
+	a.mu.Unlock()
+	return results, err
 }
 
 func isInitialized(path string) (bool, error) {

@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	testBranch    = "machine"
-	tildeTestRC   = "~/.testrc"
-	testRCRelPath = ".testrc"
-	updatedByMain = "updated-by-main\n"
+	testBranch     = "machine"
+	tildeTestRC    = "~/.testrc"
+	tildeMissingRC = "~/.missingrc"
+	testRCRelPath  = ".testrc"
+	updatedByMain  = "updated-by-main\n"
 )
 
 // mustRel returns the relative path from base to target, fataling the test on error.
@@ -3569,7 +3570,8 @@ func TestRunLinkSkipsVariantlessFile(t *testing.T) {
 	// (a variant entry for this branch in the registry).
 	wantMsg := fmt.Sprintf(
 		"link %s: no variant for branch %q — skipping (add a variant for this branch to %s to manage the file here)",
-		homePath, testBranch, managedTOMLPath)
+		homePath, testBranch, managedTOMLPath,
+	)
 	if !strings.Contains(stderr, wantMsg) {
 		t.Errorf("stderr = %q\nwant it to contain %q", stderr, wantMsg)
 	}
