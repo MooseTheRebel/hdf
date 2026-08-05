@@ -108,6 +108,10 @@ func (a *App) GetPendingWarnings() ([]string, error) {
 // incoming files have been reviewed (or immediately, if IncomingFiles is
 // empty) — the GUI's equivalent of `hdf link`.
 func (a *App) StartLink(noFetch bool) (*LinkStartInfo, error) {
+	a.mu.Lock()
+	a.linkPending = nil
+	a.mu.Unlock()
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
@@ -170,6 +174,10 @@ func (a *App) PickFileToEnroll() (string, error) {
 // for ConfirmEnroll to apply — the GUI's equivalent of `hdf enroll`/`hdf
 // changes-push`'s setup and diff-preview phase.
 func (a *App) StartEnroll(path string) (*EnrollStartInfo, error) {
+	a.mu.Lock()
+	a.enrollPending = nil
+	a.mu.Unlock()
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)

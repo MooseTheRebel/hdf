@@ -373,6 +373,42 @@ func TestAppFinishLink_ClearsPendingState(t *testing.T) {
 	}
 }
 
+// TestAppStartLink_FailureInvalidatesPriorPending verifies that a StartLink
+// call which fails (e.g. a remote-fetch error) clears any linkPending left
+// over from an earlier successful StartLink, rather than leaving it
+// applicable via AcceptIncomingFile. Without this, a failed "start a new
+// link session" leaves the previous session's stale incoming-file snapshot
+// executable at the Wails boundary.
+func TestAppStartLink_FailureInvalidatesPriorPending(t *testing.T) {
+	origStart := computeLinkStartFn
+	origAccept := acceptIncomingFileFn
+	defer func() {
+		computeLinkStartFn = origStart
+		acceptIncomingFileFn = origAccept
+	}()
+
+	app := &App{linkPending: []pendingIncomingFile{{relPath: relPathATxt, tildePath: tildeA}}}
+
+	computeLinkStartFn = func(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []pendingIncomingFile, error) {
+		return nil, nil, errors.New("fetch failed")
+	}
+	if _, err := app.StartLink(false); err == nil {
+		t.Fatal("expected StartLink to propagate the computeLinkStartFn error, got nil")
+	}
+
+	var called bool
+	acceptIncomingFileFn = func(cfgPath string, item pendingIncomingFile) error {
+		called = true
+		return nil
+	}
+	if err := app.AcceptIncomingFile(0); err == nil {
+		t.Fatal("expected AcceptIncomingFile to reject the stale session after a failed StartLink, got nil")
+	}
+	if called {
+		t.Error("acceptIncomingFileFn should not be called against a pending session from before a failed StartLink")
+	}
+}
+
 // TestAppStartEnroll_StoresPendingForConfirmEnroll verifies that
 // App.StartEnroll stashes the pendingEnroll returned by
 // computeEnrollStartFn, and that ConfirmEnroll forwards it to
@@ -443,5 +479,40 @@ func TestAppConfirmEnroll_WithoutStartEnrollReturnsError(t *testing.T) {
 	}
 	if called {
 		t.Error("computeApplyEnrollFn should not be called without pending enroll state")
+	}
+}
+
+// TestAppStartEnroll_FailureInvalidatesPriorPending verifies that a
+// StartEnroll call which fails clears any enrollPending left over from an
+// earlier successful StartEnroll, rather than leaving it confirmable via
+// ConfirmEnroll. Without this, a failed "start a new enroll" leaves the
+// previous session's stale pending enroll applicable at the Wails boundary.
+func TestAppStartEnroll_FailureInvalidatesPriorPending(t *testing.T) {
+	origStart := computeEnrollStartFn
+	origApply := computeApplyEnrollFn
+	defer func() {
+		computeEnrollStartFn = origStart
+		computeApplyEnrollFn = origApply
+	}()
+
+	app := &App{enrollPending: &pendingEnroll{tildeFile: tildeA, relName: relPathATxt}}
+
+	computeEnrollStartFn = func(cfgPath, homeDir, filePath string) (*EnrollStartInfo, *pendingEnroll, error) {
+		return nil, nil, errors.New("path is a directory")
+	}
+	if _, err := app.StartEnroll("/some/dir"); err == nil {
+		t.Fatal("expected StartEnroll to propagate the computeEnrollStartFn error, got nil")
+	}
+
+	var called bool
+	computeApplyEnrollFn = func(cfgPath, homeDir, statePath string, p pendingEnroll) (*EnrollResult, error) {
+		called = true
+		return &EnrollResult{}, nil
+	}
+	if _, err := app.ConfirmEnroll(); err == nil {
+		t.Fatal("expected ConfirmEnroll to reject the stale session after a failed StartEnroll, got nil")
+	}
+	if called {
+		t.Error("computeApplyEnrollFn should not be called against a pending session from before a failed StartEnroll")
 	}
 }
