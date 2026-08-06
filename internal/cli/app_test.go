@@ -16,9 +16,10 @@ import (
 // state tests) — kept as constants so goconst doesn't flag their repeated
 // literal use across independent test functions.
 const (
-	tildeA      = "~/a.txt"
-	tildeB      = "~/b.txt"
-	relPathATxt = "a.txt"
+	tildeA           = "~/a.txt"
+	tildeB           = "~/b.txt"
+	relPathATxt      = "a.txt"
+	sharedHostBranch = "shared-host"
 )
 
 func TestGetDiffContent_HTTPErrors(t *testing.T) {
@@ -514,5 +515,153 @@ func TestAppStartEnroll_FailureInvalidatesPriorPending(t *testing.T) {
 	}
 	if called {
 		t.Error("computeApplyEnrollFn should not be called against a pending session from before a failed StartEnroll")
+	}
+}
+
+// TestAppStartInitLocal_StoresPendingForResolveAndFinish verifies that
+// App.StartInitLocal stashes the pendingInit returned by
+// computeInitLocalStartFn, that ResolveBranchCollision and FinishInit
+// forward it to their respective seams, and that FinishInit clears the
+// stored state afterward.
+func TestAppStartInitLocal_StoresPendingForResolveAndFinish(t *testing.T) {
+	origLocal := computeInitLocalStartFn
+	origResolve := computeResolveBranchCollisionFn
+	origFinish := computeFinishInitFn
+	defer func() {
+		computeInitLocalStartFn = origLocal
+		computeResolveBranchCollisionFn = origResolve
+		computeFinishInitFn = origFinish
+	}()
+
+	wantPending := &pendingInit{repoPath: "/repo", branch: sharedHostBranch}
+	computeInitLocalStartFn = func(cfgPath, repoPath, pushTarget string) (*InitStartInfo, *pendingInit, error) {
+		return &InitStartInfo{Collision: &InitBranchCollision{Branch: sharedHostBranch}}, wantPending, nil
+	}
+
+	app := &App{}
+	info, err := app.StartInitLocal("/repo", "")
+	if err != nil {
+		t.Fatalf("StartInitLocal: %v", err)
+	}
+	if info.Collision == nil || info.Collision.Branch != sharedHostBranch {
+		t.Errorf("Collision = %+v, want branch shared-host", info.Collision)
+	}
+
+	var gotUnique bool
+	var resolveCalled bool
+	computeResolveBranchCollisionFn = func(p *pendingInit, useUnique bool) error {
+		resolveCalled = true
+		gotUnique = useUnique
+		if p != wantPending {
+			t.Errorf("computeResolveBranchCollisionFn got %+v, want the stored pendingInit", p)
+		}
+		return nil
+	}
+	if err := app.ResolveBranchCollision(true); err != nil {
+		t.Fatalf("ResolveBranchCollision: %v", err)
+	}
+	if !resolveCalled || !gotUnique {
+		t.Error("computeResolveBranchCollisionFn was not called with useUnique=true")
+	}
+
+	var finishCalled bool
+	computeFinishInitFn = func(cfgPath, statePath string, p *pendingInit) (*InitResult, error) {
+		finishCalled = true
+		if p != wantPending {
+			t.Errorf("computeFinishInitFn got %+v, want the stored pendingInit", p)
+		}
+		return &InitResult{Message: "hdf initialized (branch shared-host)"}, nil
+	}
+	result, err := app.FinishInit()
+	if err != nil {
+		t.Fatalf("FinishInit: %v", err)
+	}
+	if !finishCalled {
+		t.Fatal("computeFinishInitFn was not called")
+	}
+	if result.Message != "hdf initialized (branch shared-host)" {
+		t.Errorf("Message = %q, want the init result message", result.Message)
+	}
+	if app.initPending != nil {
+		t.Errorf("initPending = %+v, want nil after FinishInit", app.initPending)
+	}
+}
+
+// TestAppResolveBranchCollision_WithoutStartInitReturnsError verifies that
+// ResolveBranchCollision rejects being called before StartInitLocal/Remote
+// has populated pending state.
+func TestAppResolveBranchCollision_WithoutStartInitReturnsError(t *testing.T) {
+	origResolve := computeResolveBranchCollisionFn
+	defer func() { computeResolveBranchCollisionFn = origResolve }()
+
+	var called bool
+	computeResolveBranchCollisionFn = func(p *pendingInit, useUnique bool) error {
+		called = true
+		return nil
+	}
+
+	app := &App{}
+	if err := app.ResolveBranchCollision(true); err == nil {
+		t.Fatal("expected error when ResolveBranchCollision is called without a prior StartInit*, got nil")
+	}
+	if called {
+		t.Error("computeResolveBranchCollisionFn should not be called without pending init state")
+	}
+}
+
+// TestAppFinishInit_WithoutStartInitReturnsError verifies that FinishInit
+// rejects being called before StartInitLocal/Remote has populated pending
+// state, rather than applying a nil pendingInit.
+func TestAppFinishInit_WithoutStartInitReturnsError(t *testing.T) {
+	origFinish := computeFinishInitFn
+	defer func() { computeFinishInitFn = origFinish }()
+
+	var called bool
+	computeFinishInitFn = func(cfgPath, statePath string, p *pendingInit) (*InitResult, error) {
+		called = true
+		return &InitResult{}, nil
+	}
+
+	app := &App{}
+	if _, err := app.FinishInit(); err == nil {
+		t.Fatal("expected error when FinishInit is called without a prior StartInit*, got nil")
+	}
+	if called {
+		t.Error("computeFinishInitFn should not be called without pending init state")
+	}
+}
+
+// TestAppStartInitLocal_FailureInvalidatesPriorPending verifies that a
+// StartInitLocal call which fails clears any initPending left over from an
+// earlier successful StartInit*, rather than leaving it applicable via
+// ResolveBranchCollision/FinishInit — the same session-invalidation fix
+// applied to StartLink/StartEnroll after code review.
+func TestAppStartInitLocal_FailureInvalidatesPriorPending(t *testing.T) {
+	origLocal := computeInitLocalStartFn
+	origFinish := computeFinishInitFn
+	defer func() {
+		computeInitLocalStartFn = origLocal
+		computeFinishInitFn = origFinish
+	}()
+
+	app := &App{initPending: &pendingInit{repoPath: "/repo", branch: sharedHostBranch}}
+
+	computeInitLocalStartFn = func(cfgPath, repoPath, pushTarget string) (*InitStartInfo, *pendingInit, error) {
+		return nil, nil, errors.New("hdf is already initialized")
+	}
+	if _, err := app.StartInitLocal("/repo", ""); err == nil {
+		t.Fatal("expected StartInitLocal to propagate the computeInitLocalStartFn error, got nil")
+	}
+
+	var called bool
+	computeFinishInitFn = func(cfgPath, statePath string, p *pendingInit) (*InitResult, error) {
+		called = true
+		return &InitResult{}, nil
+	}
+	if _, err := app.FinishInit(); err == nil {
+		t.Fatal("expected FinishInit to reject the stale session after a failed StartInitLocal, got nil")
+	}
+	if called {
+		t.Error("computeFinishInitFn should not be called against a pending session from before a failed StartInitLocal")
 	}
 }

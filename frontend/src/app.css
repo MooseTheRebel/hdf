@@ -724,3 +724,37 @@
 .enroll-result-message {
     color: #dde6f0;
 }
+
+/* Init wizard (reuses .link-container/.link-controls layout) */
+
+.init-field-label {
+    display: block;
+    color: #8a9bb0;
+    font-size: 13px;
+    margin: 16px 0 4px;
+}
+
+.init-field-row {
+    display: flex;
+    gap: 8px;
+}
+
+.init-text-input {
+    flex: 1;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #dde6f0;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    padding: 8px 10px;
+}
+
+.init-text-input:focus {
+    outline: none;
+    border-color: #6a8cff;
+}
+
+.init-result-message {
+    color: #dde6f0;
+}

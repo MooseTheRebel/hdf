@@ -14,6 +14,14 @@ export function ConfirmEnroll() {
   return window['go']['cli']['App']['ConfirmEnroll']();
 }
 
+export function DefaultRepoPath() {
+  return window['go']['cli']['App']['DefaultRepoPath']();
+}
+
+export function FinishInit() {
+  return window['go']['cli']['App']['FinishInit']();
+}
+
 export function FinishLink() {
   return window['go']['cli']['App']['FinishLink']();
 }
@@ -62,6 +70,10 @@ export function NextDiff() {
   return window['go']['cli']['App']['NextDiff']();
 }
 
+export function PickDirectory() {
+  return window['go']['cli']['App']['PickDirectory']();
+}
+
 export function PickFileToEnroll() {
   return window['go']['cli']['App']['PickFileToEnroll']();
 }
@@ -70,12 +82,24 @@ export function PreviousDiff() {
   return window['go']['cli']['App']['PreviousDiff']();
 }
 
+export function ResolveBranchCollision(arg1) {
+  return window['go']['cli']['App']['ResolveBranchCollision'](arg1);
+}
+
 export function StartDaemon() {
   return window['go']['cli']['App']['StartDaemon']();
 }
 
 export function StartEnroll(arg1) {
   return window['go']['cli']['App']['StartEnroll'](arg1);
+}
+
+export function StartInitLocal(arg1, arg2) {
+  return window['go']['cli']['App']['StartInitLocal'](arg1, arg2);
+}
+
+export function StartInitRemote(arg1, arg2) {
+  return window['go']['cli']['App']['StartInitRemote'](arg1, arg2);
 }
 
 export function StartLink(arg1) {

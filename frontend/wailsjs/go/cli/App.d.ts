@@ -8,6 +8,10 @@ export function CloseWindow():Promise<void>;
 
 export function ConfirmEnroll():Promise<cli.EnrollResult>;
 
+export function DefaultRepoPath():Promise<string>;
+
+export function FinishInit():Promise<cli.InitResult>;
+
 export function FinishLink():Promise<Array<cli.LinkedFile>>;
 
 export function GetConfig():Promise<cli.ConfigInfo>;
@@ -32,13 +36,21 @@ export function IsInitialized():Promise<boolean>;
 
 export function NextDiff():Promise<void>;
 
+export function PickDirectory():Promise<string>;
+
 export function PickFileToEnroll():Promise<string>;
 
 export function PreviousDiff():Promise<void>;
 
+export function ResolveBranchCollision(arg1:boolean):Promise<void>;
+
 export function StartDaemon():Promise<void>;
 
 export function StartEnroll(arg1:string):Promise<cli.EnrollStartInfo>;
+
+export function StartInitLocal(arg1:string,arg2:string):Promise<cli.InitStartInfo>;
+
+export function StartInitRemote(arg1:string,arg2:string):Promise<cli.InitStartInfo>;
 
 export function StartLink(arg1:boolean):Promise<cli.LinkStartInfo>;
 
