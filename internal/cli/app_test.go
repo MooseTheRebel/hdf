@@ -665,3 +665,152 @@ func TestAppStartInitLocal_FailureInvalidatesPriorPending(t *testing.T) {
 		t.Error("computeFinishInitFn should not be called against a pending session from before a failed StartInitLocal")
 	}
 }
+
+// TestAppStartPromote_StoresPendingForResolveAndFinish verifies that
+// App.StartPromote stashes the pendingPromote returned by
+// computePromoteStartFn, that ResolveDivergedFile and FinishPromote forward
+// it to their respective seams, and that FinishPromote clears the stored
+// state afterward.
+func TestAppStartPromote_StoresPendingForResolveAndFinish(t *testing.T) {
+	origStart := computePromoteStartFn
+	origResolve := computeResolveDivergedFileFn
+	origFinish := computeFinishPromoteFn
+	defer func() {
+		computePromoteStartFn = origStart
+		computeResolveDivergedFileFn = origResolve
+		computeFinishPromoteFn = origFinish
+	}()
+
+	wantPending := &pendingPromote{preferTheirs: map[string]bool{}}
+	computePromoteStartFn = func(cfgPath, statePath, homeDir string) (*PromoteStartInfo, *pendingPromote, error) {
+		return &PromoteStartInfo{Diverged: []DivergedFile{{Path: tildeA}}}, wantPending, nil
+	}
+
+	app := &App{}
+	info, err := app.StartPromote()
+	if err != nil {
+		t.Fatalf("StartPromote: %v", err)
+	}
+	if len(info.Diverged) != 1 || info.Diverged[0].Path != tildeA {
+		t.Errorf("Diverged = %+v, want one entry for %s", info.Diverged, tildeA)
+	}
+
+	var gotIndex int
+	var gotKeepMine bool
+	var resolveCalled bool
+	computeResolveDivergedFileFn = func(p *pendingPromote, index int, keepMine bool) error {
+		resolveCalled = true
+		gotIndex = index
+		gotKeepMine = keepMine
+		if p != wantPending {
+			t.Errorf("computeResolveDivergedFileFn got %+v, want the stored pendingPromote", p)
+		}
+		return nil
+	}
+	if err := app.ResolveDivergedFile(0, true); err != nil {
+		t.Fatalf("ResolveDivergedFile: %v", err)
+	}
+	if !resolveCalled || gotIndex != 0 || !gotKeepMine {
+		t.Error("computeResolveDivergedFileFn was not called with index=0, keepMine=true")
+	}
+
+	var finishCalled bool
+	computeFinishPromoteFn = func(p *pendingPromote) (*PromoteResult, error) {
+		finishCalled = true
+		if p != wantPending {
+			t.Errorf("computeFinishPromoteFn got %+v, want the stored pendingPromote", p)
+		}
+		return &PromoteResult{Message: "Promoted machine → main and pushed to origin."}, nil
+	}
+	result, err := app.FinishPromote()
+	if err != nil {
+		t.Fatalf("FinishPromote: %v", err)
+	}
+	if !finishCalled {
+		t.Fatal("computeFinishPromoteFn was not called")
+	}
+	if result.Message != "Promoted machine → main and pushed to origin." {
+		t.Errorf("Message = %q, want the promote result message", result.Message)
+	}
+	if app.promotePending != nil {
+		t.Errorf("promotePending = %+v, want nil after FinishPromote", app.promotePending)
+	}
+}
+
+// TestAppResolveDivergedFile_WithoutStartPromoteReturnsError verifies that
+// ResolveDivergedFile rejects being called before StartPromote has
+// populated pending state.
+func TestAppResolveDivergedFile_WithoutStartPromoteReturnsError(t *testing.T) {
+	origResolve := computeResolveDivergedFileFn
+	defer func() { computeResolveDivergedFileFn = origResolve }()
+
+	var called bool
+	computeResolveDivergedFileFn = func(p *pendingPromote, index int, keepMine bool) error {
+		called = true
+		return nil
+	}
+
+	app := &App{}
+	if err := app.ResolveDivergedFile(0, true); err == nil {
+		t.Fatal("expected error when ResolveDivergedFile is called without a prior StartPromote, got nil")
+	}
+	if called {
+		t.Error("computeResolveDivergedFileFn should not be called without pending promote state")
+	}
+}
+
+// TestAppFinishPromote_WithoutStartPromoteReturnsError verifies that
+// FinishPromote rejects being called before StartPromote has populated
+// pending state, rather than applying a nil pendingPromote.
+func TestAppFinishPromote_WithoutStartPromoteReturnsError(t *testing.T) {
+	origFinish := computeFinishPromoteFn
+	defer func() { computeFinishPromoteFn = origFinish }()
+
+	var called bool
+	computeFinishPromoteFn = func(p *pendingPromote) (*PromoteResult, error) {
+		called = true
+		return &PromoteResult{}, nil
+	}
+
+	app := &App{}
+	if _, err := app.FinishPromote(); err == nil {
+		t.Fatal("expected error when FinishPromote is called without a prior StartPromote, got nil")
+	}
+	if called {
+		t.Error("computeFinishPromoteFn should not be called without pending promote state")
+	}
+}
+
+// TestAppStartPromote_FailureInvalidatesPriorPending verifies that a
+// StartPromote call which fails clears any promotePending left over from an
+// earlier successful StartPromote, rather than leaving it applicable via
+// ResolveDivergedFile/FinishPromote.
+func TestAppStartPromote_FailureInvalidatesPriorPending(t *testing.T) {
+	origStart := computePromoteStartFn
+	origFinish := computeFinishPromoteFn
+	defer func() {
+		computePromoteStartFn = origStart
+		computeFinishPromoteFn = origFinish
+	}()
+
+	app := &App{promotePending: &pendingPromote{preferTheirs: map[string]bool{}}}
+
+	computePromoteStartFn = func(cfgPath, statePath, homeDir string) (*PromoteStartInfo, *pendingPromote, error) {
+		return nil, nil, errors.New("uncommitted changes")
+	}
+	if _, err := app.StartPromote(); err == nil {
+		t.Fatal("expected StartPromote to propagate the computePromoteStartFn error, got nil")
+	}
+
+	var called bool
+	computeFinishPromoteFn = func(p *pendingPromote) (*PromoteResult, error) {
+		called = true
+		return &PromoteResult{}, nil
+	}
+	if _, err := app.FinishPromote(); err == nil {
+		t.Fatal("expected FinishPromote to reject the stale session after a failed StartPromote, got nil")
+	}
+	if called {
+		t.Error("computeFinishPromoteFn should not be called against a pending session from before a failed StartPromote")
+	}
+}

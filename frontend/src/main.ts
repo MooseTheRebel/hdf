@@ -1,7 +1,7 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink, PickFileToEnroll, StartEnroll, ConfirmEnroll, DefaultRepoPath, PickDirectory, StartInitLocal, StartInitRemote, ResolveBranchCollision, FinishInit} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink, PickFileToEnroll, StartEnroll, ConfirmEnroll, DefaultRepoPath, PickDirectory, StartInitLocal, StartInitRemote, ResolveBranchCollision, FinishInit, StartPromote, ResolveDivergedFile, FinishPromote} from '../wailsjs/go/cli/App';
 import type {cli} from '../wailsjs/go/models';
 import {renderDiffContent} from './diff';
 import {renderStatus} from './status';
@@ -11,6 +11,7 @@ import {renderDaemonManagement} from './daemonmanagement';
 import {renderPendingWarnings, renderIncomingFileReview, renderLinkResults} from './linkflow';
 import {renderEnrollPreview, renderEnrollResult} from './enrollflow';
 import {renderLocalForm, renderRemoteForm, renderBranchCollision, renderInitResult} from './initflow';
+import {renderPreservedFiles, renderDivergedFileReview, renderPromoteResult} from './promoteflow';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -46,6 +47,10 @@ function displayHomeScreen() {
                         <button class="command-row command-row-clickable" id="link-no-fetch-btn">
                             <code class="cmd">hdf link --no-fetch</code>
                             <span class="cmd-desc">Re-create symlinks without fetching from remote</span>
+                        </button>
+                        <button class="command-row command-row-clickable" id="promote-btn">
+                            <code class="cmd">hdf promote</code>
+                            <span class="cmd-desc">Merge your machine branch into main and push</span>
                         </button>
                         <button class="command-row command-row-clickable" id="status-btn">
                             <code class="cmd">hdf status</code>
@@ -128,6 +133,7 @@ function displayHomeScreen() {
         document.getElementById('enroll-btn')?.addEventListener('click', () => startEnrollFlow());
         document.getElementById('link-btn')?.addEventListener('click', () => displayLinkView(false));
         document.getElementById('link-no-fetch-btn')?.addEventListener('click', () => displayLinkView(true));
+        document.getElementById('promote-btn')?.addEventListener('click', () => displayPromoteView());
         document.getElementById('status-btn')?.addEventListener('click', () => displayStatusView());
         document.getElementById('config-btn')?.addEventListener('click', () => displayConfigView());
         document.getElementById('daemon-status-btn')?.addEventListener('click', () => displayDaemonStatusView());
@@ -568,6 +574,105 @@ function showInitError(message: string) {
     if (contentEl) contentEl.textContent = message;
     if (controlsEl) controlsEl.innerHTML = '<button id="init-error-back-btn" class="control-btn">Back</button>';
     document.getElementById('init-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function displayPromoteView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Promote</h1>
+            </div>
+            <div id="promote-step-content">Checking for changes to promote...</div>
+            <div class="link-controls" id="promote-controls"></div>
+        </div>
+    `;
+
+    StartPromote().then((info) => {
+        if (info.preserved.length > 0) {
+            showPromotePreserved(info);
+        } else if (info.diverged.length > 0) {
+            runPromoteReview(info.diverged, 0);
+        } else {
+            runFinishPromote();
+        }
+    }).catch((err) => {
+        showPromoteError('Error starting promote: ' + err);
+    });
+}
+
+function showPromotePreserved(info: cli.PromoteStartInfo) {
+    const contentEl = document.getElementById('promote-step-content');
+    const controlsEl = document.getElementById('promote-controls');
+    if (contentEl) contentEl.innerHTML = renderPreservedFiles(info.preserved);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="promote-preserved-continue-btn" class="control-btn">Continue</button>
+            <button id="promote-preserved-cancel-btn" class="control-btn">Cancel</button>
+        `;
+    }
+    document.getElementById('promote-preserved-continue-btn')?.addEventListener('click', () => {
+        if (info.diverged.length > 0) {
+            runPromoteReview(info.diverged, 0);
+        } else {
+            runFinishPromote();
+        }
+    });
+    document.getElementById('promote-preserved-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runPromoteReview(files: cli.DivergedFile[], index: number) {
+    const contentEl = document.getElementById('promote-step-content');
+    const controlsEl = document.getElementById('promote-controls');
+    if (contentEl) contentEl.innerHTML = renderDivergedFileReview(files[index], index, files.length);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="promote-keep-mine-btn" class="control-btn">Overwrite main with mine</button>
+            <button id="promote-keep-theirs-btn" class="control-btn">Keep main's version</button>
+        `;
+    }
+    const advance = () => {
+        const next = index + 1;
+        if (next < files.length) {
+            runPromoteReview(files, next);
+        } else {
+            runFinishPromote();
+        }
+    };
+    document.getElementById('promote-keep-mine-btn')?.addEventListener('click', () => {
+        ResolveDivergedFile(index, true).then(advance).catch((err) => {
+            showPromoteError('Error resolving ' + files[index].path + ': ' + err);
+        });
+    });
+    document.getElementById('promote-keep-theirs-btn')?.addEventListener('click', () => {
+        ResolveDivergedFile(index, false).then(advance).catch((err) => {
+            showPromoteError('Error resolving ' + files[index].path + ': ' + err);
+        });
+    });
+}
+
+function runFinishPromote() {
+    const contentEl = document.getElementById('promote-step-content');
+    const controlsEl = document.getElementById('promote-controls');
+    if (contentEl) contentEl.textContent = 'Promoting...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    FinishPromote().then((result) => {
+        if (contentEl) contentEl.innerHTML = renderPromoteResult(result);
+        if (controlsEl) controlsEl.innerHTML = '<button id="promote-done-continue-btn" class="control-btn">Continue</button>';
+        document.getElementById('promote-done-continue-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showPromoteError('Error promoting: ' + err);
+    });
+}
+
+function showPromoteError(message: string) {
+    const contentEl = document.getElementById('promote-step-content');
+    const controlsEl = document.getElementById('promote-controls');
+    if (contentEl) contentEl.textContent = message;
+    if (controlsEl) controlsEl.innerHTML = '<button id="promote-error-back-btn" class="control-btn">Back</button>';
+    document.getElementById('promote-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
 function displayLinkView(noFetch: boolean) {

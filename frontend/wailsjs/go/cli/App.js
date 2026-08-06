@@ -26,6 +26,10 @@ export function FinishLink() {
   return window['go']['cli']['App']['FinishLink']();
 }
 
+export function FinishPromote() {
+  return window['go']['cli']['App']['FinishPromote']();
+}
+
 export function GetConfig() {
   return window['go']['cli']['App']['GetConfig']();
 }
@@ -86,6 +90,10 @@ export function ResolveBranchCollision(arg1) {
   return window['go']['cli']['App']['ResolveBranchCollision'](arg1);
 }
 
+export function ResolveDivergedFile(arg1, arg2) {
+  return window['go']['cli']['App']['ResolveDivergedFile'](arg1, arg2);
+}
+
 export function StartDaemon() {
   return window['go']['cli']['App']['StartDaemon']();
 }
@@ -104,6 +112,10 @@ export function StartInitRemote(arg1, arg2) {
 
 export function StartLink(arg1) {
   return window['go']['cli']['App']['StartLink'](arg1);
+}
+
+export function StartPromote() {
+  return window['go']['cli']['App']['StartPromote']();
 }
 
 export function StopDaemon() {

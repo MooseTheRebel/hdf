@@ -16,6 +16,20 @@ export namespace cli {
 	        this.content = source["content"];
 	    }
 	}
+	export class DivergedFile {
+	    path: string;
+	    diff: string;
+
+	    static createFrom(source: any = {}) {
+	        return new DivergedFile(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.diff = source["diff"];
+	    }
+	}
 	export class EnrollResult {
 	    message: string;
 
@@ -171,6 +185,62 @@ export namespace cli {
 	        this.path = source["path"];
 	        this.error = source["error"];
 	    }
+	}
+	export class PreservedFile {
+	    path: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PreservedFile(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	    }
+	}
+	export class PromoteResult {
+	    message: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PromoteResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.message = source["message"];
+	    }
+	}
+	export class PromoteStartInfo {
+	    preserved: PreservedFile[];
+	    diverged: DivergedFile[];
+
+	    static createFrom(source: any = {}) {
+	        return new PromoteStartInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.preserved = this.convertValues(source["preserved"], PreservedFile);
+	        this.diverged = this.convertValues(source["diverged"], DivergedFile);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class StatusInfo {
 	    git_push_target: string;

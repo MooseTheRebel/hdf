@@ -14,6 +14,8 @@ export function FinishInit():Promise<cli.InitResult>;
 
 export function FinishLink():Promise<Array<cli.LinkedFile>>;
 
+export function FinishPromote():Promise<cli.PromoteResult>;
+
 export function GetConfig():Promise<cli.ConfigInfo>;
 
 export function GetCurrentIndex():Promise<number>;
@@ -44,6 +46,8 @@ export function PreviousDiff():Promise<void>;
 
 export function ResolveBranchCollision(arg1:boolean):Promise<void>;
 
+export function ResolveDivergedFile(arg1:number,arg2:boolean):Promise<void>;
+
 export function StartDaemon():Promise<void>;
 
 export function StartEnroll(arg1:string):Promise<cli.EnrollStartInfo>;
@@ -53,6 +57,8 @@ export function StartInitLocal(arg1:string,arg2:string):Promise<cli.InitStartInf
 export function StartInitRemote(arg1:string,arg2:string):Promise<cli.InitStartInfo>;
 
 export function StartLink(arg1:boolean):Promise<cli.LinkStartInfo>;
+
+export function StartPromote():Promise<cli.PromoteStartInfo>;
 
 export function StopDaemon():Promise<void>;
 

@@ -18,13 +18,14 @@ import (
 
 // App struct
 type App struct {
-	ctx           context.Context
-	mu            sync.Mutex
-	diffURLs      []string
-	currentIndex  int
-	linkPending   []pendingIncomingFile
-	enrollPending *pendingEnroll
-	initPending   *pendingInit
+	ctx            context.Context
+	mu             sync.Mutex
+	diffURLs       []string
+	currentIndex   int
+	linkPending    []pendingIncomingFile
+	enrollPending  *pendingEnroll
+	initPending    *pendingInit
+	promotePending *pendingPromote
 }
 
 // NewApp creates a new App application struct
@@ -302,6 +303,59 @@ func (a *App) FinishInit() (*InitResult, error) {
 	result, err := computeFinishInitFn(config.DefaultPath(), config.DefaultStatePath(), pending)
 	a.mu.Lock()
 	a.initPending = nil
+	a.mu.Unlock()
+	return result, err
+}
+
+// StartPromote begins a promote operation: checks the repo is clean and has
+// a remote, fetches, and computes any preserved/diverged unseen incoming
+// files, storing the resulting session in App state for
+// ResolveDivergedFile/FinishPromote to consume — the GUI's equivalent of
+// `hdf promote`.
+func (a *App) StartPromote() (*PromoteStartInfo, error) {
+	a.mu.Lock()
+	a.promotePending = nil
+	a.mu.Unlock()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	info, pending, err := computePromoteStartFn(config.DefaultPath(), config.DefaultStatePath(), homeDir)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.promotePending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// ResolveDivergedFile records the decision for the pending diverged file at
+// index, as computed by the most recent StartPromote call: keepMine=true
+// overwrites main with this machine's version, keepMine=false keeps main's.
+func (a *App) ResolveDivergedFile(index int, keepMine bool) error {
+	a.mu.Lock()
+	pending := a.promotePending
+	a.mu.Unlock()
+	if pending == nil {
+		return fmt.Errorf("resolve diverged file: no pending promote — call StartPromote first")
+	}
+	return computeResolveDivergedFileFn(pending, index, keepMine)
+}
+
+// FinishPromote completes the promote started by the most recent
+// StartPromote call: merges the machine branch into main and pushes both.
+func (a *App) FinishPromote() (*PromoteResult, error) {
+	a.mu.Lock()
+	pending := a.promotePending
+	a.mu.Unlock()
+	if pending == nil {
+		return nil, fmt.Errorf("finish promote: no pending promote — call StartPromote first")
+	}
+	result, err := computeFinishPromoteFn(pending)
+	a.mu.Lock()
+	a.promotePending = nil
 	a.mu.Unlock()
 	return result, err
 }
