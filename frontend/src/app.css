@@ -397,6 +397,7 @@
     max-width: 700px;
     margin: 20px auto;
     padding: 20px;
+    text-align: left;
 }
 
 .status-header-section h1 {
@@ -482,6 +483,7 @@
     max-width: 700px;
     margin: 20px auto;
     padding: 20px;
+    text-align: left;
 }
 
 .config-header-section h1 {
@@ -546,6 +548,7 @@
     max-width: 480px;
     margin: 0 auto;
     padding: 32px 24px;
+    text-align: left;
 }
 
 .daemon-status-header-section {
@@ -563,6 +566,7 @@
     max-width: 480px;
     margin: 0 auto;
     padding: 32px 24px;
+    text-align: left;
 }
 
 .daemon-management-header-section {
@@ -599,6 +603,7 @@
     max-width: 700px;
     margin: 20px auto;
     padding: 20px;
+    text-align: left;
 }
 
 .link-header-section h1 {
