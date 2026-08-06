@@ -24,6 +24,7 @@ type App struct {
 	currentIndex  int
 	linkPending   []pendingIncomingFile
 	enrollPending *pendingEnroll
+	initPending   *pendingInit
 }
 
 // NewApp creates a new App application struct
@@ -208,6 +209,99 @@ func (a *App) ConfirmEnroll() (*EnrollResult, error) {
 	result, err := computeApplyEnrollFn(config.DefaultPath(), homeDir, config.DefaultStatePath(), *pending)
 	a.mu.Lock()
 	a.enrollPending = nil
+	a.mu.Unlock()
+	return result, err
+}
+
+// DefaultRepoPath returns the CLI's default local-repo path
+// (~/.local/share/hdf/repo), for the GUI to pre-fill init-wizard path
+// fields with.
+func (a *App) DefaultRepoPath() string {
+	return defaultRepoPath()
+}
+
+// PickDirectory opens a native "choose directory" dialog rooted at the
+// user's home directory and returns the selected path, or "" if the user
+// cancelled. Not unit-tested — it drives a real OS dialog, the same
+// untestable-by-design shape as PickFileToEnroll/CloseWindow.
+func (a *App) PickDirectory() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select a directory",
+		DefaultDirectory: homeDir,
+	})
+}
+
+// StartInitLocal begins initializing hdf with a local repo at repoPath and
+// an optional pushTarget (blank to skip; a remote URL or a local path to a
+// bare repo), storing the resulting session in App state for
+// ResolveBranchCollision/FinishInit to consume — the GUI's equivalent of
+// `hdf init`'s "local directory" path.
+func (a *App) StartInitLocal(repoPath, pushTarget string) (*InitStartInfo, error) {
+	a.mu.Lock()
+	a.initPending = nil
+	a.mu.Unlock()
+
+	info, pending, err := computeInitLocalStartFn(config.DefaultPath(), repoPath, pushTarget)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.initPending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// StartInitRemote begins initializing hdf by cloning gitURL into cloneDir
+// (blank for the default location), storing the resulting session in App
+// state for ResolveBranchCollision/FinishInit to consume — the GUI's
+// equivalent of `hdf init`'s "remote repository" path.
+func (a *App) StartInitRemote(gitURL, cloneDir string) (*InitStartInfo, error) {
+	a.mu.Lock()
+	a.initPending = nil
+	a.mu.Unlock()
+
+	info, pending, err := computeInitRemoteStartFn(config.DefaultPath(), gitURL, cloneDir)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.initPending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// ResolveBranchCollision applies the user's decision for the branch
+// collision reported by the most recent StartInitLocal/StartInitRemote
+// call: useUnique=true creates a uniquely-suffixed branch, useUnique=false
+// adopts the existing remote branch.
+func (a *App) ResolveBranchCollision(useUnique bool) error {
+	a.mu.Lock()
+	pending := a.initPending
+	a.mu.Unlock()
+	if pending == nil {
+		return fmt.Errorf("resolve branch collision: no pending init — call StartInitLocal or StartInitRemote first")
+	}
+	return computeResolveBranchCollisionFn(pending, useUnique)
+}
+
+// FinishInit completes the init started by the most recent
+// StartInitLocal/StartInitRemote call (and, if applicable,
+// ResolveBranchCollision): creates/checks out the machine branch and saves
+// config and state.
+func (a *App) FinishInit() (*InitResult, error) {
+	a.mu.Lock()
+	pending := a.initPending
+	a.mu.Unlock()
+	if pending == nil {
+		return nil, fmt.Errorf("finish init: no pending init — call StartInitLocal or StartInitRemote first")
+	}
+	result, err := computeFinishInitFn(config.DefaultPath(), config.DefaultStatePath(), pending)
+	a.mu.Lock()
+	a.initPending = nil
 	a.mu.Unlock()
 	return result, err
 }

@@ -1,7 +1,7 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink, PickFileToEnroll, StartEnroll, ConfirmEnroll} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink, PickFileToEnroll, StartEnroll, ConfirmEnroll, DefaultRepoPath, PickDirectory, StartInitLocal, StartInitRemote, ResolveBranchCollision, FinishInit} from '../wailsjs/go/cli/App';
 import type {cli} from '../wailsjs/go/models';
 import {renderDiffContent} from './diff';
 import {renderStatus} from './status';
@@ -10,6 +10,7 @@ import {renderDaemonStatus} from './daemonstatus';
 import {renderDaemonManagement} from './daemonmanagement';
 import {renderPendingWarnings, renderIncomingFileReview, renderLinkResults} from './linkflow';
 import {renderEnrollPreview, renderEnrollResult} from './enrollflow';
+import {renderLocalForm, renderRemoteForm, renderBranchCollision, renderInitResult} from './initflow';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -116,12 +117,14 @@ function displayHomeScreen() {
                             </div>
                         </div>
                     </div>
+                    <button class="control-btn" id="get-started-btn">Get Started</button>
                     <button class="close-button" id="close-btn">Close</button>
                 </div>
             `;
         }
 
         document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
+        document.getElementById('get-started-btn')?.addEventListener('click', () => displayInitModeSelect());
         document.getElementById('enroll-btn')?.addEventListener('click', () => startEnrollFlow());
         document.getElementById('link-btn')?.addEventListener('click', () => displayLinkView(false));
         document.getElementById('link-no-fetch-btn')?.addEventListener('click', () => displayLinkView(true));
@@ -404,6 +407,167 @@ function showEnrollError(message: string) {
     if (contentEl) contentEl.textContent = message;
     if (controlsEl) controlsEl.innerHTML = '<button id="enroll-error-back-btn" class="control-btn">Back</button>';
     document.getElementById('enroll-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function displayInitModeSelect() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Get Started</h1>
+            </div>
+            <div id="init-step-content">
+                <p>How do you want to store your dot files?</p>
+            </div>
+            <div class="link-controls" id="init-controls">
+                <button id="init-mode-local-btn" class="control-btn">Local directory</button>
+                <button id="init-mode-remote-btn" class="control-btn">Remote repository</button>
+                <button id="init-mode-cancel-btn" class="control-btn">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('init-mode-local-btn')?.addEventListener('click', () => displayInitLocalForm());
+    document.getElementById('init-mode-remote-btn')?.addEventListener('click', () => displayInitRemoteForm());
+    document.getElementById('init-mode-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function displayInitLocalForm() {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Loading default path...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    DefaultRepoPath().then((defaultPath) => {
+        if (contentEl) contentEl.innerHTML = renderLocalForm(defaultPath);
+        if (controlsEl) {
+            controlsEl.innerHTML = `
+                <button id="init-continue-btn" class="control-btn">Continue</button>
+                <button id="init-cancel-btn" class="control-btn">Cancel</button>
+            `;
+        }
+        document.getElementById('init-repo-browse-btn')?.addEventListener('click', () => {
+            PickDirectory().then((path) => {
+                if (!path) return;
+                const input = document.getElementById('init-repo-path') as HTMLInputElement | null;
+                if (input) input.value = path;
+            });
+        });
+        document.getElementById('init-push-browse-btn')?.addEventListener('click', () => {
+            PickDirectory().then((path) => {
+                if (!path) return;
+                const input = document.getElementById('init-push-target') as HTMLInputElement | null;
+                if (input) input.value = path;
+            });
+        });
+        document.getElementById('init-continue-btn')?.addEventListener('click', () => {
+            const repoPath = (document.getElementById('init-repo-path') as HTMLInputElement | null)?.value ?? '';
+            const pushTarget = (document.getElementById('init-push-target') as HTMLInputElement | null)?.value ?? '';
+            runInitStart(() => StartInitLocal(repoPath, pushTarget));
+        });
+        document.getElementById('init-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showInitError('Error loading default path: ' + err);
+    });
+}
+
+function displayInitRemoteForm() {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Loading default path...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    DefaultRepoPath().then((defaultPath) => {
+        if (contentEl) contentEl.innerHTML = renderRemoteForm(defaultPath);
+        if (controlsEl) {
+            controlsEl.innerHTML = `
+                <button id="init-continue-btn" class="control-btn">Continue</button>
+                <button id="init-cancel-btn" class="control-btn">Cancel</button>
+            `;
+        }
+        document.getElementById('init-clone-browse-btn')?.addEventListener('click', () => {
+            PickDirectory().then((path) => {
+                if (!path) return;
+                const input = document.getElementById('init-clone-dir') as HTMLInputElement | null;
+                if (input) input.value = path;
+            });
+        });
+        document.getElementById('init-continue-btn')?.addEventListener('click', () => {
+            const gitURL = (document.getElementById('init-git-url') as HTMLInputElement | null)?.value ?? '';
+            const cloneDir = (document.getElementById('init-clone-dir') as HTMLInputElement | null)?.value ?? '';
+            runInitStart(() => StartInitRemote(gitURL, cloneDir));
+        });
+        document.getElementById('init-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showInitError('Error loading default path: ' + err);
+    });
+}
+
+function runInitStart(start: () => Promise<cli.InitStartInfo>) {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Setting up...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    start().then((info) => {
+        if (info.collision) {
+            displayInitCollision(info.collision.branch);
+        } else {
+            runFinishInit();
+        }
+    }).catch((err) => {
+        showInitError('Error setting up: ' + err);
+    });
+}
+
+function displayInitCollision(branch: string) {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.innerHTML = renderBranchCollision(branch);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="init-collision-reuse-btn" class="control-btn">Reuse it</button>
+            <button id="init-collision-unique-btn" class="control-btn">Create a unique branch</button>
+        `;
+    }
+    document.getElementById('init-collision-reuse-btn')?.addEventListener('click', () => resolveInitCollision(false));
+    document.getElementById('init-collision-unique-btn')?.addEventListener('click', () => resolveInitCollision(true));
+}
+
+function resolveInitCollision(useUnique: boolean) {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Setting up...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    ResolveBranchCollision(useUnique).then(() => {
+        runFinishInit();
+    }).catch((err) => {
+        showInitError('Error resolving branch collision: ' + err);
+    });
+}
+
+function runFinishInit() {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Finishing setup...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    FinishInit().then((result) => {
+        if (contentEl) contentEl.innerHTML = renderInitResult(result);
+        if (controlsEl) controlsEl.innerHTML = '<button id="init-done-continue-btn" class="control-btn">Continue</button>';
+        document.getElementById('init-done-continue-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showInitError('Error finishing setup: ' + err);
+    });
+}
+
+function showInitError(message: string) {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = message;
+    if (controlsEl) controlsEl.innerHTML = '<button id="init-error-back-btn" class="control-btn">Back</button>';
+    document.getElementById('init-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
 function displayLinkView(noFetch: boolean) {
