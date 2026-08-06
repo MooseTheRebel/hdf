@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hdf/config"
+	"hdf/daemon"
 	"io"
 	"log"
 	"net/http"
@@ -17,10 +18,13 @@ import (
 
 // App struct
 type App struct {
-	ctx          context.Context
-	mu           sync.Mutex
-	diffURLs     []string
-	currentIndex int
+	ctx           context.Context
+	mu            sync.Mutex
+	diffURLs      []string
+	currentIndex  int
+	linkPending   []pendingIncomingFile
+	enrollPending *pendingEnroll
+	initPending   *pendingInit
 }
 
 // NewApp creates a new App application struct
@@ -41,6 +45,265 @@ func (a *App) startup(ctx context.Context) {
 // when the file exists but is corrupted, so the UI can distinguish the two.
 func (a *App) IsInitialized() (bool, error) {
 	return isInitialized(config.DefaultPath())
+}
+
+// GetStatus returns hdf's current status — config summary, branch, last
+// sync, and each managed file's state — the GUI's equivalent of `hdf
+// status`.
+func (a *App) GetStatus() (*StatusInfo, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	return computeStatus(config.DefaultPath(), config.DefaultStatePath(), homeDir)
+}
+
+// GetConfig returns hdf's current config file — path and raw contents (or
+// an indication it doesn't exist yet) — the GUI's equivalent of `hdf
+// config`.
+func (a *App) GetConfig() (*ConfigInfo, error) {
+	return computeConfigInfo(config.DefaultPath())
+}
+
+// GetDaemonStatus reports whether the hdf sync daemon service is
+// installed/running — the GUI's equivalent of `hdf daemon status`.
+func (a *App) GetDaemonStatus() (string, error) {
+	return svcStatus(config.DefaultPath())
+}
+
+// InstallDaemon installs and starts the hdf sync daemon as a per-user
+// background service — the GUI's equivalent of `hdf daemon install`.
+func (a *App) InstallDaemon() error {
+	return runDaemon(config.DefaultPath(), svcInstall)
+}
+
+// UninstallDaemon stops and removes the installed hdf sync daemon service —
+// the GUI's equivalent of `hdf daemon uninstall`.
+func (a *App) UninstallDaemon() error {
+	return svcUninstall(config.DefaultPath())
+}
+
+// StartDaemon starts the already-installed hdf sync daemon service — the
+// GUI's equivalent of `hdf daemon start`.
+func (a *App) StartDaemon() error {
+	return runDaemon(config.DefaultPath(), svcStart)
+}
+
+// StopDaemon stops the already-installed hdf sync daemon service — the
+// GUI's equivalent of `hdf daemon stop`.
+func (a *App) StopDaemon() error {
+	return svcStop(config.DefaultPath())
+}
+
+// GetPendingWarnings returns and clears any daemon-recorded warnings — the
+// GUI's equivalent of the check `hdf link` runs before proceeding. Matches
+// daemon.PendingWarnings' take-and-clear semantics: calling this consumes
+// the warnings even if the caller then cancels.
+func (a *App) GetPendingWarnings() ([]string, error) {
+	return daemon.PendingWarnings(config.DefaultStatePath())
+}
+
+// StartLink begins a link operation: computes pending incoming file diffs
+// (unless noFetch) and stores them in App state for AcceptIncomingFile to
+// consume by index. Call FinishLink to complete the operation once all
+// incoming files have been reviewed (or immediately, if IncomingFiles is
+// empty) — the GUI's equivalent of `hdf link`.
+func (a *App) StartLink(noFetch bool) (*LinkStartInfo, error) {
+	a.mu.Lock()
+	a.linkPending = nil
+	a.mu.Unlock()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	info, pending, err := computeLinkStartFn(config.DefaultPath(), homeDir, noFetch)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.linkPending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// AcceptIncomingFile accepts main's version of the pending incoming file at
+// index, as computed by the most recent StartLink call.
+func (a *App) AcceptIncomingFile(index int) error {
+	a.mu.Lock()
+	if index < 0 || index >= len(a.linkPending) {
+		a.mu.Unlock()
+		return fmt.Errorf("accept incoming file: index %d out of range (0..%d)", index, len(a.linkPending)-1)
+	}
+	item := a.linkPending[index]
+	a.mu.Unlock()
+	return acceptIncomingFileFn(config.DefaultPath(), item)
+}
+
+// FinishLink re-creates symlinks for all managed files and clears the link
+// session state started by StartLink.
+func (a *App) FinishLink() ([]LinkedFile, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	results, err := computeRelinkFn(config.DefaultPath(), homeDir)
+	a.mu.Lock()
+	a.linkPending = nil
+	a.mu.Unlock()
+	return results, err
+}
+
+// PickFileToEnroll opens a native "choose file" dialog rooted at the user's
+// home directory and returns the selected path, or "" if the user
+// cancelled. Not unit-tested — it drives a real OS dialog, the same
+// untestable-by-design shape as CloseWindow.
+func (a *App) PickFileToEnroll() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select a file to enroll",
+		DefaultDirectory: homeDir,
+		ShowHiddenFiles:  true,
+	})
+}
+
+// StartEnroll begins enrolling path: computes the diff against any
+// currently committed version and stores the pending decision in App state
+// for ConfirmEnroll to apply — the GUI's equivalent of `hdf enroll`/`hdf
+// changes-push`'s setup and diff-preview phase.
+func (a *App) StartEnroll(path string) (*EnrollStartInfo, error) {
+	a.mu.Lock()
+	a.enrollPending = nil
+	a.mu.Unlock()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	info, pending, err := computeEnrollStartFn(config.DefaultPath(), homeDir, path)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.enrollPending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// ConfirmEnroll applies the enroll started by the most recent StartEnroll
+// call: copies the file into the repo, commits, and pushes.
+func (a *App) ConfirmEnroll() (*EnrollResult, error) {
+	a.mu.Lock()
+	pending := a.enrollPending
+	a.mu.Unlock()
+	if pending == nil {
+		return nil, fmt.Errorf("confirm enroll: no pending enroll — call StartEnroll first")
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	result, err := computeApplyEnrollFn(config.DefaultPath(), homeDir, config.DefaultStatePath(), *pending)
+	a.mu.Lock()
+	a.enrollPending = nil
+	a.mu.Unlock()
+	return result, err
+}
+
+// DefaultRepoPath returns the CLI's default local-repo path
+// (~/.local/share/hdf/repo), for the GUI to pre-fill init-wizard path
+// fields with.
+func (a *App) DefaultRepoPath() string {
+	return defaultRepoPath()
+}
+
+// PickDirectory opens a native "choose directory" dialog rooted at the
+// user's home directory and returns the selected path, or "" if the user
+// cancelled. Not unit-tested — it drives a real OS dialog, the same
+// untestable-by-design shape as PickFileToEnroll/CloseWindow.
+func (a *App) PickDirectory() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select a directory",
+		DefaultDirectory: homeDir,
+	})
+}
+
+// StartInitLocal begins initializing hdf with a local repo at repoPath and
+// an optional pushTarget (blank to skip; a remote URL or a local path to a
+// bare repo), storing the resulting session in App state for
+// ResolveBranchCollision/FinishInit to consume — the GUI's equivalent of
+// `hdf init`'s "local directory" path.
+func (a *App) StartInitLocal(repoPath, pushTarget string) (*InitStartInfo, error) {
+	a.mu.Lock()
+	a.initPending = nil
+	a.mu.Unlock()
+
+	info, pending, err := computeInitLocalStartFn(config.DefaultPath(), repoPath, pushTarget)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.initPending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// StartInitRemote begins initializing hdf by cloning gitURL into cloneDir
+// (blank for the default location), storing the resulting session in App
+// state for ResolveBranchCollision/FinishInit to consume — the GUI's
+// equivalent of `hdf init`'s "remote repository" path.
+func (a *App) StartInitRemote(gitURL, cloneDir string) (*InitStartInfo, error) {
+	a.mu.Lock()
+	a.initPending = nil
+	a.mu.Unlock()
+
+	info, pending, err := computeInitRemoteStartFn(config.DefaultPath(), gitURL, cloneDir)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.initPending = pending
+	a.mu.Unlock()
+	return info, nil
+}
+
+// ResolveBranchCollision applies the user's decision for the branch
+// collision reported by the most recent StartInitLocal/StartInitRemote
+// call: useUnique=true creates a uniquely-suffixed branch, useUnique=false
+// adopts the existing remote branch.
+func (a *App) ResolveBranchCollision(useUnique bool) error {
+	a.mu.Lock()
+	pending := a.initPending
+	a.mu.Unlock()
+	if pending == nil {
+		return fmt.Errorf("resolve branch collision: no pending init — call StartInitLocal or StartInitRemote first")
+	}
+	return computeResolveBranchCollisionFn(pending, useUnique)
+}
+
+// FinishInit completes the init started by the most recent
+// StartInitLocal/StartInitRemote call (and, if applicable,
+// ResolveBranchCollision): creates/checks out the machine branch and saves
+// config and state.
+func (a *App) FinishInit() (*InitResult, error) {
+	a.mu.Lock()
+	pending := a.initPending
+	a.mu.Unlock()
+	if pending == nil {
+		return nil, fmt.Errorf("finish init: no pending init — call StartInitLocal or StartInitRemote first")
+	}
+	result, err := computeFinishInitFn(config.DefaultPath(), config.DefaultStatePath(), pending)
+	a.mu.Lock()
+	a.initPending = nil
+	a.mu.Unlock()
+	return result, err
 }
 
 func isInitialized(path string) (bool, error) {

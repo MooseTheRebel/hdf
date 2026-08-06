@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	testBranch    = "machine"
-	tildeTestRC   = "~/.testrc"
-	testRCRelPath = ".testrc"
-	updatedByMain = "updated-by-main\n"
+	testBranch     = "machine"
+	tildeTestRC    = "~/.testrc"
+	tildeMissingRC = "~/.missingrc"
+	testRCRelPath  = ".testrc"
+	updatedByMain  = "updated-by-main\n"
 )
 
 // mustRel returns the relative path from base to target, fataling the test on error.
@@ -3569,7 +3570,8 @@ func TestRunLinkSkipsVariantlessFile(t *testing.T) {
 	// (a variant entry for this branch in the registry).
 	wantMsg := fmt.Sprintf(
 		"link %s: no variant for branch %q — skipping (add a variant for this branch to %s to manage the file here)",
-		homePath, testBranch, managedTOMLPath)
+		homePath, testBranch, managedTOMLPath,
+	)
 	if !strings.Contains(stderr, wantMsg) {
 		t.Errorf("stderr = %q\nwant it to contain %q", stderr, wantMsg)
 	}
@@ -3694,10 +3696,10 @@ func TestDaemonServiceCmds_DelegateToSvcFuncs(t *testing.T) {
 		svcFunc      *func(string) error
 		viaRunDaemon bool
 	}{
-		{name: "install", cmd: daemonInstallCmd, svcFunc: &svcInstall, viaRunDaemon: true},
-		{name: "uninstall", cmd: daemonUninstallCmd, svcFunc: &svcUninstall},
-		{name: "start", cmd: daemonStartCmd, svcFunc: &svcStart, viaRunDaemon: true},
-		{name: "stop", cmd: daemonStopCmd, svcFunc: &svcStop},
+		{name: daemonSubcmdInstall, cmd: daemonInstallCmd, svcFunc: &svcInstall, viaRunDaemon: true},
+		{name: daemonSubcmdUninstall, cmd: daemonUninstallCmd, svcFunc: &svcUninstall},
+		{name: daemonSubcmdStart, cmd: daemonStartCmd, svcFunc: &svcStart, viaRunDaemon: true},
+		{name: daemonSubcmdStop, cmd: daemonStopCmd, svcFunc: &svcStop},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
