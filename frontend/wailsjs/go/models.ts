@@ -242,6 +242,18 @@ export namespace cli {
 		    return a;
 		}
 	}
+	export class ReportIssueResult {
+	    path: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ReportIssueResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	    }
+	}
 	export class StatusInfo {
 	    git_push_target: string;
 	    local_dotfiles_dir: string;

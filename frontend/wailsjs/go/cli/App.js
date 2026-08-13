@@ -122,6 +122,10 @@ export function StopDaemon() {
   return window['go']['cli']['App']['StopDaemon']();
 }
 
+export function SubmitReportIssue(arg1) {
+  return window['go']['cli']['App']['SubmitReportIssue'](arg1);
+}
+
 export function UninstallDaemon() {
   return window['go']['cli']['App']['UninstallDaemon']();
 }

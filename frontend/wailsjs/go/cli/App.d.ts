@@ -62,4 +62,6 @@ export function StartPromote():Promise<cli.PromoteStartInfo>;
 
 export function StopDaemon():Promise<void>;
 
+export function SubmitReportIssue(arg1:string):Promise<cli.ReportIssueResult>;
+
 export function UninstallDaemon():Promise<void>;

@@ -763,3 +763,14 @@
 .init-result-message {
     color: #dde6f0;
 }
+
+/* Report issue view (reuses .link-container/.link-controls/.init-* layout) */
+
+.report-issue-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 100px;
+    resize: vertical;
+    font-family: inherit;
+    margin-top: 4px;
+}

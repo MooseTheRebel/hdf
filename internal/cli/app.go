@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"hdf/config"
 	"hdf/daemon"
+	"hdf/report"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -358,6 +360,20 @@ func (a *App) FinishPromote() (*PromoteResult, error) {
 	a.promotePending = nil
 	a.mu.Unlock()
 	return result, err
+}
+
+// SubmitReportIssue builds a diagnostic report bundling config, state,
+// event log, and a compressed copy of the dotfiles repo (redacted
+// best-effort), returning the path it was written to — the GUI's
+// equivalent of `hdf report-issue`.
+func (a *App) SubmitReportIssue(userText string) (*ReportIssueResult, error) {
+	return computeReportIssue(report.BuildOptions{
+		CfgPath:   config.DefaultPath(),
+		StatePath: config.DefaultStatePath(),
+		Trigger:   report.TriggerManual,
+		UserText:  strings.TrimSpace(userText),
+		OutDir:    reportOutDir(),
+	})
 }
 
 func isInitialized(path string) (bool, error) {

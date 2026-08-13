@@ -1,7 +1,7 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink, PickFileToEnroll, StartEnroll, ConfirmEnroll, DefaultRepoPath, PickDirectory, StartInitLocal, StartInitRemote, ResolveBranchCollision, FinishInit, StartPromote, ResolveDivergedFile, FinishPromote} from '../wailsjs/go/cli/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink, PickFileToEnroll, StartEnroll, ConfirmEnroll, DefaultRepoPath, PickDirectory, StartInitLocal, StartInitRemote, ResolveBranchCollision, FinishInit, StartPromote, ResolveDivergedFile, FinishPromote, SubmitReportIssue} from '../wailsjs/go/cli/App';
 import type {cli} from '../wailsjs/go/models';
 import {renderDiffContent} from './diff';
 import {renderStatus} from './status';
@@ -12,6 +12,7 @@ import {renderPendingWarnings, renderIncomingFileReview, renderLinkResults} from
 import {renderEnrollPreview, renderEnrollResult} from './enrollflow';
 import {renderLocalForm, renderRemoteForm, renderBranchCollision, renderInitResult} from './initflow';
 import {renderPreservedFiles, renderDivergedFileReview, renderPromoteResult} from './promoteflow';
+import {renderReportIssueResult} from './reportissueflow';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -76,6 +77,10 @@ function displayHomeScreen() {
                             <code class="cmd">hdf daemon install/start/stop/uninstall</code>
                             <span class="cmd-desc">Manage the sync daemon background service</span>
                         </button>
+                        <button class="command-row command-row-clickable" id="report-issue-btn">
+                            <code class="cmd">hdf report-issue</code>
+                            <span class="cmd-desc">Package diagnostics into a .zip for sharing with an admin</span>
+                        </button>
                     </div>
                     <button class="close-button" id="close-btn">Close</button>
                 </div>
@@ -138,6 +143,7 @@ function displayHomeScreen() {
         document.getElementById('config-btn')?.addEventListener('click', () => displayConfigView());
         document.getElementById('daemon-status-btn')?.addEventListener('click', () => displayDaemonStatusView());
         document.getElementById('daemon-management-btn')?.addEventListener('click', () => displayDaemonManagementView());
+        document.getElementById('report-issue-btn')?.addEventListener('click', () => displayReportIssueView());
     }).catch((err) => {
         app.innerHTML = `
             <div class="home-container">
@@ -574,6 +580,55 @@ function showInitError(message: string) {
     if (contentEl) contentEl.textContent = message;
     if (controlsEl) controlsEl.innerHTML = '<button id="init-error-back-btn" class="control-btn">Back</button>';
     document.getElementById('init-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+const reportIssueWarning = "Warning: hdf's automatic redaction is limited — it strips a few known " +
+    'credential patterns, but this is not a guarantee that all sensitive information is removed. ' +
+    "Review the report's contents yourself before sharing it with anyone. " +
+    'Reporting an issue is entirely optional and voluntary. Securing your own systems should ' +
+    'always be your first priority.';
+
+function displayReportIssueView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Report Issue</h1>
+            </div>
+            <div id="report-issue-step-content">
+                <p>${reportIssueWarning}</p>
+                <label class="init-field-label" for="report-issue-text">What was expected? What actually happened? (optional)</label>
+                <textarea id="report-issue-text" class="init-text-input report-issue-textarea"></textarea>
+            </div>
+            <div class="link-controls" id="report-issue-controls">
+                <button id="report-issue-submit-btn" class="control-btn">Build Report</button>
+                <button id="report-issue-cancel-btn" class="control-btn">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('report-issue-submit-btn')?.addEventListener('click', () => {
+        const text = (document.getElementById('report-issue-text') as HTMLTextAreaElement | null)?.value ?? '';
+        runSubmitReportIssue(text);
+    });
+    document.getElementById('report-issue-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runSubmitReportIssue(text: string) {
+    const contentEl = document.getElementById('report-issue-step-content');
+    const controlsEl = document.getElementById('report-issue-controls');
+    if (contentEl) contentEl.textContent = 'Building report...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    SubmitReportIssue(text).then((result) => {
+        if (contentEl) contentEl.innerHTML = renderReportIssueResult(result);
+        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-done-back-btn" class="control-btn">Back</button>';
+        document.getElementById('report-issue-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        if (contentEl) contentEl.textContent = 'Error building report: ' + err;
+        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-error-back-btn" class="control-btn">Back</button>';
+        document.getElementById('report-issue-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
+    });
 }
 
 function displayPromoteView() {
