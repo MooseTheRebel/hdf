@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/MooseTheRebel/hdf/compare/v0.2.0...v0.2.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* drop package-name to keep release-please tags goreleaser-compatible ([#55](https://github.com/MooseTheRebel/hdf/issues/55)) ([714ef1b](https://github.com/MooseTheRebel/hdf/commit/714ef1be8aee3f39df9e1d02ad49dd2e4bf1adc6))
+
 ## [0.2.0](https://github.com/MooseTheRebel/hdf/compare/hdf-v0.1.0...hdf-v0.2.0) (2026-08-04)
 
 
