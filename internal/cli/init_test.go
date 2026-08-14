@@ -81,7 +81,7 @@ func TestComputeInitRemoteStart_ClonesAndDetectsCollision(t *testing.T) {
 	cfgPath, _ := initPaths(t)
 	cloneDir := filepath.Join(t.TempDir(), "repo")
 
-	info, pending, err := computeInitRemoteStart(cfgPath, bareURL, cloneDir)
+	info, pending, err := computeInitRemoteStart(cfgPath, t.TempDir(), bareURL, cloneDir)
 	if err != nil {
 		t.Fatalf("computeInitRemoteStart: %v", err)
 	}
@@ -101,9 +101,34 @@ func TestComputeInitRemoteStart_ClonesAndDetectsCollision(t *testing.T) {
 
 func TestComputeInitRemoteStart_EmptyURLErrors(t *testing.T) {
 	cfgPath, _ := initPaths(t)
-	_, _, err := computeInitRemoteStart(cfgPath, "  ", filepath.Join(t.TempDir(), "repo"))
+	_, _, err := computeInitRemoteStart(cfgPath, t.TempDir(), "  ", filepath.Join(t.TempDir(), "repo"))
 	if err == nil {
 		t.Fatal("expected an error for an empty remote URL, got nil")
+	}
+}
+
+// TestComputeInitRemoteStart_BlankCloneDirUsesHomeDirDefault verifies that
+// a blank cloneDir falls back to homeDir/.local/share/hdf/repo, using the
+// homeDir parameter rather than reading os.UserHomeDir() internally — the
+// branch defaultRepoPath's prior os.UserHomeDir() call left untested.
+func TestComputeInitRemoteStart_BlankCloneDirUsesHomeDirDefault(t *testing.T) {
+	const shared = "blank-clone-dir-host"
+	bareURL := seedBareWithBranch(t, shared)
+	t.Setenv("HDF_BRANCH", shared)
+
+	cfgPath, _ := initPaths(t)
+	homeDir := t.TempDir()
+
+	_, pending, err := computeInitRemoteStart(cfgPath, homeDir, bareURL, "")
+	if err != nil {
+		t.Fatalf("computeInitRemoteStart: %v", err)
+	}
+	wantRepoPath := filepath.Join(homeDir, ".local", "share", "hdf", "repo")
+	if pending.repoPath != wantRepoPath {
+		t.Errorf("repoPath = %q, want %q", pending.repoPath, wantRepoPath)
+	}
+	if _, err := os.Stat(filepath.Join(wantRepoPath, ".git")); err != nil {
+		t.Errorf("expected cloned .git dir at the default path: %v", err)
 	}
 }
 
@@ -114,7 +139,7 @@ func TestComputeResolveBranchCollision_UniqueName(t *testing.T) {
 
 	cfgPath, _ := initPaths(t)
 	cloneDir := filepath.Join(t.TempDir(), "repo")
-	_, pending, err := computeInitRemoteStart(cfgPath, bareURL, cloneDir)
+	_, pending, err := computeInitRemoteStart(cfgPath, t.TempDir(), bareURL, cloneDir)
 	if err != nil {
 		t.Fatalf("computeInitRemoteStart: %v", err)
 	}
@@ -140,7 +165,7 @@ func TestComputeResolveBranchCollision_Reuse(t *testing.T) {
 
 	cfgPath, _ := initPaths(t)
 	cloneDir := filepath.Join(t.TempDir(), "repo")
-	_, pending, err := computeInitRemoteStart(cfgPath, bareURL, cloneDir)
+	_, pending, err := computeInitRemoteStart(cfgPath, t.TempDir(), bareURL, cloneDir)
 	if err != nil {
 		t.Fatalf("computeInitRemoteStart: %v", err)
 	}
@@ -224,7 +249,7 @@ func TestComputeFinishInit_ReuseSkipsBranchCreation(t *testing.T) {
 
 	cfgPath, statePath := initPaths(t)
 	cloneDir := filepath.Join(t.TempDir(), "repo")
-	_, pending, err := computeInitRemoteStart(cfgPath, bareURL, cloneDir)
+	_, pending, err := computeInitRemoteStart(cfgPath, t.TempDir(), bareURL, cloneDir)
 	if err != nil {
 		t.Fatalf("computeInitRemoteStart: %v", err)
 	}

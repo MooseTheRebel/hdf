@@ -220,7 +220,11 @@ func (a *App) ConfirmEnroll() (*EnrollResult, error) {
 // (~/.local/share/hdf/repo), for the GUI to pre-fill init-wizard path
 // fields with.
 func (a *App) DefaultRepoPath() string {
-	return defaultRepoPath()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	return defaultRepoPath(homeDir)
 }
 
 // PickDirectory opens a native "choose directory" dialog rooted at the
@@ -267,7 +271,11 @@ func (a *App) StartInitRemote(gitURL, cloneDir string) (*InitStartInfo, error) {
 	a.initPending = nil
 	a.mu.Unlock()
 
-	info, pending, err := computeInitRemoteStartFn(config.DefaultPath(), gitURL, cloneDir)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
+	}
+	info, pending, err := computeInitRemoteStartFn(config.DefaultPath(), homeDir, gitURL, cloneDir)
 	if err != nil {
 		return nil, err
 	}

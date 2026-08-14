@@ -8,6 +8,8 @@ import (
 	"hdf/link"
 	"hdf/repo"
 	"log"
+	"maps"
+	"sync"
 )
 
 // PreservedFile is a registry entry origin/main holds that this machine has
@@ -38,10 +40,18 @@ type PromoteResult struct {
 // pendingPromote carries state across computePromoteStart ->
 // computeResolveDivergedFile -> computeFinishPromote. Not JSON-exposed —
 // App-internal only.
+//
+// mu guards preferTheirs: App.ResolveDivergedFile releases App.mu before
+// calling computeResolveDivergedFile (so a slow git/state operation for one
+// file doesn't block the whole App), which otherwise leaves the shared map
+// open to a concurrent-write panic if two resolutions overlap (e.g. a
+// double-click). computeFinishPromote also reads preferTheirs while
+// building MergeOpts, so it takes the same lock.
 type pendingPromote struct {
 	repo         *repo.Repo
 	cfg          *config.Config
 	statePath    string
+	mu           sync.Mutex
 	preferTheirs map[string]bool
 	diverged     []unseenIncoming
 }
@@ -98,7 +108,7 @@ func computePromoteStart(cfgPath, statePath, homeDir string) (*PromoteStartInfo,
 		state = &config.State{}
 	}
 
-	info := &PromoteStartInfo{}
+	info := &PromoteStartInfo{Preserved: []PreservedFile{}, Diverged: []DivergedFile{}}
 	pending := &pendingPromote{
 		repo:         r,
 		cfg:          cfg,
@@ -141,7 +151,9 @@ func computeResolveDivergedFile(p *pendingPromote, index int, keepMine bool) err
 		}
 		return nil
 	}
+	p.mu.Lock()
 	p.preferTheirs[item.relPath] = true
+	p.mu.Unlock()
 	mainHash := link.HashBytes(item.mainBytes)
 	if err := recordDecline(p.statePath, item.relPath, mainHash, true); err != nil {
 		return fmt.Errorf("updating state: %w", err)
@@ -156,8 +168,11 @@ func computeFinishPromote(p *pendingPromote) (*PromoteResult, error) {
 	if err := p.repo.SyncLocalMain("origin"); err != nil {
 		return nil, fmt.Errorf("syncing local main to origin: %w", err)
 	}
+	p.mu.Lock()
+	preferTheirs := maps.Clone(p.preferTheirs)
+	p.mu.Unlock()
 	mergeOpts := &repo.MergeOpts{
-		PreferTheirs:   p.preferTheirs,
+		PreferTheirs:   preferTheirs,
 		ContentMergers: map[string]repo.ContentMerger{managedTOMLPath: registryUnionMerger},
 	}
 	if err := p.repo.MergeIntoBranch("main", mergeOpts); err != nil {

@@ -77,10 +77,10 @@ func computeLinkStart(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []
 	}
 
 	if noFetch {
-		return &LinkStartInfo{}, nil, nil
+		return &LinkStartInfo{IncomingFiles: []IncomingFile{}}, nil, nil
 	}
 	if r.RemoteURL() == "" {
-		return &LinkStartInfo{Message: "No remote configured; skipping fetch."}, nil, nil
+		return &LinkStartInfo{Message: "No remote configured; skipping fetch.", IncomingFiles: []IncomingFile{}}, nil, nil
 	}
 	if err := r.Fetch(); err != nil {
 		return nil, nil, fmt.Errorf("fetching from remote: %w", err)
@@ -90,7 +90,7 @@ func computeLinkStart(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []
 		return nil, nil, fmt.Errorf("checking incoming commits: %w", err)
 	}
 	if !hasIncoming {
-		return &LinkStartInfo{Message: "Already up to date."}, nil, nil
+		return &LinkStartInfo{Message: "Already up to date.", IncomingFiles: []IncomingFile{}}, nil, nil
 	}
 
 	reg, err = remoteRegistry(r, reg)
@@ -101,6 +101,9 @@ func computeLinkStart(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []
 	incoming, pending, err := computeIncomingDiffs(r, cfg, reg, homeDir)
 	if err != nil {
 		return nil, nil, err
+	}
+	if incoming == nil {
+		incoming = []IncomingFile{}
 	}
 	return &LinkStartInfo{IncomingFiles: incoming}, pending, nil
 }
@@ -186,7 +189,7 @@ func computeRelink(cfgPath, homeDir string) ([]LinkedFile, error) {
 		return nil, fmt.Errorf("loading registry: %w", err)
 	}
 
-	var results []LinkedFile
+	results := []LinkedFile{}
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
 		var repoFile string

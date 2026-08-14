@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"hdf/config"
 	"hdf/link"
 	"hdf/repo"
@@ -8,6 +9,30 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+// assertJSONFieldNotNull marshals v to JSON and fails the test if field is
+// present but set to JSON null. A Go nil slice/map marshals to null, and
+// the frontend's Wails bindings hand that null straight to JS with no
+// wrapping — an unconditional `.length`/`.map()` call on it throws. Struct
+// fields meant to represent "empty list" must marshal to `[]`, not `null`.
+func assertJSONFieldNotNull(t *testing.T, v any, field string) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	raw, ok := m[field]
+	if !ok {
+		t.Fatalf("field %q not present in JSON: %s", field, b)
+	}
+	if string(raw) == "null" {
+		t.Errorf("field %q is JSON null, want a non-null value (e.g. []): %s", field, b)
+	}
+}
 
 // setupLinkRemote creates a bare "origin", a seed repo that pushes the
 // registry to main, and a clone checked out on testBranch — the shared
@@ -330,5 +355,115 @@ func TestComputeRelink_ReportsPerFileError(t *testing.T) {
 	}
 	if results[0].Error == "" {
 		t.Errorf("Error is empty, want a link failure reported")
+	}
+}
+
+// TestComputeLinkStart_IncomingFilesNeverNilForJSON verifies that
+// LinkStartInfo.IncomingFiles is always a non-nil (possibly empty) slice,
+// never a bare nil, across every path that reports "nothing to review":
+// noFetch, no remote configured, and already up to date. A nil slice
+// marshals to JSON `null`, and the frontend calls
+// `info.incomingFiles.length` unconditionally — `null.length` throws,
+// crashing the Link flow on every one of these common, non-error paths.
+func TestComputeLinkStart_IncomingFilesNeverNilForJSON(t *testing.T) {
+	seedLocalRepo := func(t *testing.T) (cfgPath, homeDir string) {
+		t.Helper()
+		workDir := t.TempDir()
+		homeDir = t.TempDir()
+		r, err := repo.Init(workDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, "seed.txt"), []byte("seed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.CommitFile("seed.txt", "seed"); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+			t.Fatal(err)
+		}
+		if err := config.SaveRegistry(workDir, &config.Registry{}); err != nil {
+			t.Fatal(err)
+		}
+		cfgPath = filepath.Join(t.TempDir(), "config.toml")
+		cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+		if err := config.Save(cfgPath, cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfgPath, homeDir
+	}
+
+	t.Run("noFetch", func(t *testing.T) {
+		cfgPath, homeDir := seedLocalRepo(t)
+		info, _, err := computeLinkStart(cfgPath, homeDir, true)
+		if err != nil {
+			t.Fatalf("computeLinkStart: %v", err)
+		}
+		assertJSONFieldNotNull(t, info, "incomingFiles")
+	})
+
+	t.Run("noRemoteConfigured", func(t *testing.T) {
+		cfgPath, homeDir := seedLocalRepo(t)
+		info, _, err := computeLinkStart(cfgPath, homeDir, false)
+		if err != nil {
+			t.Fatalf("computeLinkStart: %v", err)
+		}
+		assertJSONFieldNotNull(t, info, "incomingFiles")
+	})
+
+	t.Run("alreadyUpToDate", func(t *testing.T) {
+		homeDir := t.TempDir()
+		bareURL, workDir := setupLinkRemote(t, &config.Registry{})
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
+		if err := config.Save(cfgPath, cfg); err != nil {
+			t.Fatal(err)
+		}
+		info, _, err := computeLinkStart(cfgPath, homeDir, false)
+		if err != nil {
+			t.Fatalf("computeLinkStart: %v", err)
+		}
+		assertJSONFieldNotNull(t, info, "incomingFiles")
+	})
+}
+
+// TestComputeRelink_ResultsNeverNilForJSON verifies that computeRelink
+// returns a non-nil (possibly empty) slice when there are no managed
+// files, rather than a nil slice that marshals to JSON `null` and crashes
+// the frontend's `results.map(...)` call.
+func TestComputeRelink_ResultsNeverNilForJSON(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+
+	r, err := repo.Init(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "seed.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("seed.txt", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveRegistry(workDir, &config.Registry{}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := computeRelink(cfgPath, homeDir)
+	if err != nil {
+		t.Fatalf("computeRelink: %v", err)
+	}
+	if results == nil {
+		t.Error("results is nil, want a non-nil empty slice (marshals to JSON [] not null)")
 	}
 }

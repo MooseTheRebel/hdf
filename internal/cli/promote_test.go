@@ -203,3 +203,70 @@ func TestComputeFinishPromote_PushesBranchAndMain(t *testing.T) {
 		t.Error("LastMainCommit is empty after computeFinishPromote")
 	}
 }
+
+// TestComputeResolveDivergedFile_ConcurrentCallsDoNotRace verifies that
+// resolving two different diverged files concurrently (e.g. a double-click
+// on two different review screens, or a defensive check for the same
+// button firing twice) does not race on the shared preferTheirs map. Run
+// with -race: an unsynchronized map write here previously crashed the
+// entire process with "fatal error: concurrent map writes".
+func TestComputeResolveDivergedFile_ConcurrentCallsDoNotRace(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.toml")
+	pending := &pendingPromote{
+		statePath:    statePath,
+		preferTheirs: make(map[string]bool),
+		diverged: []unseenIncoming{
+			{tildePath: "~/a.txt", relPath: "a.txt", mainBytes: []byte("a-main")},
+			{tildePath: "~/b.txt", relPath: "b.txt", mainBytes: []byte("b-main")},
+		},
+	}
+
+	done := make(chan error, 2)
+	go func() { done <- computeResolveDivergedFile(pending, 0, false) }()
+	go func() { done <- computeResolveDivergedFile(pending, 1, false) }()
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatalf("computeResolveDivergedFile: %v", err)
+		}
+	}
+
+	if !pending.preferTheirs["a.txt"] || !pending.preferTheirs["b.txt"] {
+		t.Errorf("preferTheirs = %v, want both a.txt and b.txt set", pending.preferTheirs)
+	}
+}
+
+// TestComputePromoteStart_PreservedAndDivergedNeverNilForJSON verifies
+// that PromoteStartInfo.Preserved and .Diverged are always non-nil
+// (possibly empty) slices, never bare nil, on the routine clean-promote
+// case (nothing to preserve or review). A nil slice marshals to JSON
+// `null`, and the frontend calls `info.preserved.length` unconditionally
+// — crashing promote's single most common case.
+func TestComputePromoteStart_PreservedAndDivergedNeverNilForJSON(t *testing.T) {
+	bareDir := t.TempDir()
+	workDir := t.TempDir()
+	cfgPath, statePath := initPaths(t)
+	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "dot.txt"), []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitFile("dot.txt", "add dot.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	info, _, err := computePromoteStart(cfgPath, statePath, t.TempDir())
+	if err != nil {
+		t.Fatalf("computePromoteStart: %v", err)
+	}
+	assertJSONFieldNotNull(t, info, "preserved")
+	assertJSONFieldNotNull(t, info, "diverged")
+}

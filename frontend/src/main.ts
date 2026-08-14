@@ -463,6 +463,8 @@ function displayInitLocalForm() {
                 if (!path) return;
                 const input = document.getElementById('init-repo-path') as HTMLInputElement | null;
                 if (input) input.value = path;
+            }).catch((err) => {
+                console.error('Error picking a directory: ' + err);
             });
         });
         document.getElementById('init-push-browse-btn')?.addEventListener('click', () => {
@@ -470,6 +472,8 @@ function displayInitLocalForm() {
                 if (!path) return;
                 const input = document.getElementById('init-push-target') as HTMLInputElement | null;
                 if (input) input.value = path;
+            }).catch((err) => {
+                console.error('Error picking a directory: ' + err);
             });
         });
         document.getElementById('init-continue-btn')?.addEventListener('click', () => {
@@ -502,6 +506,8 @@ function displayInitRemoteForm() {
                 if (!path) return;
                 const input = document.getElementById('init-clone-dir') as HTMLInputElement | null;
                 if (input) input.value = path;
+            }).catch((err) => {
+                console.error('Error picking a directory: ' + err);
             });
         });
         document.getElementById('init-continue-btn')?.addEventListener('click', () => {
@@ -696,11 +702,13 @@ function runPromoteReview(files: cli.DivergedFile[], index: number) {
         }
     };
     document.getElementById('promote-keep-mine-btn')?.addEventListener('click', () => {
+        if (controlsEl) controlsEl.innerHTML = '';
         ResolveDivergedFile(index, true).then(advance).catch((err) => {
             showPromoteError('Error resolving ' + files[index].path + ': ' + err);
         });
     });
     document.getElementById('promote-keep-theirs-btn')?.addEventListener('click', () => {
+        if (controlsEl) controlsEl.innerHTML = '';
         ResolveDivergedFile(index, false).then(advance).catch((err) => {
             showPromoteError('Error resolving ' + files[index].path + ': ' + err);
         });
@@ -799,6 +807,7 @@ function runLinkReviewStep(files: cli.IncomingFile[], index: number) {
         `;
     }
     document.getElementById('link-accept-btn')?.addEventListener('click', () => {
+        if (controlsEl) controlsEl.innerHTML = '';
         AcceptIncomingFile(index).then(() => {
             advanceLinkReview(files, index);
         }).catch((err) => {

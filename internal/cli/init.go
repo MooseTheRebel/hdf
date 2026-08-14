@@ -141,11 +141,12 @@ func setUpLocalPushTarget(r *repo.Repo, repoPath, pushTarget string) (string, er
 	return gitURL, nil
 }
 
-// computeInitRemoteStart clones gitURL into cloneDir (defaulting like the
-// CLI does when cloneDir is blank), computes the initial commit, and checks
-// for a machine-branch collision on the remote — the GUI-oriented
-// counterpart to runInit's "remote repository" path.
-func computeInitRemoteStart(cfgPath, gitURL, cloneDir string) (*InitStartInfo, *pendingInit, error) {
+// computeInitRemoteStart clones gitURL into cloneDir (defaulting to
+// homeDir/.local/share/hdf/repo, like the CLI does, when cloneDir is
+// blank), computes the initial commit, and checks for a machine-branch
+// collision on the remote — the GUI-oriented counterpart to runInit's
+// "remote repository" path.
+func computeInitRemoteStart(cfgPath, homeDir, gitURL, cloneDir string) (*InitStartInfo, *pendingInit, error) {
 	if err := checkNotAlreadyInitialized(cfgPath); err != nil {
 		return nil, nil, err
 	}
@@ -155,7 +156,7 @@ func computeInitRemoteStart(cfgPath, gitURL, cloneDir string) (*InitStartInfo, *
 	}
 	dest := strings.TrimSpace(cloneDir)
 	if dest == "" {
-		dest = defaultRepoPath()
+		dest = defaultRepoPath(homeDir)
 	} else {
 		resolved, err := resolveInitPath(dest)
 		if err != nil {
@@ -258,9 +259,10 @@ func computeFinishInit(cfgPath, statePath string, p *pendingInit) (*InitResult, 
 }
 
 // defaultRepoPath returns the CLI's default local-repo path
-// (~/.local/share/hdf/repo), used both as computeInitRemoteStart's fallback
-// clone destination and as the GUI's pre-filled suggestion.
-func defaultRepoPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "hdf", "repo")
+// (homeDir/.local/share/hdf/repo), used both as computeInitRemoteStart's
+// fallback clone destination and as the GUI's pre-filled suggestion. Takes
+// homeDir as a parameter rather than calling os.UserHomeDir() internally,
+// per CLAUDE.md's rule for testable extracted functions.
+func defaultRepoPath(homeDir string) string {
+	return filepath.Join(homeDir, ".local", "share", "hdf", "repo")
 }
