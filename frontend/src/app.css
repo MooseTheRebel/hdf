@@ -43,6 +43,25 @@
     border: 1px solid rgba(200, 130, 40, 0.35);
 }
 
+.home-badge.daemon-running {
+    background-color: rgba(46, 160, 67, 0.25);
+    color: #4caf70;
+    border: 1px solid rgba(46, 160, 67, 0.4);
+}
+
+.home-badge.daemon-stopped {
+    background-color: rgba(200, 130, 40, 0.2);
+    color: #e0a050;
+    border: 1px solid rgba(200, 130, 40, 0.35);
+}
+
+.home-badge.daemon-not-installed,
+.home-badge.daemon-unknown {
+    background-color: rgba(140, 150, 165, 0.18);
+    color: #a3adba;
+    border: 1px solid rgba(140, 150, 165, 0.35);
+}
+
 .home-subtitle {
     color: #8a9bb0;
     font-size: 15px;
@@ -359,4 +378,399 @@
 
 .control-btn.close-btn:hover {
     background-color: #c9302c;
+}
+
+/* Command row as a clickable button (status, etc.) */
+
+.command-row-clickable {
+    border: none;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    color: inherit;
+}
+
+/* Status view */
+
+.status-container {
+    max-width: 700px;
+    margin: 20px auto;
+    padding: 20px;
+    text-align: left;
+}
+
+.status-header-section h1 {
+    color: #ffffff;
+    margin: 0 0 20px;
+    font-size: 24px;
+}
+
+.status-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 28px;
+}
+
+.status-field {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 16px;
+    padding: 6px 10px;
+}
+
+.status-label {
+    color: #8a9bb0;
+    font-size: 13px;
+}
+
+.status-value {
+    color: #dde6f0;
+    font-size: 13px;
+    font-family: 'Courier New', Courier, monospace;
+    word-break: break-all;
+}
+
+.status-files-heading {
+    color: #ffffff;
+    font-size: 16px;
+    margin: 0 0 10px;
+}
+
+.status-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 24px;
+}
+
+.status-file-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.04);
+    font-size: 13px;
+}
+
+.status-file-path {
+    color: #c3dafe;
+    font-family: 'Courier New', Courier, monospace;
+}
+
+.status-file-state {
+    color: #8a9bb0;
+}
+
+.status-empty {
+    color: #8a9bb0;
+    font-size: 13px;
+    padding: 8px 10px;
+}
+
+.status-controls {
+    display: flex;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}
+
+/* Config view */
+
+.config-container {
+    max-width: 700px;
+    margin: 20px auto;
+    padding: 20px;
+    text-align: left;
+}
+
+.config-header-section h1 {
+    color: #ffffff;
+    margin: 0 0 20px;
+    font-size: 24px;
+}
+
+.config-field {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 16px;
+    padding: 6px 10px;
+    margin-bottom: 12px;
+}
+
+.config-label {
+    color: #8a9bb0;
+    font-size: 13px;
+}
+
+.config-value {
+    color: #dde6f0;
+    font-size: 13px;
+    font-family: 'Courier New', Courier, monospace;
+    word-break: break-all;
+}
+
+.config-content {
+    background-color: #2d2d2d;
+    color: #d4d4d4;
+    padding: 16px;
+    border-radius: 4px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-x: auto;
+    margin: 0 0 24px;
+}
+
+.config-missing {
+    color: #8a9bb0;
+    font-size: 14px;
+    padding: 8px 10px 24px;
+}
+
+.config-missing code {
+    font-family: 'Courier New', Courier, monospace;
+    color: #c3dafe;
+}
+
+.config-controls {
+    display: flex;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}
+
+.daemon-status-container {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 32px 24px;
+    text-align: left;
+}
+
+.daemon-status-header-section {
+    margin: 0 0 24px;
+}
+
+.daemon-status-controls {
+    display: flex;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}
+
+.daemon-management-container {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 32px 24px;
+    text-align: left;
+}
+
+.daemon-management-header-section {
+    margin: 0 0 24px;
+}
+
+.daemon-management-status {
+    margin-bottom: 20px;
+}
+
+.daemon-management-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+#daemon-management-result {
+    min-height: 1.2em;
+    margin-bottom: 16px;
+    color: #ccc;
+}
+
+.daemon-management-controls {
+    display: flex;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}
+
+/* Link view */
+
+.link-container {
+    max-width: 700px;
+    margin: 20px auto;
+    padding: 20px;
+    text-align: left;
+}
+
+.link-header-section h1 {
+    color: #ffffff;
+    margin: 0 0 20px;
+    font-size: 24px;
+}
+
+#link-step-content {
+    color: #dde6f0;
+    margin-bottom: 20px;
+}
+
+.link-warning-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 10px 0;
+}
+
+.link-warning-row {
+    padding: 8px 10px;
+    border-radius: 6px;
+    background-color: rgba(255, 193, 7, 0.12);
+    color: #ffd873;
+    font-size: 13px;
+}
+
+.link-review-counter {
+    color: #8a9bb0;
+    font-size: 13px;
+    margin-bottom: 6px;
+}
+
+.link-review-path {
+    color: #c3dafe;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 15px;
+    margin-bottom: 12px;
+}
+
+.link-review-diff {
+    max-height: 400px;
+    overflow-y: auto;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.04);
+    padding: 8px 0;
+}
+
+.link-error {
+    color: #ff8a8a;
+}
+
+.link-results-message {
+    color: #dde6f0;
+    margin-bottom: 12px;
+}
+
+.link-results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.link-result-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.04);
+    font-size: 13px;
+}
+
+.link-result-path {
+    color: #c3dafe;
+    font-family: 'Courier New', Courier, monospace;
+}
+
+.link-result-ok .link-result-status {
+    color: #7fd88f;
+}
+
+.link-result-error .link-result-status {
+    color: #ff8a8a;
+}
+
+.link-results-empty {
+    color: #8a9bb0;
+    font-size: 13px;
+    padding: 8px 10px;
+}
+
+.link-controls {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #444;
+}
+
+/* Enroll view (reuses .link-container/.link-controls layout) */
+
+.enroll-preview-path {
+    color: #c3dafe;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 15px;
+    margin-bottom: 12px;
+}
+
+.enroll-preview-note {
+    color: #dde6f0;
+}
+
+.enroll-preview-diff {
+    max-height: 400px;
+    overflow-y: auto;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.04);
+    padding: 8px 0;
+}
+
+.enroll-result-message {
+    color: #dde6f0;
+}
+
+/* Init wizard (reuses .link-container/.link-controls layout) */
+
+.init-field-label {
+    display: block;
+    color: #8a9bb0;
+    font-size: 13px;
+    margin: 16px 0 4px;
+}
+
+.init-field-row {
+    display: flex;
+    gap: 8px;
+}
+
+.init-text-input {
+    flex: 1;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #dde6f0;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    padding: 8px 10px;
+}
+
+.init-text-input:focus {
+    outline: none;
+    border-color: #6a8cff;
+}
+
+.init-result-message {
+    color: #dde6f0;
+}
+
+/* Report issue view (reuses .link-container/.link-controls/.init-* layout) */
+
+.report-issue-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 100px;
+    resize: vertical;
+    font-family: inherit;
+    margin-top: 4px;
 }
