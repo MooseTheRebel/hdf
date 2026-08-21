@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/MooseTheRebel/hdf/compare/v0.2.1...v0.3.0) (2026-08-21)
+
+
+### Features
+
+* make hdf commands clickable in the GUI ([#48](https://github.com/MooseTheRebel/hdf/issues/48)) ([fd6c87b](https://github.com/MooseTheRebel/hdf/commit/fd6c87b5bf90a6247eb8c264272e8f78ab76c351))
+
+
+### Build System
+
+* **deps-dev:** Bump vite from 8.1.5 to 8.2.1 in /frontend ([#54](https://github.com/MooseTheRebel/hdf/issues/54)) ([ed1940a](https://github.com/MooseTheRebel/hdf/commit/ed1940a8e156406b8034a0826644c95dc0fb743f))
+* **deps:** Bump github.com/wailsapp/wails/v2 ([#58](https://github.com/MooseTheRebel/hdf/issues/58)) ([8995d9a](https://github.com/MooseTheRebel/hdf/commit/8995d9ade32f82aa5a0532921bb7e4f8b5a57539))
+
 ## [0.2.1](https://github.com/MooseTheRebel/hdf/compare/v0.2.0...v0.2.1) (2026-08-14)
 
 
