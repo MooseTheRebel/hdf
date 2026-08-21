@@ -1,8 +1,18 @@
 import './style.css';
 import './app.css';
 
-import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow} from '../wailsjs/go/main/App';
+import {IsInitialized, HasDiff, GetDiffContent, GetCurrentIndex, GetTotalDiffs, NextDiff, PreviousDiff, CloseWindow, GetStatus, GetConfig, GetDaemonStatus, InstallDaemon, UninstallDaemon, StartDaemon, StopDaemon, GetPendingWarnings, StartLink, AcceptIncomingFile, FinishLink, PickFileToEnroll, StartEnroll, ConfirmEnroll, DefaultRepoPath, PickDirectory, StartInitLocal, StartInitRemote, ResolveBranchCollision, FinishInit, StartPromote, ResolveDivergedFile, FinishPromote, SubmitReportIssue} from '../wailsjs/go/cli/App';
+import type {cli} from '../wailsjs/go/models';
 import {renderDiffContent} from './diff';
+import {renderStatus} from './status';
+import {renderConfig} from './configinfo';
+import {renderDaemonStatus} from './daemonstatus';
+import {renderDaemonManagement} from './daemonmanagement';
+import {renderPendingWarnings, renderIncomingFileReview, renderLinkResults} from './linkflow';
+import {renderEnrollPreview, renderEnrollResult} from './enrollflow';
+import {renderLocalForm, renderRemoteForm, renderBranchCollision, renderInitResult} from './initflow';
+import {renderPreservedFiles, renderDivergedFileReview, renderPromoteResult} from './promoteflow';
+import {renderReportIssueResult} from './reportissueflow';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -27,18 +37,26 @@ function displayHomeScreen() {
                     </div>
                     <p class="home-subtitle">Your dotfiles are managed by hdf.</p>
                     <div class="command-list">
-                        <div class="command-row">
+                        <button class="command-row command-row-clickable" id="enroll-btn">
                             <code class="cmd">hdf enroll &lt;path&gt;</code>
                             <span class="cmd-desc">Start managing a new dotfile</span>
-                        </div>
-                        <div class="command-row">
+                        </button>
+                        <button class="command-row command-row-clickable" id="link-btn">
                             <code class="cmd">hdf link</code>
                             <span class="cmd-desc">Re-create all managed symlinks</span>
-                        </div>
-                        <div class="command-row">
+                        </button>
+                        <button class="command-row command-row-clickable" id="link-no-fetch-btn">
+                            <code class="cmd">hdf link --no-fetch</code>
+                            <span class="cmd-desc">Re-create symlinks without fetching from remote</span>
+                        </button>
+                        <button class="command-row command-row-clickable" id="promote-btn">
+                            <code class="cmd">hdf promote</code>
+                            <span class="cmd-desc">Merge your machine branch into main and push</span>
+                        </button>
+                        <button class="command-row command-row-clickable" id="status-btn">
                             <code class="cmd">hdf status</code>
                             <span class="cmd-desc">Show managed files and sync state</span>
-                        </div>
+                        </button>
                         <div class="command-row">
                             <code class="cmd">hdf daemon</code>
                             <span class="cmd-desc">Start the background sync daemon</span>
@@ -47,6 +65,22 @@ function displayHomeScreen() {
                             <code class="cmd">hdf diff [url]</code>
                             <span class="cmd-desc">View a diff in this window</span>
                         </div>
+                        <button class="command-row command-row-clickable" id="config-btn">
+                            <code class="cmd">hdf config</code>
+                            <span class="cmd-desc">Show the current configuration</span>
+                        </button>
+                        <button class="command-row command-row-clickable" id="daemon-status-btn">
+                            <code class="cmd">hdf daemon status</code>
+                            <span class="cmd-desc">Check whether the sync daemon service is running</span>
+                        </button>
+                        <button class="command-row command-row-clickable" id="daemon-management-btn">
+                            <code class="cmd">hdf daemon install/start/stop/uninstall</code>
+                            <span class="cmd-desc">Manage the sync daemon background service</span>
+                        </button>
+                        <button class="command-row command-row-clickable" id="report-issue-btn">
+                            <code class="cmd">hdf report-issue</code>
+                            <span class="cmd-desc">Package diagnostics into a .zip for sharing with an admin</span>
+                        </button>
                     </div>
                     <button class="close-button" id="close-btn">Close</button>
                 </div>
@@ -93,12 +127,23 @@ function displayHomeScreen() {
                             </div>
                         </div>
                     </div>
+                    <button class="control-btn" id="get-started-btn">Get Started</button>
                     <button class="close-button" id="close-btn">Close</button>
                 </div>
             `;
         }
 
         document.getElementById('close-btn')?.addEventListener('click', () => CloseWindow());
+        document.getElementById('get-started-btn')?.addEventListener('click', () => displayInitModeSelect());
+        document.getElementById('enroll-btn')?.addEventListener('click', () => startEnrollFlow());
+        document.getElementById('link-btn')?.addEventListener('click', () => displayLinkView(false));
+        document.getElementById('link-no-fetch-btn')?.addEventListener('click', () => displayLinkView(true));
+        document.getElementById('promote-btn')?.addEventListener('click', () => displayPromoteView());
+        document.getElementById('status-btn')?.addEventListener('click', () => displayStatusView());
+        document.getElementById('config-btn')?.addEventListener('click', () => displayConfigView());
+        document.getElementById('daemon-status-btn')?.addEventListener('click', () => displayDaemonStatusView());
+        document.getElementById('daemon-management-btn')?.addEventListener('click', () => displayDaemonManagementView());
+        document.getElementById('report-issue-btn')?.addEventListener('click', () => displayReportIssueView());
     }).catch((err) => {
         app.innerHTML = `
             <div class="home-container">
@@ -115,6 +160,713 @@ function displayHomeScreen() {
         if (errorMsgEl) errorMsgEl.textContent = String(err);
         document.getElementById('error-close-btn')?.addEventListener('click', () => CloseWindow());
     });
+}
+
+function displayStatusView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="status-container">
+            <div class="status-header-section">
+                <h1>Status</h1>
+            </div>
+            <div id="status-loading">Loading status...</div>
+            <div id="status-content" style="display: none;"></div>
+            <div class="status-controls">
+                <button id="status-back-btn" class="control-btn">Back</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('status-back-btn')?.addEventListener('click', () => displayHomeScreen());
+
+    GetStatus().then((info) => {
+        const loadingEl = document.getElementById('status-loading');
+        const contentEl = document.getElementById('status-content');
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.innerHTML = renderStatus(info);
+            contentEl.style.display = 'block';
+        }
+    }).catch((err) => {
+        const loadingEl = document.getElementById('status-loading');
+        if (loadingEl) loadingEl.textContent = 'Error loading status: ' + err;
+    });
+}
+
+function displayConfigView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="config-container">
+            <div class="config-header-section">
+                <h1>Config</h1>
+            </div>
+            <div id="config-loading">Loading config...</div>
+            <div id="config-content" style="display: none;"></div>
+            <div class="config-controls">
+                <button id="config-back-btn" class="control-btn">Back</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('config-back-btn')?.addEventListener('click', () => displayHomeScreen());
+
+    GetConfig().then((info) => {
+        const loadingEl = document.getElementById('config-loading');
+        const contentEl = document.getElementById('config-content');
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.innerHTML = renderConfig(info);
+            contentEl.style.display = 'block';
+        }
+    }).catch((err) => {
+        const loadingEl = document.getElementById('config-loading');
+        if (loadingEl) loadingEl.textContent = 'Error loading config: ' + err;
+    });
+}
+
+function displayDaemonStatusView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="daemon-status-container">
+            <div class="daemon-status-header-section">
+                <h1>Daemon Status</h1>
+            </div>
+            <div id="daemon-status-loading">Loading daemon status...</div>
+            <div id="daemon-status-content" style="display: none;"></div>
+            <div class="daemon-status-controls">
+                <button id="daemon-status-back-btn" class="control-btn">Back</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('daemon-status-back-btn')?.addEventListener('click', () => displayHomeScreen());
+
+    GetDaemonStatus().then((status) => {
+        const loadingEl = document.getElementById('daemon-status-loading');
+        const contentEl = document.getElementById('daemon-status-content');
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.innerHTML = renderDaemonStatus(status);
+            contentEl.style.display = 'block';
+        }
+    }).catch((err) => {
+        const loadingEl = document.getElementById('daemon-status-loading');
+        if (loadingEl) loadingEl.textContent = 'Error loading daemon status: ' + err;
+    });
+}
+
+function displayDaemonManagementView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="daemon-management-container">
+            <div class="daemon-management-header-section">
+                <h1>Daemon Management</h1>
+            </div>
+            <div id="daemon-management-loading">Loading daemon status...</div>
+            <div id="daemon-management-content" style="display: none;"></div>
+            <div id="daemon-management-result"></div>
+            <div class="daemon-management-controls">
+                <button id="daemon-management-back-btn" class="control-btn">Back</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('daemon-management-back-btn')?.addEventListener('click', () => displayHomeScreen());
+
+    refreshDaemonManagementStatus();
+}
+
+function refreshDaemonManagementStatus() {
+    const loadingEl = document.getElementById('daemon-management-loading');
+    const contentEl = document.getElementById('daemon-management-content');
+    if (loadingEl) loadingEl.style.display = 'block';
+    if (contentEl) contentEl.style.display = 'none';
+
+    GetDaemonStatus().then((status) => {
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.innerHTML = renderDaemonManagement(status);
+            contentEl.style.display = 'block';
+        }
+        wireDaemonManagementActions();
+    }).catch((err) => {
+        if (loadingEl) loadingEl.textContent = 'Error loading daemon status: ' + err;
+    });
+}
+
+function wireDaemonManagementActions() {
+    const resultEl = document.getElementById('daemon-management-result');
+    const runAction = (action: () => Promise<void>, successMessage: string) => {
+        if (resultEl) resultEl.textContent = '';
+        action().then(() => {
+            if (resultEl) resultEl.textContent = successMessage;
+            refreshDaemonManagementStatus();
+        }).catch((err) => {
+            if (resultEl) resultEl.textContent = 'Error: ' + err;
+        });
+    };
+
+    document.getElementById('daemon-install-btn')?.addEventListener('click', () => runAction(InstallDaemon, 'Daemon installed and started.'));
+    document.getElementById('daemon-uninstall-btn')?.addEventListener('click', () => runAction(UninstallDaemon, 'Daemon uninstalled.'));
+    document.getElementById('daemon-start-btn')?.addEventListener('click', () => runAction(StartDaemon, 'Daemon started.'));
+    document.getElementById('daemon-stop-btn')?.addEventListener('click', () => runAction(StopDaemon, 'Daemon stopped.'));
+}
+
+function startEnrollFlow() {
+    PickFileToEnroll().then((path) => {
+        if (!path) return;
+        displayEnrollView(path);
+    }).catch((err) => {
+        displayEnrollErrorScreen('Error picking a file: ' + err);
+    });
+}
+
+function displayEnrollView(path: string) {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Enroll</h1>
+            </div>
+            <div id="enroll-step-content">Checking for pending warnings...</div>
+            <div class="link-controls" id="enroll-controls"></div>
+        </div>
+    `;
+    runEnrollWarningsStep(path);
+}
+
+function displayEnrollErrorScreen(message: string) {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Enroll</h1>
+            </div>
+            <div id="enroll-step-content"></div>
+            <div class="link-controls" id="enroll-controls"></div>
+        </div>
+    `;
+    showEnrollError(message);
+}
+
+function runEnrollWarningsStep(path: string) {
+    GetPendingWarnings().then((warnings) => {
+        if (warnings.length > 0) {
+            showEnrollWarnings(warnings, path);
+        } else {
+            runEnrollStartStep(path);
+        }
+    }).catch((err) => {
+        showEnrollError('Error checking pending warnings: ' + err);
+    });
+}
+
+function showEnrollWarnings(warnings: string[], path: string) {
+    const contentEl = document.getElementById('enroll-step-content');
+    const controlsEl = document.getElementById('enroll-controls');
+    if (contentEl) contentEl.innerHTML = renderPendingWarnings(warnings);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="enroll-warnings-continue-btn" class="control-btn">Continue</button>
+            <button id="enroll-warnings-cancel-btn" class="control-btn">Cancel</button>
+        `;
+    }
+    document.getElementById('enroll-warnings-continue-btn')?.addEventListener('click', () => runEnrollStartStep(path));
+    document.getElementById('enroll-warnings-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runEnrollStartStep(path: string) {
+    const contentEl = document.getElementById('enroll-step-content');
+    const controlsEl = document.getElementById('enroll-controls');
+    if (contentEl) contentEl.textContent = 'Preparing enroll preview...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    StartEnroll(path).then((info) => {
+        if (contentEl) contentEl.innerHTML = renderEnrollPreview(info);
+        if (controlsEl) {
+            controlsEl.innerHTML = `
+                <button id="enroll-confirm-btn" class="control-btn">Enroll</button>
+                <button id="enroll-cancel-btn" class="control-btn">Cancel</button>
+            `;
+        }
+        document.getElementById('enroll-confirm-btn')?.addEventListener('click', () => runEnrollConfirmStep());
+        document.getElementById('enroll-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showEnrollError('Error starting enroll: ' + err);
+    });
+}
+
+function runEnrollConfirmStep() {
+    const contentEl = document.getElementById('enroll-step-content');
+    const controlsEl = document.getElementById('enroll-controls');
+    if (contentEl) contentEl.textContent = 'Enrolling...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    ConfirmEnroll().then((result) => {
+        if (contentEl) contentEl.innerHTML = renderEnrollResult(result);
+        if (controlsEl) controlsEl.innerHTML = '<button id="enroll-done-back-btn" class="control-btn">Back</button>';
+        document.getElementById('enroll-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showEnrollError('Error enrolling: ' + err);
+    });
+}
+
+function showEnrollError(message: string) {
+    const contentEl = document.getElementById('enroll-step-content');
+    const controlsEl = document.getElementById('enroll-controls');
+    if (contentEl) contentEl.textContent = message;
+    if (controlsEl) controlsEl.innerHTML = '<button id="enroll-error-back-btn" class="control-btn">Back</button>';
+    document.getElementById('enroll-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function displayInitModeSelect() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Get Started</h1>
+            </div>
+            <div id="init-step-content">
+                <p>How do you want to store your dot files?</p>
+            </div>
+            <div class="link-controls" id="init-controls">
+                <button id="init-mode-local-btn" class="control-btn">Local directory</button>
+                <button id="init-mode-remote-btn" class="control-btn">Remote repository</button>
+                <button id="init-mode-cancel-btn" class="control-btn">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('init-mode-local-btn')?.addEventListener('click', () => displayInitLocalForm());
+    document.getElementById('init-mode-remote-btn')?.addEventListener('click', () => displayInitRemoteForm());
+    document.getElementById('init-mode-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function displayInitLocalForm() {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Loading default path...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    DefaultRepoPath().then((defaultPath) => {
+        if (contentEl) contentEl.innerHTML = renderLocalForm(defaultPath);
+        if (controlsEl) {
+            controlsEl.innerHTML = `
+                <button id="init-continue-btn" class="control-btn">Continue</button>
+                <button id="init-cancel-btn" class="control-btn">Cancel</button>
+            `;
+        }
+        document.getElementById('init-repo-browse-btn')?.addEventListener('click', () => {
+            PickDirectory().then((path) => {
+                if (!path) return;
+                const input = document.getElementById('init-repo-path') as HTMLInputElement | null;
+                if (input) input.value = path;
+            }).catch((err) => {
+                console.error('Error picking a directory: ' + err);
+            });
+        });
+        document.getElementById('init-push-browse-btn')?.addEventListener('click', () => {
+            PickDirectory().then((path) => {
+                if (!path) return;
+                const input = document.getElementById('init-push-target') as HTMLInputElement | null;
+                if (input) input.value = path;
+            }).catch((err) => {
+                console.error('Error picking a directory: ' + err);
+            });
+        });
+        document.getElementById('init-continue-btn')?.addEventListener('click', () => {
+            const repoPath = (document.getElementById('init-repo-path') as HTMLInputElement | null)?.value ?? '';
+            const pushTarget = (document.getElementById('init-push-target') as HTMLInputElement | null)?.value ?? '';
+            runInitStart(() => StartInitLocal(repoPath, pushTarget));
+        });
+        document.getElementById('init-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showInitError('Error loading default path: ' + err);
+    });
+}
+
+function displayInitRemoteForm() {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Loading default path...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    DefaultRepoPath().then((defaultPath) => {
+        if (contentEl) contentEl.innerHTML = renderRemoteForm(defaultPath);
+        if (controlsEl) {
+            controlsEl.innerHTML = `
+                <button id="init-continue-btn" class="control-btn">Continue</button>
+                <button id="init-cancel-btn" class="control-btn">Cancel</button>
+            `;
+        }
+        document.getElementById('init-clone-browse-btn')?.addEventListener('click', () => {
+            PickDirectory().then((path) => {
+                if (!path) return;
+                const input = document.getElementById('init-clone-dir') as HTMLInputElement | null;
+                if (input) input.value = path;
+            }).catch((err) => {
+                console.error('Error picking a directory: ' + err);
+            });
+        });
+        document.getElementById('init-continue-btn')?.addEventListener('click', () => {
+            const gitURL = (document.getElementById('init-git-url') as HTMLInputElement | null)?.value ?? '';
+            const cloneDir = (document.getElementById('init-clone-dir') as HTMLInputElement | null)?.value ?? '';
+            runInitStart(() => StartInitRemote(gitURL, cloneDir));
+        });
+        document.getElementById('init-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showInitError('Error loading default path: ' + err);
+    });
+}
+
+function runInitStart(start: () => Promise<cli.InitStartInfo>) {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Setting up...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    start().then((info) => {
+        if (info.collision) {
+            displayInitCollision(info.collision.branch);
+        } else {
+            runFinishInit();
+        }
+    }).catch((err) => {
+        showInitError('Error setting up: ' + err);
+    });
+}
+
+function displayInitCollision(branch: string) {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.innerHTML = renderBranchCollision(branch);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="init-collision-reuse-btn" class="control-btn">Reuse it</button>
+            <button id="init-collision-unique-btn" class="control-btn">Create a unique branch</button>
+        `;
+    }
+    document.getElementById('init-collision-reuse-btn')?.addEventListener('click', () => resolveInitCollision(false));
+    document.getElementById('init-collision-unique-btn')?.addEventListener('click', () => resolveInitCollision(true));
+}
+
+function resolveInitCollision(useUnique: boolean) {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Setting up...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    ResolveBranchCollision(useUnique).then(() => {
+        runFinishInit();
+    }).catch((err) => {
+        showInitError('Error resolving branch collision: ' + err);
+    });
+}
+
+function runFinishInit() {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = 'Finishing setup...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    FinishInit().then((result) => {
+        if (contentEl) contentEl.innerHTML = renderInitResult(result);
+        if (controlsEl) controlsEl.innerHTML = '<button id="init-done-continue-btn" class="control-btn">Continue</button>';
+        document.getElementById('init-done-continue-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showInitError('Error finishing setup: ' + err);
+    });
+}
+
+function showInitError(message: string) {
+    const contentEl = document.getElementById('init-step-content');
+    const controlsEl = document.getElementById('init-controls');
+    if (contentEl) contentEl.textContent = message;
+    if (controlsEl) controlsEl.innerHTML = '<button id="init-error-back-btn" class="control-btn">Back</button>';
+    document.getElementById('init-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+const reportIssueWarning = "Warning: hdf's automatic redaction is limited — it strips a few known " +
+    'credential patterns, but this is not a guarantee that all sensitive information is removed. ' +
+    "Review the report's contents yourself before sharing it with anyone. " +
+    'Reporting an issue is entirely optional and voluntary. Securing your own systems should ' +
+    'always be your first priority.';
+
+function displayReportIssueView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Report Issue</h1>
+            </div>
+            <div id="report-issue-step-content">
+                <p>${reportIssueWarning}</p>
+                <label class="init-field-label" for="report-issue-text">What was expected? What actually happened? (optional)</label>
+                <textarea id="report-issue-text" class="init-text-input report-issue-textarea"></textarea>
+            </div>
+            <div class="link-controls" id="report-issue-controls">
+                <button id="report-issue-submit-btn" class="control-btn">Build Report</button>
+                <button id="report-issue-cancel-btn" class="control-btn">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('report-issue-submit-btn')?.addEventListener('click', () => {
+        const text = (document.getElementById('report-issue-text') as HTMLTextAreaElement | null)?.value ?? '';
+        runSubmitReportIssue(text);
+    });
+    document.getElementById('report-issue-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runSubmitReportIssue(text: string) {
+    const contentEl = document.getElementById('report-issue-step-content');
+    const controlsEl = document.getElementById('report-issue-controls');
+    if (contentEl) contentEl.textContent = 'Building report...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    SubmitReportIssue(text).then((result) => {
+        if (contentEl) contentEl.innerHTML = renderReportIssueResult(result);
+        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-done-back-btn" class="control-btn">Back</button>';
+        document.getElementById('report-issue-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        if (contentEl) contentEl.textContent = 'Error building report: ' + err;
+        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-error-back-btn" class="control-btn">Back</button>';
+        document.getElementById('report-issue-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
+    });
+}
+
+function displayPromoteView() {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Promote</h1>
+            </div>
+            <div id="promote-step-content">Checking for changes to promote...</div>
+            <div class="link-controls" id="promote-controls"></div>
+        </div>
+    `;
+
+    StartPromote().then((info) => {
+        if (info.preserved.length > 0) {
+            showPromotePreserved(info);
+        } else if (info.diverged.length > 0) {
+            runPromoteReview(info.diverged, 0);
+        } else {
+            runFinishPromote();
+        }
+    }).catch((err) => {
+        showPromoteError('Error starting promote: ' + err);
+    });
+}
+
+function showPromotePreserved(info: cli.PromoteStartInfo) {
+    const contentEl = document.getElementById('promote-step-content');
+    const controlsEl = document.getElementById('promote-controls');
+    if (contentEl) contentEl.innerHTML = renderPreservedFiles(info.preserved);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="promote-preserved-continue-btn" class="control-btn">Continue</button>
+            <button id="promote-preserved-cancel-btn" class="control-btn">Cancel</button>
+        `;
+    }
+    document.getElementById('promote-preserved-continue-btn')?.addEventListener('click', () => {
+        if (info.diverged.length > 0) {
+            runPromoteReview(info.diverged, 0);
+        } else {
+            runFinishPromote();
+        }
+    });
+    document.getElementById('promote-preserved-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runPromoteReview(files: cli.DivergedFile[], index: number) {
+    const contentEl = document.getElementById('promote-step-content');
+    const controlsEl = document.getElementById('promote-controls');
+    if (contentEl) contentEl.innerHTML = renderDivergedFileReview(files[index], index, files.length);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="promote-keep-mine-btn" class="control-btn">Overwrite main with mine</button>
+            <button id="promote-keep-theirs-btn" class="control-btn">Keep main's version</button>
+        `;
+    }
+    const advance = () => {
+        const next = index + 1;
+        if (next < files.length) {
+            runPromoteReview(files, next);
+        } else {
+            runFinishPromote();
+        }
+    };
+    document.getElementById('promote-keep-mine-btn')?.addEventListener('click', () => {
+        if (controlsEl) controlsEl.innerHTML = '';
+        ResolveDivergedFile(index, true).then(advance).catch((err) => {
+            showPromoteError('Error resolving ' + files[index].path + ': ' + err);
+        });
+    });
+    document.getElementById('promote-keep-theirs-btn')?.addEventListener('click', () => {
+        if (controlsEl) controlsEl.innerHTML = '';
+        ResolveDivergedFile(index, false).then(advance).catch((err) => {
+            showPromoteError('Error resolving ' + files[index].path + ': ' + err);
+        });
+    });
+}
+
+function runFinishPromote() {
+    const contentEl = document.getElementById('promote-step-content');
+    const controlsEl = document.getElementById('promote-controls');
+    if (contentEl) contentEl.textContent = 'Promoting...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    FinishPromote().then((result) => {
+        if (contentEl) contentEl.innerHTML = renderPromoteResult(result);
+        if (controlsEl) controlsEl.innerHTML = '<button id="promote-done-continue-btn" class="control-btn">Continue</button>';
+        document.getElementById('promote-done-continue-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showPromoteError('Error promoting: ' + err);
+    });
+}
+
+function showPromoteError(message: string) {
+    const contentEl = document.getElementById('promote-step-content');
+    const controlsEl = document.getElementById('promote-controls');
+    if (contentEl) contentEl.textContent = message;
+    if (controlsEl) controlsEl.innerHTML = '<button id="promote-error-back-btn" class="control-btn">Back</button>';
+    document.getElementById('promote-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function displayLinkView(noFetch: boolean) {
+    const app = document.querySelector('#app');
+    if (!app) return;
+    app.innerHTML = `
+        <div class="link-container">
+            <div class="link-header-section">
+                <h1>Link</h1>
+            </div>
+            <div id="link-step-content">Checking for pending warnings...</div>
+            <div class="link-controls" id="link-controls"></div>
+        </div>
+    `;
+    runLinkWarningsStep(noFetch);
+}
+
+function runLinkWarningsStep(noFetch: boolean) {
+    GetPendingWarnings().then((warnings) => {
+        if (warnings.length > 0) {
+            showLinkWarnings(warnings, noFetch);
+        } else {
+            runLinkStartStep(noFetch);
+        }
+    }).catch((err) => {
+        showLinkError('Error checking pending warnings: ' + err);
+    });
+}
+
+function showLinkWarnings(warnings: string[], noFetch: boolean) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.innerHTML = renderPendingWarnings(warnings);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="link-warnings-continue-btn" class="control-btn">Continue</button>
+            <button id="link-warnings-cancel-btn" class="control-btn">Cancel</button>
+        `;
+    }
+    document.getElementById('link-warnings-continue-btn')?.addEventListener('click', () => runLinkStartStep(noFetch));
+    document.getElementById('link-warnings-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runLinkStartStep(noFetch: boolean) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.textContent = noFetch ? 'Skipping fetch...' : 'Fetching from remote...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    StartLink(noFetch).then((info) => {
+        if (info.incomingFiles.length > 0) {
+            runLinkReviewStep(info.incomingFiles, 0);
+        } else {
+            runLinkFinishStep(info.message);
+        }
+    }).catch((err) => {
+        showLinkError('Error starting link: ' + err);
+    });
+}
+
+function runLinkReviewStep(files: cli.IncomingFile[], index: number) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.innerHTML = renderIncomingFileReview(files[index], index, files.length);
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="link-accept-btn" class="control-btn">Accept</button>
+            <button id="link-skip-btn" class="control-btn">Skip</button>
+        `;
+    }
+    document.getElementById('link-accept-btn')?.addEventListener('click', () => {
+        if (controlsEl) controlsEl.innerHTML = '';
+        AcceptIncomingFile(index).then(() => {
+            advanceLinkReview(files, index);
+        }).catch((err) => {
+            showLinkAcceptError(files, index, String(err));
+        });
+    });
+    document.getElementById('link-skip-btn')?.addEventListener('click', () => {
+        advanceLinkReview(files, index);
+    });
+}
+
+function advanceLinkReview(files: cli.IncomingFile[], index: number) {
+    const next = index + 1;
+    if (next < files.length) {
+        runLinkReviewStep(files, next);
+    } else {
+        runLinkFinishStep('');
+    }
+}
+
+function showLinkAcceptError(files: cli.IncomingFile[], index: number, errMessage: string) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) {
+        contentEl.innerHTML = '<p class="link-error"></p>';
+        const errorEl = contentEl.querySelector('.link-error');
+        if (errorEl) errorEl.textContent = `Error accepting ${files[index].path}: ${errMessage}`;
+    }
+    if (controlsEl) {
+        controlsEl.innerHTML = `
+            <button id="link-error-skip-btn" class="control-btn">Skip and continue</button>
+            <button id="link-error-cancel-btn" class="control-btn">Cancel</button>
+        `;
+    }
+    document.getElementById('link-error-skip-btn')?.addEventListener('click', () => advanceLinkReview(files, index));
+    document.getElementById('link-error-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
+}
+
+function runLinkFinishStep(message: string) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.textContent = 'Re-creating symlinks...';
+    if (controlsEl) controlsEl.innerHTML = '';
+
+    FinishLink().then((results) => {
+        if (contentEl) contentEl.innerHTML = renderLinkResults(message, results);
+        if (controlsEl) controlsEl.innerHTML = '<button id="link-done-back-btn" class="control-btn">Back</button>';
+        document.getElementById('link-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
+    }).catch((err) => {
+        showLinkError('Error finishing link: ' + err);
+    });
+}
+
+function showLinkError(message: string) {
+    const contentEl = document.getElementById('link-step-content');
+    const controlsEl = document.getElementById('link-controls');
+    if (contentEl) contentEl.textContent = message;
+    if (controlsEl) controlsEl.innerHTML = '<button id="link-error-back-btn" class="control-btn">Back</button>';
+    document.getElementById('link-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
 function loadCurrentDiff() {

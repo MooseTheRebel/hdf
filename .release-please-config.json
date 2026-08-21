@@ -5,7 +5,6 @@
   "packages": {
     ".": {
       "release-type": "go",
-      "package-name": "hdf",
       "changelog-path": "CHANGELOG.md"
     }
   },
