@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/MooseTheRebel/hdf/compare/v0.2.1...v0.3.0) (2026-09-09)
+
+
+### Features
+
+* make hdf commands clickable in the GUI ([#48](https://github.com/MooseTheRebel/hdf/issues/48)) ([fd6c87b](https://github.com/MooseTheRebel/hdf/commit/fd6c87b5bf90a6247eb8c264272e8f78ab76c351))
+
+
+### Build System
+
+* **deps-dev:** Bump typescript from 6.0.3 to 7.0.2 in /frontend ([#30](https://github.com/MooseTheRebel/hdf/issues/30)) ([898eb84](https://github.com/MooseTheRebel/hdf/commit/898eb84a8907a74b961d6e6bd234e33f5c038709))
+* **deps-dev:** Bump vite from 8.1.5 to 8.2.1 in /frontend ([#54](https://github.com/MooseTheRebel/hdf/issues/54)) ([ed1940a](https://github.com/MooseTheRebel/hdf/commit/ed1940a8e156406b8034a0826644c95dc0fb743f))
+* **deps-dev:** Bump vite from 8.2.1 to 8.2.2 in /frontend ([#60](https://github.com/MooseTheRebel/hdf/issues/60)) ([237d462](https://github.com/MooseTheRebel/hdf/commit/237d46263d225ea4fe5a9547fc0b1e3f853bca91))
+* **deps-dev:** Bump vitest from 4.1.10 to 4.1.11 in /frontend ([#61](https://github.com/MooseTheRebel/hdf/issues/61)) ([fc26233](https://github.com/MooseTheRebel/hdf/commit/fc26233e721fbb45376ede1083b186d4a2e81084))
+* **deps:** Bump github.com/wailsapp/wails/v2 ([#58](https://github.com/MooseTheRebel/hdf/issues/58)) ([8995d9a](https://github.com/MooseTheRebel/hdf/commit/8995d9ade32f82aa5a0532921bb7e4f8b5a57539))
+* **deps:** Bump github.com/wailsapp/wails/v2 ([#59](https://github.com/MooseTheRebel/hdf/issues/59)) ([dac1a73](https://github.com/MooseTheRebel/hdf/commit/dac1a73fe6a163aae304a01315c6aad2e7f7c3eb))
+
 ## [0.2.1](https://github.com/MooseTheRebel/hdf/compare/v0.2.0...v0.2.1) (2026-08-14)
 
 
