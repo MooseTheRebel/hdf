@@ -1,17 +1,9 @@
 package main
 
-import (
-	"embed"
-	"hdf/internal/cli"
-)
+import "hdf/internal/cli"
 
-// The embed directive must live here: go:embed paths cannot contain "..",
-// and frontend/ sits in the repository root. All CLI logic lives in
-// internal/cli/ and GUI code is located in frontend/ .
-//
-//go:embed all:frontend/dist
-var assets embed.FS
-
+// All CLI logic lives in internal/cli/. The GUI is a separate plugin binary
+// (cmd/hdf-gui-vanilla), so this binary builds without cgo or the frontend.
 func main() {
-	cli.Execute(assets)
+	cli.Execute()
 }
