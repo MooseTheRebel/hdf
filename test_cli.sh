@@ -1,11 +1,11 @@
 #!/bin/bash
 # Test script for CLI commands
 
-HDF_CLI="./build/bin/hdf.app/Contents/MacOS/hdf"
+HDF_CLI="./build/bin/hdf"
 
 if [ ! -f "$HDF_CLI" ]; then
     echo "Error: hdf not found at $HDF_CLI"
-    echo "Please run 'wails build' first to build the application"
+    echo "Please run 'just build-cli' first to build the application"
     exit 1
 fi
 

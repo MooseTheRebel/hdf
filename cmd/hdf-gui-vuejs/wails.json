@@ -1,0 +1,16 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "hdf-gui-vuejs",
+  "outputfilename": "hdf-gui-vuejs",
+  "frontend:dir": "../../frontend-vuejs",
+  "wailsjsdir": "../../frontend-vuejs",
+  "build:dir": "../../build",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "b-long",
+    "email": "b-long@users.noreply.github.com"
+  }
+}

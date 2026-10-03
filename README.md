@@ -125,17 +125,25 @@ go install github.com/wailsapp/wails/v2/cmd/wails@latest
 # Build and install locally
 just install
 
-# Build and add hdf to /usr/local/bin
+# Build and add hdf (and its GUI plugin) to /usr/local/bin
 just install --path
 ```
 
-Set `HDF_CLI` for your platform:
+The GUI is a separate plugin binary, in two interchangeable variants:
+`hdf-gui-vanilla` (`cmd/hdf-gui-vanilla` + `frontend/`, vanilla TypeScript)
+and `hdf-gui-vuejs` (`cmd/hdf-gui-vuejs` + `frontend-vuejs/`, Vue.js; build
+it with `just build-gui-vuejs`). Running `hdf` with no subcommand launches
+the first GUI installed next to `hdf` or on `$PATH`, preferring vanilla;
+`hdf --gui vuejs` picks one. With none, `hdf` prints help. For a
+headless, CLI-only install (e.g. a server), build `hdf` alone:
 
 ```bash
-# macOS
-HDF_CLI="./build/bin/hdf.app/Contents/MacOS/hdf"
+just build-cli
+```
 
-# Linux
+The built binary is at `./build/bin/hdf`:
+
+```bash
 HDF_CLI="./build/bin/hdf"
 ```
 

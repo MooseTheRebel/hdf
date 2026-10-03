@@ -255,7 +255,8 @@ func computeFinishInit(cfgPath, statePath string, p *pendingInit) (*InitResult, 
 		return nil, fmt.Errorf("saving state: %w", err)
 	}
 	return &InitResult{Message: fmt.Sprintf(
-		"hdf initialized (branch %s). Use Enroll to start managing dot files.", p.branch)}, nil
+		"hdf initialized (branch %s). Use Enroll to start managing dot files.", p.branch,
+	)}, nil
 }
 
 // defaultRepoPath returns the CLI's default local-repo path

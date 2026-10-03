@@ -14,13 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct
 type App struct {
 	ctx            context.Context
+	rt             Runtime
 	mu             sync.Mutex
 	diffURLs       []string
 	currentIndex   int
@@ -35,6 +34,27 @@ func NewApp() *App {
 	return &App{
 		currentIndex: 0,
 	}
+}
+
+// Runtime is the handful of native windowing calls App makes, supplied by
+// the GUI plugin (which wraps Wails' runtime package). Keeping them behind
+// this seam is what lets package cli — and so the hdf binary — build without
+// linking Wails.
+type Runtime struct {
+	OpenFileDialog      func(ctx context.Context, title, defaultDir string) (string, error)
+	OpenDirectoryDialog func(ctx context.Context, title, defaultDir string) (string, error)
+	Quit                func(ctx context.Context)
+}
+
+// NewGUIApp creates an App for the GUI plugin, returning it along with the
+// startup hook to pass as Wails' OnStartup. The hook is returned rather
+// than exposed as an exported method because Wails binds every exported
+// App method to the frontend.
+func NewGUIApp(rt Runtime, diffURLs []string) (*App, func(context.Context)) {
+	app := NewApp()
+	app.rt = rt
+	app.diffURLs = diffURLs
+	return app, app.startup
 }
 
 // startup is called when the app starts. The context is saved
@@ -166,11 +186,7 @@ func (a *App) PickFileToEnroll() (string, error) {
 	if err != nil {
 		homeDir = ""
 	}
-	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "Select a file to enroll",
-		DefaultDirectory: homeDir,
-		ShowHiddenFiles:  true,
-	})
+	return a.rt.OpenFileDialog(a.ctx, "Select a file to enroll", homeDir)
 }
 
 // StartEnroll begins enrolling path: computes the diff against any
@@ -236,10 +252,7 @@ func (a *App) PickDirectory() (string, error) {
 	if err != nil {
 		homeDir = ""
 	}
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "Select a directory",
-		DefaultDirectory: homeDir,
-	})
+	return a.rt.OpenDirectoryDialog(a.ctx, "Select a directory", homeDir)
 }
 
 // StartInitLocal begins initializing hdf with a local repo at repoPath and
@@ -483,5 +496,5 @@ func (a *App) PreviousDiff() {
 // Note: this must only be called from the wails GUI path; the daemon process
 // must never call into this function.
 func (a *App) CloseWindow() {
-	runtime.Quit(a.ctx)
+	a.rt.Quit(a.ctx)
 }

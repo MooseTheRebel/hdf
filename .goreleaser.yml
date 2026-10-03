@@ -10,13 +10,17 @@ project_name: hdf
 
 before:
   hooks:
-    # The binary embeds frontend/dist (see main.go), so the frontend must be
-    # built before Go compilation.
+    # The GUIs embed frontend/dist and frontend-vuejs/dist (see each
+    # directory's assets.go), so the frontends must be built before Go
+    # compilation.
     - npm --prefix frontend ci
     - npm --prefix frontend run build
+    - npm --prefix frontend-vuejs ci
+    - npm --prefix frontend-vuejs run build
 
 builds:
-  - main: .
+  - id: hdf
+    main: .
     binary: hdf
     env:
       # The CLI builds fully static without cgo, which is what makes
@@ -31,6 +35,39 @@ builds:
     ldflags:
       - -s -w
       - -X hdf/internal/cli.version={{.Version}}
+
+  # The GUI plugins. Wails needs cgo, which rules out cross-compiling, so
+  # they're built only for the release runner's own platform (ubuntu-latest,
+  # linux/amd64) and land in that archive next to hdf, where hdf finds them.
+  # The tags are what `wails build` passes to `go build`; webkit2_41 selects
+  # the WebKitGTK 4.1 API that Ubuntu 24.04 ships.
+  - id: hdf-gui-vanilla
+    main: ./cmd/hdf-gui-vanilla
+    binary: hdf-gui-vanilla
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -tags=desktop,production,webkit2_41
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+
+  - id: hdf-gui-vuejs
+    main: ./cmd/hdf-gui-vuejs
+    binary: hdf-gui-vuejs
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -tags=desktop,production,webkit2_41
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
 
 archives:
   - formats: [tar.gz]

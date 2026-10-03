@@ -1,26 +1,46 @@
-bin := if os() == "macos" { "build/bin/hdf.app/Contents/MacOS/hdf" } else if os() == "windows" { "build/bin/hdf.exe" } else { "build/bin/hdf" }
+bin := if os() == "windows" { "build/bin/hdf.exe" } else { "build/bin/hdf" }
+# The GUI plugin hdf launches when run with no subcommand. `wails build`
+# produces an app bundle on macOS; hdf finds the plugin either way.
+gui_plugin := if os() == "macos" { "build/bin/hdf-gui-vanilla.app" } else if os() == "windows" { "build/bin/hdf-gui-vanilla.exe" } else { "build/bin/hdf-gui-vanilla" }
 
 export PATH := env_var('HOME') + "/go/bin:/usr/local/go/bin:" + env_var('PATH')
 
-# Build the binary
-build:
-    wails build
+# Build hdf and the GUI plugin
+build: build-cli build-gui
 
-# Install Go dependencies and build the binary
+# Build hdf alone: the headless, CLI-only install (no cgo, no frontend)
+build-cli:
+    CGO_ENABLED=0 go build -o {{bin}} .
+
+# Build the vanilla GUI plugin (needs cgo and the frontend toolchain)
+build-gui:
+    cd cmd/hdf-gui-vanilla && wails build
+
+# Build the Vue.js GUI plugin; run it with `hdf --gui vuejs`
+build-gui-vuejs:
+    cd cmd/hdf-gui-vuejs && wails build
+
+# Install Go dependencies and build hdf and the GUI plugin
 install path="":
     #!/usr/bin/env bash
     set -euo pipefail
     go mod download
-    wails build
+    just build
     if [ "{{path}}" = "true" ]; then
-        echo "Adding hdf to /usr/local/bin..."
+        echo "Adding hdf and its GUI plugin to /usr/local/bin..."
         cp {{bin}} /usr/local/bin/hdf
+        rm -rf "/usr/local/bin/$(basename {{gui_plugin}})"
+        cp -R {{gui_plugin}} /usr/local/bin/
         echo "Done."
     fi
 
-# Run in live development mode (hot reload)
+# Run the GUI in live development mode (hot reload)
 dev:
-    wails dev
+    cd cmd/hdf-gui-vanilla && wails dev
+
+# Run the Vue.js GUI in live development mode (hot reload)
+dev-vuejs:
+    cd cmd/hdf-gui-vuejs && wails dev
 
 # Open a diff viewer window (optionally pass a diff URL)
 diff url="":

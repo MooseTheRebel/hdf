@@ -3,13 +3,13 @@ package cli
 import (
 	"bufio"
 	crand "crypto/rand"
-	"embed"
 	"errors"
 	"fmt"
 	"hdf/config"
 	"hdf/daemon"
 	"hdf/eventlog"
 	"hdf/link"
+	"hdf/plugin"
 	"hdf/repo"
 	"hdf/report"
 	"hdf/svc"
@@ -21,15 +21,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
-
-// assets holds the embedded frontend, provided by package main via Execute.
-// The embed directive itself must stay next to frontend/ in the repository
-// root because embed paths cannot reference parent directories.
-var assets embed.FS
 
 var rootCmd = &cobra.Command{
 	Use:   "hdf",
@@ -52,8 +44,8 @@ var rootCmd = &cobra.Command{
 		}
 		return promptPendingCrash(config.DefaultStatePath(), bufio.NewReader(os.Stdin))
 	},
-	Run: func(cmd *cobra.Command, args []string) {
-		launchGUI([]string{})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return launchUI(cmd, guiName, plugin.Find, plugin.Launch)
 	},
 }
 
@@ -443,7 +435,8 @@ func ensureOnMachineBranch(r *repo.Repo, cfg *config.Config) error {
 	if cur != cfg.Branch {
 		return fmt.Errorf(
 			"dotfiles repo has branch %q checked out, but this machine's branch is %q — run 'git -C %s checkout %s' first",
-			cur, cfg.Branch, cfg.LocalDotfilesDir, cfg.Branch)
+			cur, cfg.Branch, cfg.LocalDotfilesDir, cfg.Branch,
+		)
 	}
 	return nil
 }
@@ -1677,29 +1670,6 @@ func resolveRepoPath(f config.ManagedFile, branch, localDotfilesDir string) (str
 	return resolved, nil
 }
 
-func launchGUI(diffURLs []string) {
-	app := NewApp()
-	app.diffURLs = diffURLs
-
-	err := wails.Run(&options.App{
-		Title:  "home-dawt-files",
-		Width:  1024,
-		Height: 768,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        app.startup,
-		Bind: []interface{}{
-			app,
-		},
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
 // version is the release version shown by `hdf --version`. It is injected at
 // build time by goreleaser via -ldflags "-X hdf/internal/cli.version=...";
 // plain `go build` binaries report "dev".
@@ -1733,10 +1703,8 @@ func recoverPanic() {
 	}
 }
 
-// Execute runs the hdf CLI. frontendAssets is the embedded frontend bundle,
-// passed in by package main. Exits the process with status 1 on error.
-func Execute(frontendAssets embed.FS) {
-	assets = frontendAssets
+// Execute runs the hdf CLI. Exits the process with status 1 on error.
+func Execute() {
 	rootCmd.Version = version
 	defer recoverPanic()
 	if err := rootCmd.Execute(); err != nil {
@@ -1748,6 +1716,7 @@ func Execute(frontendAssets embed.FS) {
 var (
 	enrollYes   bool
 	linkNoFetch bool
+	guiName     string
 )
 
 func init() {
@@ -1755,6 +1724,8 @@ func init() {
 	// control the format ourselves and avoid duplicate output.
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
+
+	rootCmd.Flags().StringVar(&guiName, "gui", "", "GUI to launch: "+strings.Join(plugin.GUIs, " or ")+" (default: the first one installed)")
 
 	enrollCmd.Flags().BoolVarP(&enrollYes, "yes", "y", false, "Skip the diff confirmation prompt")
 	linkCmd.Flags().BoolVar(&linkNoFetch, "no-fetch", false, "Skip fetch and merge from remote; only re-create symlinks")
