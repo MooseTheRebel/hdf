@@ -16,6 +16,10 @@ build-cli:
 build-gui:
     cd cmd/hdf-gui-vanilla && wails build
 
+# Build the Vue.js GUI plugin; run it with `hdf --gui vuejs`
+build-gui-vuejs:
+    cd cmd/hdf-gui-vuejs && wails build
+
 # Install Go dependencies and build hdf and the GUI plugin
 install path="":
     #!/usr/bin/env bash
@@ -33,6 +37,10 @@ install path="":
 # Run the GUI in live development mode (hot reload)
 dev:
     cd cmd/hdf-gui-vanilla && wails dev
+
+# Run the Vue.js GUI in live development mode (hot reload)
+dev-vuejs:
+    cd cmd/hdf-gui-vuejs && wails dev
 
 # Open a diff viewer window (optionally pass a diff URL)
 diff url="":

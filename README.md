@@ -129,10 +129,12 @@ just install
 just install --path
 ```
 
-The GUI is a separate plugin binary, `hdf-gui-vanilla`, built from
-`cmd/hdf-gui-vanilla` (a Vue.js GUI, `hdf-gui-vuejs`, is planned). Running
-`hdf` with no subcommand launches the first GUI installed next to `hdf` or
-on `$PATH` (`hdf --gui vuejs` picks one); with none, `hdf` prints help. For a
+The GUI is a separate plugin binary, in two interchangeable variants:
+`hdf-gui-vanilla` (`cmd/hdf-gui-vanilla` + `frontend/`, vanilla TypeScript)
+and `hdf-gui-vuejs` (`cmd/hdf-gui-vuejs` + `frontend-vuejs/`, Vue.js; build
+it with `just build-gui-vuejs`). Running `hdf` with no subcommand launches
+the first GUI installed next to `hdf` or on `$PATH`, preferring vanilla;
+`hdf --gui vuejs` picks one. With none, `hdf` prints help. For a
 headless, CLI-only install (e.g. a server), build `hdf` alone:
 
 ```bash
