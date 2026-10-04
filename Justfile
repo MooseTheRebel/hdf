@@ -16,7 +16,9 @@ build-cli:
 build-gui:
     cd cmd/hdf-gui-vanilla && wails build
 
-# Build the Vue.js GUI plugin; run it with `hdf --gui vuejs`
+# Build the Vue.js GUI plugin. It's a complete hdf, so run it directly
+# (build/bin/hdf-gui-vuejs[.app]); with the vanilla GUI also in build/bin,
+# build/bin/hdf refuses to open either, since only one GUI may be installed.
 build-gui-vuejs:
     cd cmd/hdf-gui-vuejs && wails build
 

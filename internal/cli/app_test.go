@@ -272,11 +272,6 @@ func TestDaemonActionMethods_DelegateToSvcFuncs(t *testing.T) {
 		{name: daemonSubcmdStop, method: (*App).StopDaemon, svcFunc: &svcStop},
 	}
 
-	origHost := hostExecutableFn
-	defer func() { hostExecutableFn = origHost }()
-
-	hostExecutableFn = func() string { return "/usr/local/bin/hdf" }
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.viaRunDaemon {
@@ -313,31 +308,6 @@ func TestDaemonActionMethods_DelegateToSvcFuncs(t *testing.T) {
 				t.Fatalf("expected %s() error to propagate, got nil", tc.name)
 			}
 		})
-	}
-}
-
-// TestAppInstallDaemon_RequiresHostExecutable verifies that the GUI refuses
-// to install the daemon when it wasn't started by hdf: the service re-runs
-// the executable it's given, and without hdf's path that would be the GUI
-// plugin binary itself.
-func TestAppInstallDaemon_RequiresHostExecutable(t *testing.T) {
-	origHost, origInstall := hostExecutableFn, svcInstall
-	defer func() { hostExecutableFn, svcInstall = origHost, origInstall }()
-
-	hostExecutableFn = func() string { return "" }
-	installed := false
-	svcInstall = func(string) error {
-		installed = true
-		return nil
-	}
-
-	err := (&App{}).InstallDaemon()
-	if err == nil || !strings.Contains(err.Error(), "hdf daemon install") {
-		t.Errorf("InstallDaemon() error = %v, want one pointing to `hdf daemon install`", err)
-	}
-
-	if installed {
-		t.Error("svcInstall was called without a host executable")
 	}
 }
 

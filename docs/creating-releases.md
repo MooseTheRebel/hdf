@@ -16,6 +16,9 @@ you just push a git tag, and GitHub does the rest.
 3. It creates a GitHub release for the tag and attaches:
    - one `.tar.gz` archive per platform for `hdf`, plus one per GUI plugin
      (each: binary + README + docs)
+   - `.deb` and `.rpm` packages for Linux: `hdf` (amd64 and arm64) and
+     each GUI (amd64). The GUI packages conflict with each other, since
+     only one GUI may be installed at a time, and install an app-menu entry
    - a `checksums.txt` file so downloads can be verified
    - an automatic changelog built from the commit messages
 
