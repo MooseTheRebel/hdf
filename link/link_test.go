@@ -21,6 +21,7 @@ func TestHashFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HashFile: %v", err)
 	}
+
 	if !strings.HasPrefix(hash, "sha256:") {
 		t.Errorf("hash %q should start with sha256:", hash)
 	}
@@ -35,6 +36,7 @@ func TestHashFile(t *testing.T) {
 	if err := os.WriteFile(f, []byte("world"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	hash3, _ := HashFile(f)
 	if hash == hash3 {
 		t.Error("different content should produce different hash")
@@ -58,6 +60,7 @@ func TestRepoPathForHome(t *testing.T) {
 		if err != nil {
 			t.Fatalf("repoPathForHome(%q): %v", c.homePath, err)
 		}
+
 		want := filepath.Join(repoDir, c.wantRel)
 		if got != want {
 			t.Errorf("repoPathForHome(%q) = %q, want %q", c.homePath, got, want)
@@ -84,6 +87,7 @@ func TestRepoPathForNoCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	dst2, err := repoPathForHome(path2, repoDir, fakeHome)
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +117,7 @@ func TestEnroll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lstat: %v", err)
 	}
+
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Error("expected homeFile to be a symlink after Enroll")
 	}
@@ -122,6 +127,7 @@ func TestEnroll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Readlink: %v", err)
 	}
+
 	want := filepath.Join(repoDir, ".testrc")
 	if target != want {
 		t.Errorf("symlink target %q, want %q", target, want)
@@ -132,6 +138,7 @@ func TestEnroll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile through symlink: %v", err)
 	}
+
 	if string(content) != "test content" {
 		t.Errorf("content %q, want %q", string(content), "test content")
 	}
@@ -160,6 +167,7 @@ func TestEnrollIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second enrollWithHome: %v", err)
 	}
+
 	if hash1 != hash2 {
 		t.Errorf("hash changed after re-enroll: %q → %q", hash1, hash2)
 	}
@@ -168,6 +176,7 @@ func TestEnrollIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading file after re-enroll: %v", err)
 	}
+
 	if string(content) != "important config" {
 		t.Errorf("content corrupted: got %q", content)
 	}
@@ -181,6 +190,7 @@ func TestEnrollMirrorsSubdirectory(t *testing.T) {
 	if err := os.MkdirAll(subDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	homeFile := filepath.Join(subDir, "config.fish")
 	if err := os.WriteFile(homeFile, []byte("set -x PATH"), 0o644); err != nil {
 		t.Fatal(err)
@@ -222,6 +232,7 @@ func TestCopyFilePreservesMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %04o, want 0600", info.Mode().Perm())
 	}
@@ -248,6 +259,7 @@ func TestLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Readlink: %v", err)
 	}
+
 	if target != repoFile {
 		t.Errorf("symlink target %q, want %q", target, repoFile)
 	}
@@ -288,12 +300,16 @@ func TestLinkVariants(t *testing.T) {
 			if err := os.WriteFile(repoFile, []byte("content"), 0o644); err != nil {
 				t.Fatal(err)
 			}
+
 			homePath := filepath.Join(homeDir, c.relPath)
 			if c.existingContent != "" {
-				if err := os.MkdirAll(filepath.Dir(homePath), 0o755); err != nil {
+				err := os.MkdirAll(filepath.Dir(homePath), 0o755)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(homePath, []byte(c.existingContent), 0o644); err != nil {
+
+				err = os.WriteFile(homePath, []byte(c.existingContent), 0o644)
+				if err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -301,10 +317,12 @@ func TestLinkVariants(t *testing.T) {
 			if err := Link(homePath, repoFile); err != nil {
 				t.Fatalf("Link: %v", err)
 			}
+
 			target, err := os.Readlink(homePath)
 			if err != nil {
 				t.Fatalf("Readlink: %v", err)
 			}
+
 			if target != repoFile {
 				t.Errorf("symlink target %q, want %q", target, repoFile)
 			}
@@ -316,14 +334,18 @@ func TestLinkVariants(t *testing.T) {
 // format and value as HashFile for identical content.
 func TestHashBytesMatchesHashFile(t *testing.T) {
 	content := []byte("some dotfile content\n")
+
 	path := filepath.Join(t.TempDir(), "f")
+
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	fromFile, err := HashFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if got := HashBytes(content); got != fromFile {
 		t.Errorf("HashBytes = %q, HashFile = %q — must match", got, fromFile)
 	}

@@ -25,9 +25,12 @@ func Main(assets fs.FS) {
 	g := gui{assets: assets}
 	if plugin.IsPluginProcess() {
 		plugin.Serve(g)
+
 		return
 	}
-	if err := g.Launch(nil); err != nil {
+
+	err := g.Launch(nil)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -64,7 +67,7 @@ func (g gui) Launch(args []string) error {
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        startup,
-		Bind: []interface{}{
+		Bind: []any{
 			app,
 		},
 	})

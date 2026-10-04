@@ -13,12 +13,15 @@ import (
 // one elsewhere, then on $PATH.
 func Find(name string) (string, bool) {
 	exeDir := ""
+
 	if exe, err := os.Executable(); err == nil {
 		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 			exe = resolved
 		}
+
 		exeDir = filepath.Dir(exe)
 	}
+
 	return find(name, exeDir, runtime.GOOS, isExecutable, exec.LookPath)
 }
 
@@ -30,20 +33,24 @@ func find(name, exeDir, goos string, isExec func(string) bool, lookPath func(str
 	if goos == "windows" {
 		bin += ".exe"
 	}
+
 	if exeDir != "" {
 		candidates := []string{filepath.Join(exeDir, bin)}
 		if goos == "darwin" {
 			candidates = append(candidates, filepath.Join(exeDir, bin+".app", "Contents", "MacOS", bin))
 		}
+
 		for _, c := range candidates {
 			if isExec(c) {
 				return c, true
 			}
 		}
 	}
+
 	if p, err := lookPath(bin); err == nil {
 		return p, true
 	}
+
 	return "", false
 }
 
@@ -58,5 +65,6 @@ func isExecutable(path string) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
+
 	return runtime.GOOS == "windows" || info.Mode()&0o111 != 0
 }

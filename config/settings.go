@@ -64,12 +64,15 @@ func (s *SharedSettings) ApplyDefaults() {
 	if s.NotifyThreshold <= 0 {
 		s.NotifyThreshold = DefaultNotifyThreshold
 	}
+
 	if s.SyncIntervalMinutes <= 0 {
 		s.SyncIntervalMinutes = DefaultSyncIntervalMinutes
 	}
+
 	if s.NotifyCooldownMinutes <= 0 {
 		s.NotifyCooldownMinutes = DefaultNotifyCooldownMinutes
 	}
+
 	if s.IgnoredPaths == nil {
 		s.IgnoredPaths = DefaultIgnoredPaths
 	}
@@ -85,6 +88,7 @@ func IsIgnored(p string, patterns []string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -97,19 +101,23 @@ func SharedSettingsFromBytes(data []byte) (*SharedSettings, error) {
 	if _, err := toml.Decode(string(data), &s); err != nil {
 		return nil, err
 	}
+
 	for _, pat := range s.IgnoredPaths {
 		if _, err := path.Match(pat, ""); err != nil {
 			return nil, fmt.Errorf("invalid ignored_paths pattern %q: %w", pat, err)
 		}
 	}
+
 	return &s, nil
 }
 
 // SharedSettingsToBytes serialises s to TOML bytes.
 func SharedSettingsToBytes(s *SharedSettings) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(s); err != nil {
+	err := toml.NewEncoder(&buf).Encode(s)
+	if err != nil {
 		return nil, err
 	}
+
 	return buf.Bytes(), nil
 }

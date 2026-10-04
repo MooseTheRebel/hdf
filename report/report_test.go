@@ -33,9 +33,11 @@ func setupReportFixture(t *testing.T) BuildOptions {
 	if err != nil {
 		t.Fatalf("repo.Init: %v", err)
 	}
+
 	if err := os.WriteFile(filepath.Join(repoDir, "f.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile("f.txt", "initial"); err != nil {
 		t.Fatalf("CommitFile: %v", err)
 	}
@@ -44,9 +46,11 @@ func setupReportFixture(t *testing.T) BuildOptions {
 	if err := config.Save(cfgPath, cfg); err != nil {
 		t.Fatalf("config.Save: %v", err)
 	}
+
 	if err := config.SaveState(statePath, &config.State{LastCommit: "abc123"}); err != nil {
 		t.Fatalf("config.SaveState: %v", err)
 	}
+
 	if err := eventlog.Append(eventlog.PathFor(statePath), "daemon_sync_success", ""); err != nil {
 		t.Fatalf("eventlog.Append: %v", err)
 	}
@@ -72,12 +76,14 @@ func TestBuild_CreatesZipWithExpectedEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zip.OpenReader(%s): %v", path, err)
 	}
+
 	defer func() { _ = zr.Close() }()
 
 	names := map[string]*zip.File{}
 	for _, f := range zr.File {
 		names[f.Name] = f
 	}
+
 	for _, want := range []string{"summary.json", "hosts.json", "state_transitions.log", configEntryName, "state.toml", "repo.zip"} {
 		if _, ok := names[want]; !ok {
 			t.Errorf("zip missing entry %q; got entries %v", want, names)
@@ -88,11 +94,14 @@ func TestBuild_CreatesZipWithExpectedEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening summary.json: %v", err)
 	}
+
 	defer func() { _ = rc.Close() }()
+
 	var sum summary
 	if err := json.NewDecoder(rc).Decode(&sum); err != nil {
 		t.Fatalf("decoding summary.json: %v", err)
 	}
+
 	if sum.Trigger != TriggerManual || sum.UserText != "expected X, got Y" || sum.HDFVersion != "1.2.3" || sum.Branch != testBranch {
 		t.Errorf("summary = %+v, unexpected fields", sum)
 	}
@@ -100,14 +109,17 @@ func TestBuild_CreatesZipWithExpectedEntries(t *testing.T) {
 
 func TestBuild_RepoTooLargeReturnsErrorAndWritesNothing(t *testing.T) {
 	opts := setupReportFixture(t)
+
 	bigDir := filepath.Join(filepath.Dir(opts.CfgPath), "dotfiles", ".git", "objects")
 	if err := os.MkdirAll(bigDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	big := make([]byte, 5*1024*1024)
 	if _, err := rand.Read(big); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(bigDir, "big.pack"), big, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +128,7 @@ func TestBuild_RepoTooLargeReturnsErrorAndWritesNothing(t *testing.T) {
 	if !errors.Is(err, ErrRepoTooLarge) {
 		t.Fatalf("Build err = %v, want ErrRepoTooLarge", err)
 	}
+
 	entries, err := os.ReadDir(opts.OutDir)
 	if err == nil && len(entries) != 0 {
 		t.Errorf("OutDir has %d entries, want 0 (nothing should be written on ErrRepoTooLarge)", len(entries))
@@ -133,6 +146,7 @@ func TestBuild_ProducesUniqueFilenamesForRepeatedCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (1st): %v", err)
 	}
+
 	path2, err := Build(opts, "1.2.3")
 	if err != nil {
 		t.Fatalf("Build (2nd): %v", err)
@@ -141,6 +155,7 @@ func TestBuild_ProducesUniqueFilenamesForRepeatedCalls(t *testing.T) {
 	if path1 == path2 {
 		t.Fatalf("Build produced the same path twice: %s", path1)
 	}
+
 	for _, p := range []string{path1, path2} {
 		if _, err := zip.OpenReader(p); err != nil {
 			t.Errorf("zip.OpenReader(%s): %v — expected a valid, complete report", p, err)
@@ -167,11 +182,13 @@ func TestWriteReportZip_SuccessLeavesNoTempFileBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
+
 	if len(entries) != 1 || entries[0].Name() != "report.zip" {
 		names := make([]string, len(entries))
 		for i, e := range entries {
 			names[i] = e.Name()
 		}
+
 		t.Errorf("dir entries = %v, want exactly [report.zip]", names)
 	}
 }
@@ -183,11 +200,15 @@ func TestWriteReportZip_FailedCreateLeavesNoPartialFile(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses DAC — permission test not meaningful")
 	}
+
 	dir := t.TempDir()
+
 	outPath := filepath.Join(dir, "report.zip")
-	if err := os.Chmod(dir, 0o000); err != nil {
+	err := os.Chmod(dir, 0o000)
+	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) }) //nolint:gosec // restoring test directory to a removable state
 
 	rc := &reportContents{summaryJSON: []byte("{}")}
@@ -196,13 +217,15 @@ func TestWriteReportZip_FailedCreateLeavesNoPartialFile(t *testing.T) {
 	// Restore permissions before checking os.Stat below: with dir at 0o000,
 	// Stat can't even traverse the directory to tell "doesn't exist" from
 	// "can't check," so it would misreport either way.
-	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // restoring test directory to a readable state
+	err = os.Chmod(dir, 0o755) //nolint:gosec // restoring test directory to a readable state
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	if writeErr == nil {
 		t.Fatal("writeReportZip: want error when the output directory isn't writable")
 	}
+
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
 		t.Errorf("outPath should not exist after a failed write")
 	}
@@ -218,7 +241,9 @@ func TestWriteZipTo_PropagatesWriteError(t *testing.T) {
 		hostsJSON:   []byte("[]"),
 	}
 	wantErr := errors.New("disk full")
+
 	err := writeZipTo(&failingWriter{failAfter: 0, err: wantErr}, rc)
+
 	if !errors.Is(err, wantErr) {
 		t.Errorf("writeZipTo err = %v, want %v", err, wantErr)
 	}
@@ -236,7 +261,9 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 	if w.written >= w.failAfter {
 		return 0, w.err
 	}
+
 	w.written += len(p)
+
 	return len(p), nil
 }
 
@@ -262,30 +289,38 @@ func TestBuild_RedactsConfigCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zip.OpenReader(%s): %v", path, err)
 	}
+
 	defer func() { _ = zr.Close() }()
 
 	var cfgEntry *zip.File
+
 	for _, f := range zr.File {
 		if f.Name == configEntryName {
 			cfgEntry = f
 		}
 	}
+
 	if cfgEntry == nil {
 		t.Fatal("zip missing config.toml entry")
 	}
+
 	rc, err := cfgEntry.Open()
 	if err != nil {
 		t.Fatalf("opening config.toml entry: %v", err)
 	}
+
 	defer func() { _ = rc.Close() }()
+
 	buf := new(bytes.Buffer)
 	if _, err := buf.ReadFrom(rc); err != nil {
 		t.Fatalf("reading config.toml entry: %v", err)
 	}
+
 	content := buf.String()
 	if strings.Contains(content, "user:token") {
 		t.Errorf("config.toml entry still contains credentials:\n%s", content)
 	}
+
 	if !strings.Contains(content, testRedactedURL) {
 		t.Errorf("config.toml entry missing redacted URL:\n%s", content)
 	}

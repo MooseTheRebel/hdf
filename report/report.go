@@ -74,10 +74,12 @@ func gatherReportContents(opts BuildOptions, version string) (*reportContents, e
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return nil, fmt.Errorf("opening repo: %w", err)
 	}
+
 	branch, _ := r.CurrentBranch()
 
 	repoZip, err := CompressRepo(cfg.LocalDotfilesDir)
@@ -89,6 +91,7 @@ func gatherReportContents(opts BuildOptions, version string) (*reportContents, e
 	if err != nil {
 		return nil, fmt.Errorf("enumerating hosts: %w", err)
 	}
+
 	hostsJSON, err := json.MarshalIndent(hosts, "", "  ")
 	if err != nil {
 		return nil, err
@@ -110,6 +113,7 @@ func gatherReportContents(opts BuildOptions, version string) (*reportContents, e
 		CrashDetail: opts.CrashDetail,
 		Branch:      branch,
 	}
+
 	summaryJSON, err := json.MarshalIndent(sum, "", "  ")
 	if err != nil {
 		return nil, err
@@ -117,11 +121,15 @@ func gatherReportContents(opts BuildOptions, version string) (*reportContents, e
 
 	redactedCfg := *cfg
 	redactedCfg.GitPushTarget = redactURL(cfg.GitPushTarget)
+
 	var cfgBuf bytes.Buffer
+
 	if err := toml.NewEncoder(&cfgBuf).Encode(redactedCfg); err != nil {
 		return nil, fmt.Errorf("encoding redacted config: %w", err)
 	}
+
 	cfgBytes := cfgBuf.Bytes()
+
 	stateBytes, err := os.ReadFile(opts.StatePath)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("reading state file: %w", err)
@@ -145,6 +153,7 @@ func gatherReportContents(opts BuildOptions, version string) (*reportContents, e
 // that injects a write failure.
 func writeZipTo(w io.Writer, rc *reportContents) error {
 	zw := zip.NewWriter(w)
+
 	plainFiles := []struct {
 		name string
 		data []byte
@@ -155,22 +164,27 @@ func writeZipTo(w io.Writer, rc *reportContents) error {
 		{configEntryName, rc.cfgBytes},
 		{"state.toml", rc.stateBytes},
 	}
+
 	for _, file := range plainFiles {
 		fw, err := zw.Create(file.name)
 		if err != nil {
 			return err
 		}
+
 		if _, err := fw.Write(file.data); err != nil {
 			return err
 		}
 	}
+
 	rw, err := zw.CreateHeader(&zip.FileHeader{Name: "repo.zip", Method: zip.Store})
 	if err != nil {
 		return err
 	}
+
 	if _, err := rw.Write(rc.repoZip); err != nil {
 		return err
 	}
+
 	return zw.Close()
 }
 
@@ -186,23 +200,32 @@ func writeReportZip(outPath string, rc *reportContents) (err error) {
 	if err != nil {
 		return err
 	}
+
 	tmpPath := tmp.Name()
+
 	defer func() {
 		if err != nil {
 			_ = os.Remove(tmpPath)
 		}
 	}()
 
-	if err = writeZipTo(tmp, rc); err != nil {
+	err = writeZipTo(tmp, rc)
+	if err != nil {
 		_ = tmp.Close()
+
 		return err
 	}
-	if err = tmp.Close(); err != nil {
+
+	err = tmp.Close()
+	if err != nil {
 		return err
 	}
-	if err = os.Rename(tmpPath, outPath); err != nil {
+
+	err = os.Rename(tmpPath, outPath)
+	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -216,6 +239,7 @@ func randomHex() string {
 	if _, err := crand.Read(b); err != nil {
 		return fmt.Sprintf("%x", time.Now().UnixNano())
 	}
+
 	return hex.EncodeToString(b)
 }
 
@@ -235,9 +259,11 @@ func Build(opts BuildOptions, version string) (string, error) {
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
 		return "", fmt.Errorf("creating output directory: %w", err)
 	}
+
 	outPath := filepath.Join(opts.OutDir, fmt.Sprintf("hdf-report-%s-%s.zip", rc.time.Format("20060102-150405"), randomHex()))
 	if err := writeReportZip(outPath, rc); err != nil {
 		return "", err
 	}
+
 	return outPath, nil
 }

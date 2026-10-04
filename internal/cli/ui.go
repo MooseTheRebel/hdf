@@ -19,12 +19,15 @@ func launchUI(cmd *cobra.Command, gui string, find func(name string) (string, bo
 		if !ok {
 			return fmt.Errorf("GUI %q is not installed (looked for %s next to hdf and on $PATH)", gui, plugin.BinaryName(gui))
 		}
+
 		return launch(path, nil)
 	}
+
 	for _, name := range plugin.GUIs {
 		if path, ok := find(name); ok {
 			return launch(path, nil)
 		}
 	}
+
 	return cmd.Help()
 }

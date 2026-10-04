@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// App struct
+// App struct.
 type App struct {
 	ctx            context.Context
 	rt             Runtime
@@ -30,7 +30,7 @@ type App struct {
 	promotePending *pendingPromote
 }
 
-// NewApp creates a new App application struct
+// NewApp creates a new App application struct.
 func NewApp() *App {
 	return &App{
 		currentIndex: 0,
@@ -55,11 +55,12 @@ func NewGUIApp(rt Runtime, diffURLs []string) (*App, func(context.Context)) {
 	app := NewApp()
 	app.rt = rt
 	app.diffURLs = diffURLs
+
 	return app, app.startup
 }
 
 // startup is called when the app starts. The context is saved
-// so we can call the runtime methods
+// so we can call the runtime methods.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
@@ -79,6 +80,7 @@ func (a *App) GetStatus() (*StatusInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
+
 	return computeStatus(config.DefaultPath(), config.DefaultStatePath(), homeDir)
 }
 
@@ -107,6 +109,7 @@ func (a *App) InstallDaemon() error {
 	if hostExecutableFn() == "" {
 		return errors.New("this GUI wasn't started by hdf, so it can't install the daemon; run `hdf daemon install` instead")
 	}
+
 	return runDaemon(config.DefaultPath(), svcInstall)
 }
 
@@ -150,13 +153,16 @@ func (a *App) StartLink(noFetch bool) (*LinkStartInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
+
 	info, pending, err := computeLinkStartFn(config.DefaultPath(), homeDir, noFetch)
 	if err != nil {
 		return nil, err
 	}
+
 	a.mu.Lock()
 	a.linkPending = pending
 	a.mu.Unlock()
+
 	return info, nil
 }
 
@@ -166,10 +172,13 @@ func (a *App) AcceptIncomingFile(index int) error {
 	a.mu.Lock()
 	if index < 0 || index >= len(a.linkPending) {
 		a.mu.Unlock()
+
 		return fmt.Errorf("accept incoming file: index %d out of range (0..%d)", index, len(a.linkPending)-1)
 	}
+
 	item := a.linkPending[index]
 	a.mu.Unlock()
+
 	return acceptIncomingFileFn(config.DefaultPath(), item)
 }
 
@@ -180,10 +189,13 @@ func (a *App) FinishLink() ([]LinkedFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
+
 	results, err := computeRelinkFn(config.DefaultPath(), homeDir)
+
 	a.mu.Lock()
 	a.linkPending = nil
 	a.mu.Unlock()
+
 	return results, err
 }
 
@@ -196,6 +208,7 @@ func (a *App) PickFileToEnroll() (string, error) {
 	if err != nil {
 		homeDir = ""
 	}
+
 	return a.rt.OpenFileDialog(a.ctx, "Select a file to enroll", homeDir)
 }
 
@@ -212,13 +225,16 @@ func (a *App) StartEnroll(path string) (*EnrollStartInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
+
 	info, pending, err := computeEnrollStartFn(config.DefaultPath(), homeDir, path)
 	if err != nil {
 		return nil, err
 	}
+
 	a.mu.Lock()
 	a.enrollPending = pending
 	a.mu.Unlock()
+
 	return info, nil
 }
 
@@ -228,17 +244,22 @@ func (a *App) ConfirmEnroll() (*EnrollResult, error) {
 	a.mu.Lock()
 	pending := a.enrollPending
 	a.mu.Unlock()
+
 	if pending == nil {
-		return nil, fmt.Errorf("confirm enroll: no pending enroll — call StartEnroll first")
+		return nil, errors.New("confirm enroll: no pending enroll — call StartEnroll first")
 	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
+
 	result, err := computeApplyEnrollFn(config.DefaultPath(), homeDir, config.DefaultStatePath(), *pending)
+
 	a.mu.Lock()
 	a.enrollPending = nil
 	a.mu.Unlock()
+
 	return result, err
 }
 
@@ -250,6 +271,7 @@ func (a *App) DefaultRepoPath() string {
 	if err != nil {
 		homeDir = ""
 	}
+
 	return defaultRepoPath(homeDir)
 }
 
@@ -262,6 +284,7 @@ func (a *App) PickDirectory() (string, error) {
 	if err != nil {
 		homeDir = ""
 	}
+
 	return a.rt.OpenDirectoryDialog(a.ctx, "Select a directory", homeDir)
 }
 
@@ -279,9 +302,11 @@ func (a *App) StartInitLocal(repoPath, pushTarget string) (*InitStartInfo, error
 	if err != nil {
 		return nil, err
 	}
+
 	a.mu.Lock()
 	a.initPending = pending
 	a.mu.Unlock()
+
 	return info, nil
 }
 
@@ -298,13 +323,16 @@ func (a *App) StartInitRemote(gitURL, cloneDir string) (*InitStartInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
+
 	info, pending, err := computeInitRemoteStartFn(config.DefaultPath(), homeDir, gitURL, cloneDir)
 	if err != nil {
 		return nil, err
 	}
+
 	a.mu.Lock()
 	a.initPending = pending
 	a.mu.Unlock()
+
 	return info, nil
 }
 
@@ -316,9 +344,11 @@ func (a *App) ResolveBranchCollision(useUnique bool) error {
 	a.mu.Lock()
 	pending := a.initPending
 	a.mu.Unlock()
+
 	if pending == nil {
-		return fmt.Errorf("resolve branch collision: no pending init — call StartInitLocal or StartInitRemote first")
+		return errors.New("resolve branch collision: no pending init — call StartInitLocal or StartInitRemote first")
 	}
+
 	return computeResolveBranchCollisionFn(pending, useUnique)
 }
 
@@ -330,13 +360,17 @@ func (a *App) FinishInit() (*InitResult, error) {
 	a.mu.Lock()
 	pending := a.initPending
 	a.mu.Unlock()
+
 	if pending == nil {
-		return nil, fmt.Errorf("finish init: no pending init — call StartInitLocal or StartInitRemote first")
+		return nil, errors.New("finish init: no pending init — call StartInitLocal or StartInitRemote first")
 	}
+
 	result, err := computeFinishInitFn(config.DefaultPath(), config.DefaultStatePath(), pending)
+
 	a.mu.Lock()
 	a.initPending = nil
 	a.mu.Unlock()
+
 	return result, err
 }
 
@@ -354,13 +388,16 @@ func (a *App) StartPromote() (*PromoteStartInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
+
 	info, pending, err := computePromoteStartFn(config.DefaultPath(), config.DefaultStatePath(), homeDir)
 	if err != nil {
 		return nil, err
 	}
+
 	a.mu.Lock()
 	a.promotePending = pending
 	a.mu.Unlock()
+
 	return info, nil
 }
 
@@ -371,9 +408,11 @@ func (a *App) ResolveDivergedFile(index int, keepMine bool) error {
 	a.mu.Lock()
 	pending := a.promotePending
 	a.mu.Unlock()
+
 	if pending == nil {
-		return fmt.Errorf("resolve diverged file: no pending promote — call StartPromote first")
+		return errors.New("resolve diverged file: no pending promote — call StartPromote first")
 	}
+
 	return computeResolveDivergedFileFn(pending, index, keepMine)
 }
 
@@ -383,13 +422,17 @@ func (a *App) FinishPromote() (*PromoteResult, error) {
 	a.mu.Lock()
 	pending := a.promotePending
 	a.mu.Unlock()
+
 	if pending == nil {
-		return nil, fmt.Errorf("finish promote: no pending promote — call StartPromote first")
+		return nil, errors.New("finish promote: no pending promote — call StartPromote first")
 	}
+
 	result, err := computeFinishPromoteFn(pending)
+
 	a.mu.Lock()
 	a.promotePending = nil
 	a.mu.Unlock()
+
 	return result, err
 }
 
@@ -412,9 +455,11 @@ func isInitialized(path string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
+
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
+
 	return false, err
 }
 
@@ -424,23 +469,30 @@ func isInitialized(path string) (bool, error) {
 func fetchDiff(ctx context.Context, url string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching diff: %w", err)
 	}
+
 	defer func() { _ = resp.Body.Close() }()
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Printf("[WARN] fetchDiff: HTTP %d from %s", resp.StatusCode, url)
+
 		return "", fmt.Errorf("fetching diff from %s: HTTP %d", url, resp.StatusCode)
 	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("reading diff: %w", err)
 	}
+
 	return string(body), nil
 }
 
@@ -451,8 +503,10 @@ func (a *App) GetDiffContent() (string, error) {
 	a.mu.Lock()
 	if len(a.diffURLs) == 0 || a.currentIndex >= len(a.diffURLs) {
 		a.mu.Unlock()
+
 		return "", nil
 	}
+
 	currentURL := a.diffURLs[a.currentIndex]
 	a.mu.Unlock()
 
@@ -460,6 +514,7 @@ func (a *App) GetDiffContent() (string, error) {
 	if parentCtx == nil {
 		parentCtx = context.Background()
 	}
+
 	return fetchDiff(parentCtx, currentURL)
 }
 
@@ -467,36 +522,41 @@ func (a *App) GetDiffContent() (string, error) {
 func (a *App) HasDiff() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return len(a.diffURLs) > 0
 }
 
-// GetCurrentIndex returns the current diff index
+// GetCurrentIndex returns the current diff index.
 func (a *App) GetCurrentIndex() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return a.currentIndex
 }
 
-// GetTotalDiffs returns the total number of diffs
+// GetTotalDiffs returns the total number of diffs.
 func (a *App) GetTotalDiffs() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return len(a.diffURLs)
 }
 
-// NextDiff moves to the next diff
+// NextDiff moves to the next diff.
 func (a *App) NextDiff() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if a.currentIndex < len(a.diffURLs)-1 {
 		a.currentIndex++
 	}
 }
 
-// PreviousDiff moves to the previous diff
+// PreviousDiff moves to the previous diff.
 func (a *App) PreviousDiff() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if a.currentIndex > 0 {
 		a.currentIndex--
 	}

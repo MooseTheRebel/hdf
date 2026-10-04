@@ -47,8 +47,10 @@ func LoadState(path string) (*State, error) {
 		if os.IsNotExist(err) {
 			return &State{}, nil
 		}
+
 		return nil, err
 	}
+
 	return &s, nil
 }
 
@@ -61,18 +63,23 @@ func UpdateState(path string, fn func(*State) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+
 	unlock, err := lockFile(path + ".lock")
 	if err != nil {
 		return err
 	}
+
 	defer unlock()
+
 	s, err := LoadState(path)
 	if err != nil {
 		return err
 	}
+
 	if err := fn(s); err != nil {
 		return err
 	}
+
 	return SaveState(path, s)
 }
 
@@ -81,6 +88,7 @@ func UpdateState(path string, fn func(*State) error) error {
 func SetPendingCrash(path, msg string) error {
 	return UpdateState(path, func(s *State) error {
 		s.PendingCrashReport = msg
+
 		return nil
 	})
 }
@@ -90,14 +98,17 @@ func SetPendingCrash(path, msg string) error {
 // only ever surfaced once.
 func TakePendingCrash(path string) (string, error) {
 	var msg string
+
 	err := UpdateState(path, func(s *State) error {
 		msg = s.PendingCrashReport
 		s.PendingCrashReport = ""
+
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
+
 	return msg, nil
 }
 
@@ -107,19 +118,26 @@ func SaveState(path string, s *State) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+
 	tmp := path + ".tmp"
+
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
+
 	if err := toml.NewEncoder(f).Encode(s); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
+
 		return err
 	}
+
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
+
 		return err
 	}
+
 	return os.Rename(tmp, path)
 }

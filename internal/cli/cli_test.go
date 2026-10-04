@@ -33,10 +33,12 @@ const (
 // mustRel returns the relative path from base to target, fataling the test on error.
 func mustRel(t *testing.T, base, target string) string {
 	t.Helper()
+
 	rel, err := filepath.Rel(base, target)
 	if err != nil {
 		t.Fatalf("filepath.Rel(%q, %q): %v", base, target, err)
 	}
+
 	return rel
 }
 
@@ -44,6 +46,7 @@ func mustRel(t *testing.T, base, target string) string {
 func initPaths(t *testing.T) (cfgPath, statePath string) {
 	t.Helper()
 	d := t.TempDir()
+
 	return filepath.Join(d, "config.toml"), filepath.Join(d, "state.toml")
 }
 
@@ -52,17 +55,21 @@ func initPaths(t *testing.T) (cfgPath, statePath string) {
 func makeFixtureRepo(t *testing.T) string {
 	t.Helper()
 	srcDir := t.TempDir()
+
 	src, err := repo.Init(srcDir)
 	if err != nil {
 		t.Fatalf("init fixture repo: %v", err)
 	}
+
 	dotfile := filepath.Join(srcDir, ".bashrc")
 	if err := os.WriteFile(dotfile, []byte("export PATH=$PATH:~/bin\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := src.CommitFile(".bashrc", "add .bashrc"); err != nil {
 		t.Fatalf("commit fixture: %v", err)
 	}
+
 	return srcDir
 }
 
@@ -89,9 +96,11 @@ func TestRunInitLocalNewRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	if cfg.LocalDotfilesDir != repoDir {
 		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, repoDir)
 	}
+
 	if cfg.GitPushTarget != "file://"+bareDir {
 		t.Errorf("GitPushTarget = %q, want %q (file:// URL for bare repo)", cfg.GitPushTarget, "file://"+bareDir)
 	}
@@ -100,6 +109,7 @@ func TestRunInitLocalNewRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading state: %v", err)
 	}
+
 	if state.LastCommit == "" {
 		t.Error("LastCommit should be set after init")
 	}
@@ -125,6 +135,7 @@ func TestRunInitLocalExistingRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	if cfg.LocalDotfilesDir != repoDir {
 		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, repoDir)
 	}
@@ -149,6 +160,7 @@ func TestRunInitEmptyChoiceDefaultsToLocal(t *testing.T) {
 	os.Stdout = origStdout
 
 	var buf bytes.Buffer
+
 	_, _ = io.Copy(&buf, r)
 	output := buf.String()
 
@@ -164,6 +176,7 @@ func TestRunInitEmptyChoiceDefaultsToLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	if cfg.LocalDotfilesDir != repoDir {
 		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, repoDir)
 	}
@@ -190,9 +203,11 @@ func TestRunInitLocalRelativePathConfirmed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	if cfg.LocalDotfilesDir != absRepoPath {
 		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, absRepoPath)
 	}
+
 	if cfg.GitPushTarget != "file://"+bareDir {
 		t.Errorf("GitPushTarget = %q, want %q (file:// URL for bare repo)", cfg.GitPushTarget, "file://"+bareDir)
 	}
@@ -207,6 +222,7 @@ func TestRunInitLocalRelativePathRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when user rejects relative path, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "aborted") {
 		t.Errorf("error = %q, want it to contain 'aborted'", err.Error())
 	}
@@ -229,10 +245,12 @@ func TestRunInitPushTargetRelativePathConfirmed(t *testing.T) {
 	}
 
 	absBareDir := filepath.Join(workDir, "bare")
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	if cfg.GitPushTarget != "file://"+absBareDir {
 		t.Errorf("GitPushTarget = %q, want %q", cfg.GitPushTarget, "file://"+absBareDir)
 	}
@@ -253,6 +271,7 @@ func TestRunInitLocalRelativePathConfirmedWithYes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	wantDir := filepath.Join(workDir, "dotfiles")
 	if cfg.LocalDotfilesDir != wantDir {
 		t.Errorf("LocalDotfilesDir = %q, want %q", cfg.LocalDotfilesDir, wantDir)
@@ -265,10 +284,12 @@ func TestRunInitPushTargetRelativePathRejected(t *testing.T) {
 
 	// stdin: choice 1 → abs working copy → relative bare name → reject "n"
 	absWorkDir := t.TempDir()
+
 	err := runInit(strings.NewReader("1\n"+absWorkDir+"\nbare\nn\n"), cfgPath, statePath, "")
 	if err == nil {
 		t.Fatal("expected error when user rejects relative push target, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "aborted") {
 		t.Errorf("error = %q, want it to contain 'aborted'", err.Error())
 	}
@@ -285,6 +306,7 @@ func TestRunInitInvalidChoice(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid choice, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "invalid choice") {
 		t.Errorf("error = %q, want it to contain 'invalid choice'", err.Error())
 	}
@@ -297,6 +319,7 @@ func TestRunInitRemoteEmptyURL(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty remote URL, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "remote git URL cannot be empty") {
 		t.Errorf("error = %q, want it to contain 'remote git URL cannot be empty'", err.Error())
 	}
@@ -329,9 +352,11 @@ func TestRunInitRemoteClone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	if cfg.LocalDotfilesDir != cloneDir {
 		t.Errorf("RepoPath = %q, want %q", cfg.LocalDotfilesDir, cloneDir)
 	}
+
 	if cfg.GitPushTarget != srcDir {
 		t.Errorf("GitURL = %q, want %q", cfg.GitPushTarget, srcDir)
 	}
@@ -340,6 +365,7 @@ func TestRunInitRemoteClone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading state: %v", err)
 	}
+
 	if state.LastCommit == "" {
 		t.Error("LastCommit should be set after cloning")
 	}
@@ -360,6 +386,7 @@ func TestRunInitAlreadyInitialized(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on second init, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "already initialized") {
 		t.Errorf("error = %q, want it to contain 'already initialized'", err.Error())
 	}
@@ -369,6 +396,7 @@ func TestRunInitAlreadyInitialized(t *testing.T) {
 	if err2 != nil {
 		t.Fatalf("loading config: %v", err2)
 	}
+
 	if cfg.LocalDotfilesDir != repoDir {
 		t.Errorf("LocalDotfilesDir changed: got %q, want %q", cfg.LocalDotfilesDir, repoDir)
 	}
@@ -394,6 +422,7 @@ func TestRunInitLocalWithFilePushTarget(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bareDir, ".git")); err == nil {
 		t.Error("bare repo should not have a .git subdirectory")
 	}
+
 	if _, err := os.Stat(filepath.Join(bareDir, "HEAD")); err != nil {
 		t.Errorf("bare repo missing HEAD file: %v", err)
 	}
@@ -402,9 +431,11 @@ func TestRunInitLocalWithFilePushTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	if cfg.LocalDotfilesDir != workDir {
 		t.Errorf("LocalDotfilesDir = %q, want %q", cfg.LocalDotfilesDir, workDir)
 	}
+
 	if cfg.GitPushTarget != "file://"+bareDir {
 		t.Errorf("GitPushTarget = %q, want %q", cfg.GitPushTarget, "file://"+bareDir)
 	}
@@ -413,6 +444,7 @@ func TestRunInitLocalWithFilePushTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading state: %v", err)
 	}
+
 	if state.LastCommit == "" {
 		t.Error("LastCommit should be set after init")
 	}
@@ -422,6 +454,7 @@ func TestRunInitLocalWithFilePushTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening working copy: %v", err)
 	}
+
 	if got := r.RemoteURL(); got != "file://"+bareDir {
 		t.Errorf("RemoteURL = %q, want %q", got, "file://"+bareDir)
 	}
@@ -437,6 +470,7 @@ func TestRunInitLocalSamePathRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when push target == working copy, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "must differ") {
 		t.Errorf("error = %q, want it to contain 'must differ'", err.Error())
 	}
@@ -466,11 +500,13 @@ func TestLocalPathToFileURL(t *testing.T) {
 func TestIsYes(t *testing.T) {
 	yes := []string{"y", "Y", "yes", "Yes", "YES", "y\n", "yes\n", " yes "}
 	no := []string{"n", "no", "", "yep", "yeah"}
+
 	for _, s := range yes {
 		if !isYes(s) {
 			t.Errorf("isYes(%q) = false, want true", s)
 		}
 	}
+
 	for _, s := range no {
 		if isYes(s) {
 			t.Errorf("isYes(%q) = true, want false", s)
@@ -514,10 +550,12 @@ func TestBranchNameFallbackFormat(t *testing.T) {
 		for j := range b {
 			b[j] = branchNameChars[int(byte(i*j))%len(branchNameChars)]
 		}
+
 		suffix := string(b)
 		if len(suffix) != 4 {
 			t.Errorf("suffix len = %d, want 4", len(suffix))
 		}
+
 		for _, c := range suffix {
 			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
 				t.Errorf("suffix %q contains non-ASCII-letter character %q", suffix, c)
@@ -532,6 +570,7 @@ func TestExpandAndValidate(t *testing.T) {
 	// Resolve symlinks so that filepath.Rel works correctly on macOS where
 	// t.TempDir() returns a /var/... symlink to /private/var/...
 	rawHome := t.TempDir()
+
 	homeDir, err := filepath.EvalSymlinks(rawHome)
 	if err != nil {
 		t.Fatal(err)
@@ -545,6 +584,7 @@ func TestExpandAndValidate(t *testing.T) {
 
 	// Create a real file outside homeDir for the rejection cases.
 	outsideDir := t.TempDir()
+
 	outsideFile := filepath.Join(outsideDir, "outside.txt")
 	if err := os.WriteFile(outsideFile, []byte("outside\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -561,13 +601,16 @@ func TestExpandAndValidate(t *testing.T) {
 	if err := os.Mkdir(lockedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	noAccessFile := filepath.Join(lockedDir, "secret")
 	if err := os.WriteFile(noAccessFile, []byte("secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.Chmod(lockedDir, 0o000); err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) }) //nolint:gosec // restoring test directory to readable state
 
 	cases := []struct {
@@ -650,14 +693,18 @@ func TestExpandAndValidate(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected error, got nil")
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+
 			if expanded != tc.wantExpanded {
 				t.Errorf("expanded = %q, want %q", expanded, tc.wantExpanded)
 			}
+
 			if tilde != tc.wantTilde {
 				t.Errorf("tilde = %q, want %q", tilde, tc.wantTilde)
 			}
@@ -674,12 +721,14 @@ func TestExpandAndValidateDoesNotFollowFileSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	repoDir := t.TempDir()
 
 	repoFile := filepath.Join(repoDir, ".bashrc")
 	if err := os.WriteFile(repoFile, []byte("# config"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	homePath := filepath.Join(homeDir, ".bashrc")
 	if err := os.Symlink(repoFile, homePath); err != nil {
 		t.Fatal(err)
@@ -689,9 +738,11 @@ func TestExpandAndValidateDoesNotFollowFileSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if expanded != homePath {
 		t.Errorf("expanded = %q, want %q", expanded, homePath)
 	}
+
 	if tildeFile != "~/.bashrc" {
 		t.Errorf("tildeFile = %q, want ~/.bashrc — followed symlink into repo", tildeFile)
 	}
@@ -708,10 +759,12 @@ func TestExpandAndValidateHomeDirItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	_, _, err = expandAndValidate(homeDir, homeDir)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "home directory itself") {
 		t.Errorf("error = %q, want it to contain 'home directory itself'", err.Error())
 	}
@@ -721,30 +774,37 @@ func TestExpandAndValidatePermissionDenied(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses DAC — permission test not meaningful")
 	}
+
 	homeDir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	lockedDir := filepath.Join(homeDir, ".locked")
 	if err := os.Mkdir(lockedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	noAccess := filepath.Join(lockedDir, "secret")
 	if err := os.WriteFile(noAccess, []byte("secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.Chmod(lockedDir, 0o000); err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) }) //nolint:gosec // restoring test directory to readable state
 
 	_, _, err = expandAndValidate(noAccess, homeDir)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
+
 	if strings.Contains(err.Error(), "file not found") {
 		t.Errorf("permission error was mislabelled as 'file not found': %v", err)
 	}
+
 	if !strings.Contains(err.Error(), "cannot access") {
 		t.Errorf("expected 'cannot access' in error, got: %v", err)
 	}
@@ -760,10 +820,12 @@ func TestExpandAndValidateRelativePath(t *testing.T) {
 	// symlink but filepath.Abs resolves via the real /private/var/... path,
 	// which would cause filepath.Rel(homeDir, expanded) to mismatch.
 	rawHome := t.TempDir()
+
 	homeDir, err := filepath.EvalSymlinks(rawHome)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	realFile := filepath.Join(homeDir, ".bashrc")
 	if err := os.WriteFile(realFile, []byte("# test\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -774,18 +836,22 @@ func TestExpandAndValidateRelativePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.Chdir(homeDir); err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
 	expanded, tilde, err := expandAndValidate(".bashrc", homeDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if expanded != realFile {
 		t.Errorf("expanded = %q, want %q", expanded, realFile)
 	}
+
 	const wantTilde = "~/.bashrc"
 	if tilde != wantTilde {
 		t.Errorf("tilde = %q, want %s — relative path was not normalised to tilde form", tilde, wantTilde)
@@ -801,6 +867,7 @@ func TestEnrollRegistersFileInMainRegistry(t *testing.T) {
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
@@ -808,6 +875,7 @@ func TestEnrollRegistersFileInMainRegistry(t *testing.T) {
 
 	// Create a dotfile in a fake home dir.
 	homeDir := t.TempDir()
+
 	dotfile := filepath.Join(homeDir, ".testrc")
 	if err := os.WriteFile(dotfile, []byte("# test config\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -834,19 +902,24 @@ func TestEnrollRegistersFileInMainRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch registry: %v", err)
 	}
+
 	if regBytes == nil {
 		t.Fatal("expected managed.toml in main, got nil")
 	}
+
 	mainReg, err := config.RegistryFromBytes(regBytes)
 	if err != nil {
 		t.Fatalf("parsing main registry: %v", err)
 	}
+
 	if len(mainReg.Files) != 1 {
 		t.Fatalf("main registry Files len = %d, want 1", len(mainReg.Files))
 	}
+
 	if mainReg.Files[0].Path != tildeTestRC {
 		t.Errorf("main Files[0].Path = %q, want ~/.testrc", mainReg.Files[0].Path)
 	}
+
 	if mainReg.Files[0].Hash != "" {
 		t.Errorf("main Files[0].Hash = %q, want empty", mainReg.Files[0].Hash)
 	}
@@ -856,17 +929,21 @@ func TestEnrollRegistersFileInMainRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening bare repo: %v", err)
 	}
+
 	hostFile, err := bare.ReadFileFromBranch(cfg.Branch, ".testrc")
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch on bare (hostname): %v", err)
 	}
+
 	if hostFile == nil {
 		t.Error("hostname branch not pushed to bare remote")
 	}
+
 	mainReg2, err := bare.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch on bare (main registry): %v", err)
 	}
+
 	if mainReg2 == nil {
 		t.Error("main registry not pushed to bare remote")
 	}
@@ -892,12 +969,14 @@ func TestApplyEnrollPreservesConcurrentWarning(t *testing.T) {
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
 
 	homeDir := t.TempDir()
+
 	dotfile := filepath.Join(homeDir, ".testrc")
 	if err := os.WriteFile(dotfile, []byte("# test config\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -907,45 +986,59 @@ func TestApplyEnrollPreservesConcurrentWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expandAndValidate: %v", err)
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		t.Fatalf("opening repo: %v", err)
 	}
+
 	if err := ensureOnMachineBranch(r, cfg); err != nil {
 		t.Fatalf("ensureOnMachineBranch: %v", err)
 	}
+
 	repoFilePath, err := link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 	if err != nil {
 		t.Fatalf("RepoPathForHome: %v", err)
 	}
+
 	relName := mustRel(t, cfg.LocalDotfilesDir, repoFilePath)
 
 	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	var appended int
+
+	var (
+		wg       sync.WaitGroup
+		appended int
+	)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+
 		for i := 0; ; i++ {
 			select {
 			case <-stop:
 				return
 			default:
 			}
-			if err := config.UpdateState(statePath, func(s *config.State) error {
+
+			err := config.UpdateState(statePath, func(s *config.State) error {
 				s.PendingWarnings = append(s.PendingWarnings, fmt.Sprintf("warning-%d", i))
 				return nil
-			}); err != nil {
+			})
+			if err != nil {
 				t.Errorf("UpdateState: %v", err)
 				return
 			}
+
 			appended = i + 1
 		}
 	}()
 
 	err = applyEnroll(r, expanded, tildeFile, relName, dotfile, homeDir, cfg, statePath)
+
 	close(stop)
 	wg.Wait()
+
 	if err != nil {
 		t.Fatalf("applyEnroll: %v", err)
 	}
@@ -954,13 +1047,16 @@ func TestApplyEnrollPreservesConcurrentWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
+
 	headSHA, err := r.HeadSHA()
 	if err != nil {
 		t.Fatalf("getting head SHA: %v", err)
 	}
+
 	if state.LastCommit != headSHA {
 		t.Errorf("state.LastCommit = %q, want %q", state.LastCommit, headSHA)
 	}
+
 	if len(state.PendingWarnings) != appended {
 		t.Errorf("PendingWarnings len = %d, want %d — a concurrent warning was lost", len(state.PendingWarnings), appended)
 	}
@@ -978,6 +1074,7 @@ func TestRunLinkHermetic(t *testing.T) {
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
@@ -987,10 +1084,12 @@ func TestRunLinkHermetic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	dotfile := filepath.Join(homeDir, ".testrc")
 	if err := os.WriteFile(dotfile, []byte("config\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
 		t.Fatalf("runEnroll: %v", err)
 	}
@@ -1008,6 +1107,7 @@ func TestRunLinkHermetic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lstat after runLink: %v", err)
 	}
+
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Error("expected dotfile to be a symlink after runLink")
 	}
@@ -1024,12 +1124,14 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
 
 	homeDir := t.TempDir()
+
 	dotfile := filepath.Join(homeDir, ".testrc")
 	if err := os.WriteFile(dotfile, []byte("config\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1043,6 +1145,7 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening repo: %v", err)
 	}
+
 	countBefore, err := r.CommitCount()
 	if err != nil {
 		t.Fatalf("CommitCount before: %v", err)
@@ -1057,12 +1160,15 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 
 	_ = pw.Close()
 	os.Stdout = origStdout
+
 	var buf bytes.Buffer
+
 	_, _ = io.Copy(&buf, pr)
 
 	if err != nil {
 		t.Fatalf("second runEnroll: %v", err)
 	}
+
 	if !strings.Contains(buf.String(), "already managed and unchanged") {
 		t.Errorf("stdout %q should contain 'already managed and unchanged'", buf.String())
 	}
@@ -1071,6 +1177,7 @@ func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitCount after: %v", err)
 	}
+
 	if countAfter != countBefore {
 		t.Errorf("commit count went from %d to %d — empty commit was created", countBefore, countAfter)
 	}
@@ -1083,11 +1190,16 @@ func captureStdout(f func()) string {
 	origStdout := os.Stdout
 	pr, pw, _ := os.Pipe()
 	os.Stdout = pw
+
 	f()
+
 	_ = pw.Close()
 	os.Stdout = origStdout
+
 	var buf bytes.Buffer
+
 	_, _ = io.Copy(&buf, pr)
+
 	return buf.String()
 }
 
@@ -1097,25 +1209,31 @@ func setupEnrolledFile(t *testing.T, initialContent string) (*config.Config, str
 	t.Helper()
 	workDir := t.TempDir()
 	bareDir := t.TempDir()
+
 	cfgPath, statePath := initPaths(t)
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}
+
 	homeDir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	dotfile := filepath.Join(homeDir, ".testrc")
 	if err := os.WriteFile(dotfile, []byte(initialContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
 		t.Fatalf("first runEnroll: %v", err)
 	}
+
 	return cfg, statePath, homeDir
 }
 
@@ -1125,12 +1243,14 @@ func TestEnrollShowsDiffForChangedFile(t *testing.T) {
 	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
 
 	dotfile := filepath.Join(homeDir, ".testrc")
-	if err := os.WriteFile(dotfile, []byte("original line\nnew line\n"), 0o644); err != nil {
+	err := os.WriteFile(dotfile, []byte("original line\nnew line\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	out := captureStdout(func() {
-		if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+		err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true)
+		if err != nil {
 			t.Errorf("runEnroll after change: %v", err)
 		}
 	})
@@ -1138,6 +1258,7 @@ func TestEnrollShowsDiffForChangedFile(t *testing.T) {
 	if !strings.Contains(out, "+new line") {
 		t.Errorf("expected diff to contain '+new line', got:\n%s", out)
 	}
+
 	if !strings.Contains(out, "changes to") {
 		t.Errorf("expected diff header 'changes to', got:\n%s", out)
 	}
@@ -1152,6 +1273,7 @@ func TestEnrollAbortWhenUserDeclinesPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening repo: %v", err)
 	}
+
 	countBefore, err := r.CommitCount()
 	if err != nil {
 		t.Fatalf("CommitCount before: %v", err)
@@ -1165,9 +1287,11 @@ func TestEnrollAbortWhenUserDeclinesPrompt(t *testing.T) {
 	captureStdout(func() {
 		err = runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader("n\n"), false)
 	})
+
 	if err == nil {
 		t.Fatal("expected error after declining prompt, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "aborted") {
 		t.Errorf("error = %q, want it to contain 'aborted'", err.Error())
 	}
@@ -1176,6 +1300,7 @@ func TestEnrollAbortWhenUserDeclinesPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitCount after: %v", err)
 	}
+
 	if countAfter != countBefore {
 		t.Errorf("commit count changed from %d to %d after abort", countBefore, countAfter)
 	}
@@ -1187,12 +1312,14 @@ func TestEnrollProceedsOnDefaultPromptAnswer(t *testing.T) {
 	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
 
 	dotfile := filepath.Join(homeDir, ".testrc")
-	if err := os.WriteFile(dotfile, []byte("original line\nextra\n"), 0o644); err != nil {
+	err := os.WriteFile(dotfile, []byte("original line\nextra\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	captureStdout(func() {
-		if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader("\n"), false); err != nil {
+		err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader("\n"), false)
+		if err != nil {
 			t.Errorf("runEnroll with empty answer: %v", err)
 		}
 	})
@@ -1204,12 +1331,14 @@ func TestEnrollYesFlagSkipsPrompt(t *testing.T) {
 	cfg, statePath, homeDir := setupEnrolledFile(t, "original line\n")
 
 	dotfile := filepath.Join(homeDir, ".testrc")
-	if err := os.WriteFile(dotfile, []byte("original line\nyes-flag-line\n"), 0o644); err != nil {
+	err := os.WriteFile(dotfile, []byte("original line\nyes-flag-line\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	captureStdout(func() {
-		if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+		err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true)
+		if err != nil {
 			t.Errorf("runEnroll with yes=true: %v", err)
 		}
 	})
@@ -1222,9 +1351,11 @@ func TestCommandAliases(t *testing.T) {
 	for _, cmd := range rootCmd.Commands() {
 		aliases[cmd.Use] = cmd.Aliases
 	}
+
 	if !contains(aliases["changes-push <path>"], "enroll") {
 		t.Errorf("changes-push command missing enroll alias; got %v", aliases["changes-push <path>"])
 	}
+
 	if !contains(aliases["changes-pull"], "link") {
 		t.Errorf("changes-pull command missing link alias; got %v", aliases["changes-pull"])
 	}
@@ -1252,26 +1383,33 @@ func TestRunLinkMergePrompt(t *testing.T) {
 			if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 				t.Fatalf("InitOrOpenBare: %v", err)
 			}
+
 			bareURL := "file://" + bareDir
 
 			seedDir := t.TempDir()
+
 			seed, err := repo.Init(seedDir)
 			if err != nil {
 				t.Fatalf("seed Init: %v", err)
 			}
+
 			hdfDir := filepath.Join(seedDir, ".hdf")
 			if err := os.MkdirAll(hdfDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
+
 			if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 				t.Fatal(err)
 			}
+
 			if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
 				t.Fatalf("seed CommitFile: %v", err)
 			}
+
 			if err := seed.AddRemote("origin", bareURL); err != nil {
 				t.Fatalf("seed AddRemote: %v", err)
 			}
+
 			if err := seed.Push("main"); err != nil {
 				t.Fatalf("seed Push main: %v", err)
 			}
@@ -1286,15 +1424,18 @@ func TestRunLinkMergePrompt(t *testing.T) {
 			reg := &config.Registry{
 				Files: []config.ManagedFile{{Path: homePath}},
 			}
+
 			regBytes, err := config.RegistryToBytes(reg)
 			if err != nil {
 				t.Fatalf("RegistryToBytes: %v", err)
 			}
+
 			if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 				{RepoRelPath: managedTOMLPath, Content: regBytes},
 			}, "hdf: write registry"); err != nil {
 				t.Fatalf("CommitFilesToBranch registry: %v", err)
 			}
+
 			if err := seed.Push("main"); err != nil {
 				t.Fatalf("seed Push main (registry): %v", err)
 			}
@@ -1305,6 +1446,7 @@ func TestRunLinkMergePrompt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Clone: %v", err)
 			}
+
 			if err := r.CreateAndCheckoutBranch(branch); err != nil {
 				t.Fatalf("CreateAndCheckoutBranch: %v", err)
 			}
@@ -1316,6 +1458,7 @@ func TestRunLinkMergePrompt(t *testing.T) {
 			}, "hdf: update file on main"); err != nil {
 				t.Fatalf("CommitFilesToBranch: %v", err)
 			}
+
 			if err := seed.Push("main"); err != nil {
 				t.Fatalf("seed Push main: %v", err)
 			}
@@ -1327,8 +1470,10 @@ func TestRunLinkMergePrompt(t *testing.T) {
 			}
 
 			statePath := filepath.Join(t.TempDir(), "state.toml")
+
 			captureStdout(func() {
-				if err := runLink(homeDir, cfg, false, strings.NewReader(tc.answer), statePath); err != nil {
+				err := runLink(homeDir, cfg, false, strings.NewReader(tc.answer), statePath)
+				if err != nil {
 					t.Errorf("runLink: %v", err)
 				}
 			})
@@ -1337,6 +1482,7 @@ func TestRunLinkMergePrompt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
+
 			content, err := freshR.ReadFileFromBranch(branch, filepath.Base(homePath))
 			if err != nil {
 				t.Fatalf("ReadFileFromBranch: %v", err)
@@ -1345,6 +1491,7 @@ func TestRunLinkMergePrompt(t *testing.T) {
 			if tc.wantAccepted && string(content) != updatedByMain {
 				t.Errorf("accepted: branch file = %q, want %q", string(content), updatedByMain)
 			}
+
 			if !tc.wantAccepted && string(content) == updatedByMain {
 				t.Errorf("skipped: branch file should not have main's content")
 			}
@@ -1365,26 +1512,33 @@ func TestRunLinkMergeAcceptedWithPendingWarning(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatalf("Init seed: %v", err)
 	}
+
 	hdfDir := filepath.Join(seedDir, ".hdf")
 	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
 		t.Fatalf("seed CommitFile: %v", err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatalf("seed AddRemote: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push main: %v", err)
 	}
@@ -1394,15 +1548,18 @@ func TestRunLinkMergeAcceptedWithPendingWarning(t *testing.T) {
 	homePath := filepath.Join(homeDir, ".testrc")
 
 	reg := &config.Registry{Files: []config.ManagedFile{{Path: homePath}}}
+
 	regBytes, err := config.RegistryToBytes(reg)
 	if err != nil {
 		t.Fatalf("RegistryToBytes: %v", err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: regBytes},
 	}, "hdf: write registry"); err != nil {
 		t.Fatalf("CommitFilesToBranch registry: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push main (registry): %v", err)
 	}
@@ -1411,6 +1568,7 @@ func TestRunLinkMergeAcceptedWithPendingWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(branch); err != nil {
 		t.Fatalf("CreateAndCheckoutBranch: %v", err)
 	}
@@ -1420,6 +1578,7 @@ func TestRunLinkMergeAcceptedWithPendingWarning(t *testing.T) {
 	}, "hdf: update file on main"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push main (file): %v", err)
 	}
@@ -1442,7 +1601,8 @@ func TestRunLinkMergeAcceptedWithPendingWarning(t *testing.T) {
 	// With the stdin double-buffering bug the second "y" is silently discarded
 	// and the per-file prompt receives EOF, defaulting to "N" (no accept).
 	captureStdout(func() {
-		if err := runLink(homeDir, cfg, false, strings.NewReader("y\ny\n"), statePath); err != nil {
+		err := runLink(homeDir, cfg, false, strings.NewReader("y\ny\n"), statePath)
+		if err != nil {
 			t.Fatalf("runLink: %v", err)
 		}
 	})
@@ -1451,10 +1611,12 @@ func TestRunLinkMergeAcceptedWithPendingWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+
 	content, err := freshR.ReadFileFromBranch(branch, filepath.Base(homePath))
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch: %v", err)
 	}
+
 	if string(content) != updatedByMain {
 		t.Errorf("per-file accept did not happen: branch file = %q, want %q\n(hint: stdin double-buffering discarded the per-file accept 'y')", string(content), updatedByMain)
 	}
@@ -1465,7 +1627,9 @@ func TestRunLinkAcceptsPromotedContent(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatal(err)
@@ -1476,27 +1640,33 @@ func TestRunLinkAcceptsPromotedContent(t *testing.T) {
 	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Commit registry to main (no file content yet).
 	reg := &config.Registry{Files: []config.ManagedFile{{Path: tildeTestRC}}}
+
 	regBytes, err := config.RegistryToBytes(reg)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: regBytes},
 	}, "hdf: add registry"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.AddRemote("origin", "file://"+bareDir); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
@@ -1504,17 +1674,21 @@ func TestRunLinkAcceptsPromotedContent(t *testing.T) {
 	// Clone and create the machine branch, then commit a local version of .testrc
 	// so the machine branch diverges from main.
 	workDir := t.TempDir()
+
 	r, err := repo.Clone("file://"+bareDir, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
+
 	relPath := testRCRelPath
 	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("local content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(relPath, "machine: local version"); err != nil {
 		t.Fatal(err)
 	}
@@ -1526,6 +1700,7 @@ func TestRunLinkAcceptsPromotedContent(t *testing.T) {
 	}, "promote: add .testrc from another machine"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
@@ -1537,6 +1712,7 @@ func TestRunLinkAcceptsPromotedContent(t *testing.T) {
 	captureStdout(func() {
 		err = runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath)
 	})
+
 	if err != nil {
 		t.Fatalf("runLink: %v", err)
 	}
@@ -1545,10 +1721,12 @@ func TestRunLinkAcceptsPromotedContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repo.Open: %v", err)
 	}
+
 	got, err := freshR.ReadFileFromBranch(testBranch, relPath)
 	if err != nil {
 		t.Fatalf("ReadFileFromBranch: %v", err)
 	}
+
 	if string(got) != "main content\n" {
 		t.Errorf("machine branch content = %q, want %q", string(got), "main content\n")
 	}
@@ -1566,58 +1744,74 @@ func TestRunLinkAbortsPullOnAcceptFailure(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	hdfDir := filepath.Join(seedDir, ".hdf")
 	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
 		t.Fatal(err)
 	}
+
 	reg := &config.Registry{Files: []config.ManagedFile{{Path: tildeTestRC}}}
+
 	regBytes, err := config.RegistryToBytes(reg)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: regBytes},
 	}, "hdf: add registry"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.AddRemote("origin", "file://"+bareDir); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	workDir := t.TempDir()
+
 	r, err := repo.Clone("file://"+bareDir, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
+
 	relPath := testRCRelPath
 	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("local content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(relPath, "machine: local version"); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: relPath, Content: []byte("main content\n")},
 	}, "promote: add .testrc"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
@@ -1628,15 +1822,18 @@ func TestRunLinkAbortsPullOnAcceptFailure(t *testing.T) {
 
 	// Make the existing .testrc file read-only so os.WriteFile inside
 	// acceptPromotedFile fails with "permission denied".
-	if err := os.Chmod(filepath.Join(workDir, relPath), 0o400); err != nil { //nolint:gosec
+	if err := os.Chmod(filepath.Join(workDir, relPath), 0o400); err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(workDir, relPath), 0o600) })
 
 	var capturedErr error
+
 	captureStdout(func() {
 		capturedErr = runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath)
 	})
+
 	if capturedErr == nil {
 		t.Fatal("runLink should return an error when acceptPromotedFile fails, got nil")
 	}
@@ -1657,13 +1854,16 @@ func TestRunInitLocalAddRemoteErrorPropagated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pre-init: %v", err)
 	}
+
 	seedFile := filepath.Join(repoDir, "seed.txt")
 	if err := os.WriteFile(seedFile, []byte("seed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile("seed.txt", "initial"); err != nil {
 		t.Fatalf("seed commit: %v", err)
 	}
+
 	if err := r.AddRemote("origin", "https://example.com/old.git"); err != nil {
 		t.Fatalf("pre-add remote: %v", err)
 	}
@@ -1671,6 +1871,7 @@ func TestRunInitLocalAddRemoteErrorPropagated(t *testing.T) {
 	// Provide a *different* HTTPS push URL so isRemoteURL returns true and the
 	// code calls r.AddRemote, which returns "already points to a different URL".
 	stdin := "1\n" + repoDir + "\nhttps://example.com/new.git\n"
+
 	err = runInit(strings.NewReader(stdin), cfgPath, statePath, "")
 	if err == nil {
 		t.Fatal("expected error when origin already points to a different URL, got nil")
@@ -1683,6 +1884,7 @@ func contains(slice []string, s string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -1691,31 +1893,39 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatalf("seed Init: %v", err)
 	}
+
 	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
 		t.Fatalf("seed CommitFile: %v", err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatalf("seed AddRemote: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
 
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatalf("CreateAndCheckoutBranch: %v", err)
 	}
@@ -1728,6 +1938,7 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("real content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(relPath, "machine: add dotfile"); err != nil {
 		t.Fatalf("CommitFile machine: %v", err)
 	}
@@ -1741,11 +1952,13 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegistryToBytes: %v", err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: ".hdf/managed.toml", Content: regToml},
 	}, "hdf: register baseline"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
@@ -1758,14 +1971,19 @@ func TestFetchAndShowIncoming_SkipsEnrollmentPlaceholder(t *testing.T) {
 		LocalDotfilesDir: workDir,
 	}
 
-	var anyIncoming bool
-	var callErr error
+	var (
+		anyIncoming bool
+		callErr     error
+	)
+
 	captureStdout(func() {
 		anyIncoming, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir, bufio.NewReader(strings.NewReader("")))
 	})
+
 	if callErr != nil {
 		t.Fatalf("fetchAndShowIncoming: %v", callErr)
 	}
+
 	if anyIncoming {
 		t.Error("want anyIncoming=false (file enrolled but not yet promoted — no blob in main), got true")
 	}
@@ -1783,21 +2001,27 @@ func TestAcceptPromotedFileRollsBackOnStageFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := config.SaveRegistry(workDir, &config.Registry{}); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.StageFile(".hdf/managed.toml"); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitStaged("init registry"); err != nil {
 		t.Fatal(err)
 	}
@@ -1819,10 +2043,12 @@ func TestAcceptPromotedFileRollsBackOnStageFailure(t *testing.T) {
 	if acceptErr == nil {
 		t.Fatal("expected error from acceptPromotedFile when index locked, got nil")
 	}
+
 	clean, cleanErr := r.IsCleanForPromote()
 	if cleanErr != nil {
 		t.Fatalf("IsCleanForPromote: %v", cleanErr)
 	}
+
 	if !clean {
 		t.Error("want clean repo after acceptPromotedFile rollback, got dirty — rollback missing")
 	}
@@ -1836,31 +2062,39 @@ func TestFetchAndShowIncoming_EOFAborts(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatalf("seed Init: %v", err)
 	}
+
 	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
 		t.Fatalf("seed CommitFile: %v", err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatalf("seed AddRemote: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
 
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatalf("CreateAndCheckoutBranch: %v", err)
 	}
@@ -1873,6 +2107,7 @@ func TestFetchAndShowIncoming_EOFAborts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("machine content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(relPath, "machine: add dotfile"); err != nil {
 		t.Fatalf("CommitFile machine: %v", err)
 	}
@@ -1883,6 +2118,7 @@ func TestFetchAndShowIncoming_EOFAborts(t *testing.T) {
 	}, "main: add dotfile"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
@@ -1892,9 +2128,11 @@ func TestFetchAndShowIncoming_EOFAborts(t *testing.T) {
 
 	// Empty reader — simulates closed stdin.
 	var callErr error
+
 	captureStdout(func() {
 		_, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir, bufio.NewReader(strings.NewReader("")))
 	})
+
 	if callErr == nil {
 		t.Error("expected error when stdin is closed during prompt, got nil")
 	}
@@ -1922,21 +2160,25 @@ func TestRootCmdSilenceUsage(t *testing.T) {
 // changes-push returns a clear error rather than a generic "is a directory" OS error.
 func TestRunEnrollDirectoryReturnsError(t *testing.T) {
 	homeDir := t.TempDir()
+
 	dirPath := filepath.Join(homeDir, ".config", "nvim")
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	workDir := t.TempDir()
+
 	r, err := repo.Init(workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: []byte{}},
 	}, "hdf: init"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
@@ -1960,6 +2202,7 @@ func TestRunEnrollDirectoryReturnsError(t *testing.T) {
 func TestRunInitLocalSymlinkPushTargetRejected(t *testing.T) {
 	// Create a real directory for the working copy and a symlink alias for it.
 	realDir := t.TempDir()
+
 	symlinkPath := filepath.Join(t.TempDir(), "repo-link")
 	if err := os.Symlink(realDir, symlinkPath); err != nil {
 		t.Skip("symlinks not supported:", err)
@@ -1971,6 +2214,7 @@ func TestRunInitLocalSymlinkPushTargetRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when push target symlinks to working copy, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "must differ") {
 		t.Errorf("error = %q, want it to contain 'must differ'", err.Error())
 	}
@@ -1986,17 +2230,21 @@ func TestRunLinkLocalOnlySkipsFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	homeDotfile := filepath.Join(homeDir, ".testrc")
 	if err := os.WriteFile(homeDotfile, []byte("export PS1='$ '\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	relPath := filepath.Base(homeDotfile)
 	if err := os.WriteFile(filepath.Join(workDir, relPath), []byte("export PS1='$ '\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(relPath, "add .testrc"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
@@ -2027,10 +2275,12 @@ func TestRunPromoteFastForwards(t *testing.T) {
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		t.Fatal(err)
@@ -2041,6 +2291,7 @@ func TestRunPromoteFastForwards(t *testing.T) {
 	if err := os.WriteFile(dotfile, []byte("content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	machineSHA, err := r.CommitFile("dot.txt", "machine: add dot.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -2055,6 +2306,7 @@ func TestRunPromoteFastForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BranchSHA main: %v", err)
 	}
+
 	if mainSHA != machineSHA {
 		t.Errorf("main SHA = %s, want %s (machine branch SHA)", mainSHA, machineSHA)
 	}
@@ -2070,6 +2322,7 @@ func TestRunPromoteDirtyReturnsError(t *testing.T) {
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -2085,6 +2338,7 @@ func TestRunPromoteDirtyReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for dirty worktree, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "uncommitted") {
 		t.Errorf("error = %q, want mention of 'uncommitted'", err.Error())
 	}
@@ -2096,29 +2350,37 @@ func TestPromoteRefusesWhenIncomingUnreviewed(t *testing.T) {
 	// Node A: init with bare, enroll .testrc, promote.
 	workDirA := filepath.Join(t.TempDir(), "dotfilesA")
 	cfgPathA, statePathA := initPaths(t)
+
 	homeA, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Setenv("HDF_BRANCH", "node-a")
+
 	if err := runInit(strings.NewReader(localInitStdin(workDirA, bareDir)), cfgPathA, statePathA, ""); err != nil {
 		t.Fatalf("A runInit: %v", err)
 	}
+
 	cfgA, err := config.Load(cfgPathA)
 	if err != nil {
 		t.Fatalf("A Load: %v", err)
 	}
+
 	dotfileA := filepath.Join(homeA, ".testrc")
 	if err := os.WriteFile(dotfileA, []byte("A-content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	captureStdout(func() {
-		if err := runEnroll(tildeTestRC, homeA, cfgA, statePathA, strings.NewReader(""), true); err != nil {
+		err := runEnroll(tildeTestRC, homeA, cfgA, statePathA, strings.NewReader(""), true)
+		if err != nil {
 			t.Fatalf("A runEnroll: %v", err)
 		}
 	})
 	captureStdout(func() {
-		if err := runPromote(cfgA, homeA, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml")); err != nil {
+		err := runPromote(cfgA, homeA, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
+		if err != nil {
 			t.Fatalf("A runPromote: %v", err)
 		}
 	})
@@ -2126,18 +2388,23 @@ func TestPromoteRefusesWhenIncomingUnreviewed(t *testing.T) {
 	// Node B: fresh local repo connected to same bare, different branch.
 	workDirB := filepath.Join(t.TempDir(), "dotfilesB")
 	cfgPathB, statePathB := initPaths(t)
+
 	homeB, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Setenv("HDF_BRANCH", "node-b")
+
 	if err := runInit(strings.NewReader(localInitStdin(workDirB, bareDir)), cfgPathB, statePathB, ""); err != nil {
 		t.Fatalf("B runInit: %v", err)
 	}
+
 	cfgB, err := config.Load(cfgPathB)
 	if err != nil {
 		t.Fatalf("B Load: %v", err)
 	}
+
 	_ = statePathB
 
 	// B tries to promote without pulling A's .testrc — Guard 2 should refuse.
@@ -2145,6 +2412,7 @@ func TestPromoteRefusesWhenIncomingUnreviewed(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from B promoting without pulling, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "changes you haven't reviewed") {
 		t.Errorf("error = %q, want mention of 'changes you haven't reviewed'", err.Error())
 	}
@@ -2163,19 +2431,23 @@ func TestPromoteAllowsWhenVariantFileAlreadyOnBranch(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	const testBranch = "test-variant-machine"
+
 	variantRepoPath := ".testrc.test-variant-machine"
 
 	// Seed: initial main has ONLY the registry (no file content yet).
 	// The canonical ".testrc" path is added to main AFTER the machine branch is
 	// created — this ensures the branch does not inherit it from the initial clone.
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	reg := &config.Registry{
 		Files: []config.ManagedFile{{
 			Path: tildeTestRC,
@@ -2186,6 +2458,7 @@ func TestPromoteAllowsWhenVariantFileAlreadyOnBranch(t *testing.T) {
 			}},
 		}},
 	}
+
 	regBytes, err := config.RegistryToBytes(reg)
 	if err != nil {
 		t.Fatal(err)
@@ -2196,9 +2469,11 @@ func TestPromoteAllowsWhenVariantFileAlreadyOnBranch(t *testing.T) {
 	}, "setup: registry only"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
@@ -2206,19 +2481,24 @@ func TestPromoteAllowsWhenVariantFileAlreadyOnBranch(t *testing.T) {
 	// Clone (before canonical ".testrc" exists on main) and set up machine branch
 	// with the variant file at its variant-specific path.
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(workDir, variantRepoPath), []byte("variant-content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(variantRepoPath, "machine: add variant file"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.Push(testBranch); err != nil {
 		t.Fatal(err)
 	}
@@ -2232,16 +2512,20 @@ func TestPromoteAllowsWhenVariantFileAlreadyOnBranch(t *testing.T) {
 	}, "another machine promotes .testrc"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	homeDir := t.TempDir()
 	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
+
 	var capturedErr error
+
 	captureStdout(func() {
 		capturedErr = runPromote(cfg, homeDir, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	})
+
 	if capturedErr != nil {
 		t.Fatalf("runPromote failed (Guard 2 falsely blocked?): %v", capturedErr)
 	}
@@ -2253,10 +2537,12 @@ func TestPromoteRefusesWithNoRemote(t *testing.T) {
 		LocalDotfilesDir: t.TempDir(),
 		Branch:           "test-machine",
 	}
+
 	err := runPromote(cfg, t.TempDir(), strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	if err == nil {
 		t.Fatal("expected error from promote with no remote, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "no remote configured") {
 		t.Errorf("error = %q, want mention of 'no remote configured'", err.Error())
 	}
@@ -2271,42 +2557,52 @@ func TestAcceptedFileUpdatesLocalRegistry(t *testing.T) {
 	const branch = "test-host"
 	// Deliberately wrong/stale value in main's registry entry.
 	const knownHash = "deadbeef"
+
 	wantHash := link.HashBytes([]byte("from-main\n"))
 
 	bareDir := t.TempDir()
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatalf("Init seed: %v", err)
 	}
+
 	hdfDir := filepath.Join(seedDir, ".hdf")
 	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
 		t.Fatalf("seed CommitFile: %v", err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatalf("seed AddRemote: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
 
 	// Clone before main gets the file so the machine branch starts without it.
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(branch); err != nil {
 		t.Fatalf("CreateAndCheckoutBranch: %v", err)
 	}
@@ -2316,16 +2612,19 @@ func TestAcceptedFileUpdatesLocalRegistry(t *testing.T) {
 
 	// Push the enrolled file to main after the machine branch was created.
 	remoteReg := &config.Registry{Files: []config.ManagedFile{{Path: homePath, Hash: knownHash}}}
+
 	regBytes, err := config.RegistryToBytes(remoteReg)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: regBytes},
 		{RepoRelPath: ".foorc", Content: []byte("from-main\n")},
 	}, "hdf: enroll .foorc from another machine"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
@@ -2334,7 +2633,8 @@ func TestAcceptedFileUpdatesLocalRegistry(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.toml")
 
 	captureStdout(func() {
-		if err := runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath); err != nil {
+		err := runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath)
+		if err != nil {
 			t.Errorf("runLink: %v", err)
 		}
 	})
@@ -2343,15 +2643,19 @@ func TestAcceptedFileUpdatesLocalRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRegistry after accept: %v", err)
 	}
+
 	var found bool
+
 	for _, f := range localReg.Files {
 		if f.Path == homePath {
 			found = true
+
 			if f.Hash != wantHash {
 				t.Errorf("registry hash = %q, want hash of accepted bytes %q", f.Hash, wantHash)
 			}
 		}
 	}
+
 	if !found {
 		t.Errorf("accepted file %q not found in local registry", homePath)
 	}
@@ -2368,36 +2672,45 @@ func TestRunLinkSymlinksNewlyAcceptedFile(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatalf("Init seed: %v", err)
 	}
+
 	hdfDir := filepath.Join(seedDir, ".hdf")
 	if err := os.MkdirAll(hdfDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(hdfDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".hdf/.gitkeep", "hdf: initial"); err != nil {
 		t.Fatalf("seed CommitFile: %v", err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatalf("seed AddRemote: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
 
 	// Clone BEFORE main gets the file so local registry starts empty.
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(branch); err != nil {
 		t.Fatalf("CreateAndCheckoutBranch: %v", err)
 	}
@@ -2407,16 +2720,19 @@ func TestRunLinkSymlinksNewlyAcceptedFile(t *testing.T) {
 
 	// Push the enrolled file to main after the clone.
 	remoteReg := &config.Registry{Files: []config.ManagedFile{{Path: homePath, Hash: "abc"}}}
+
 	regBytes, err := config.RegistryToBytes(remoteReg)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: regBytes},
 		{RepoRelPath: ".barrc", Content: []byte("bar-content\n")},
 	}, "hdf: enroll .barrc from another machine"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
@@ -2425,7 +2741,8 @@ func TestRunLinkSymlinksNewlyAcceptedFile(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.toml")
 
 	captureStdout(func() {
-		if err := runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath); err != nil {
+		err := runLink(homeDir, cfg, false, strings.NewReader("y\n"), statePath)
+		if err != nil {
 			t.Errorf("runLink: %v", err)
 		}
 	})
@@ -2435,6 +2752,7 @@ func TestRunLinkSymlinksNewlyAcceptedFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lstat %s: %v — symlink should exist after accepting", homePath, err)
 	}
+
 	if fi.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("expected %s to be a symlink, got mode %v", homePath, fi.Mode())
 	}
@@ -2449,37 +2767,47 @@ func TestFetchAndShowIncoming_ShowsEmptyPromotedFile(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatalf("seed Init: %v", err)
 	}
+
 	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
 		t.Fatalf("seed CommitFile: %v", err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatalf("seed AddRemote: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
 
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatalf("CreateAndCheckoutBranch: %v", err)
 	}
 
 	homeDir := t.TempDir()
+
 	const emptyFile = ".hushlogin"
+
 	relPath := emptyFile
 
 	// Main advances: an empty blob for .hushlogin (simulating a promote of an
@@ -2489,6 +2817,7 @@ func TestFetchAndShowIncoming_ShowsEmptyPromotedFile(t *testing.T) {
 	}, "hdf: promote empty file"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
@@ -2502,14 +2831,19 @@ func TestFetchAndShowIncoming_ShowsEmptyPromotedFile(t *testing.T) {
 		LocalDotfilesDir: workDir,
 	}
 
-	var anyIncoming bool
-	var callErr error
+	var (
+		anyIncoming bool
+		callErr     error
+	)
+
 	captureStdout(func() {
 		anyIncoming, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir, bufio.NewReader(strings.NewReader("n\n")))
 	})
+
 	if callErr != nil {
 		t.Fatalf("fetchAndShowIncoming: %v", callErr)
 	}
+
 	if !anyIncoming {
 		t.Error("want anyIncoming=true for promoted empty file, got false")
 	}
@@ -2525,29 +2859,37 @@ func TestPromoteGuard2FiresForEmptyPromotedFile(t *testing.T) {
 	// Node A: init, enroll empty .hushlogin, promote.
 	workDirA := filepath.Join(t.TempDir(), "dotfilesA")
 	cfgPathA, statePathA := initPaths(t)
+
 	homeA, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Setenv("HDF_BRANCH", "node-a")
+
 	if err := runInit(strings.NewReader(localInitStdin(workDirA, bareDir)), cfgPathA, statePathA, ""); err != nil {
 		t.Fatalf("A runInit: %v", err)
 	}
+
 	cfgA, err := config.Load(cfgPathA)
 	if err != nil {
 		t.Fatalf("A Load: %v", err)
 	}
+
 	hushloginA := filepath.Join(homeA, ".hushlogin")
 	if err := os.WriteFile(hushloginA, []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	captureStdout(func() {
-		if err := runEnroll("~/.hushlogin", homeA, cfgA, statePathA, strings.NewReader(""), true); err != nil {
+		err := runEnroll("~/.hushlogin", homeA, cfgA, statePathA, strings.NewReader(""), true)
+		if err != nil {
 			t.Fatalf("A runEnroll: %v", err)
 		}
 	})
 	captureStdout(func() {
-		if err := runPromote(cfgA, homeA, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml")); err != nil {
+		err := runPromote(cfgA, homeA, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
+		if err != nil {
 			t.Fatalf("A runPromote: %v", err)
 		}
 	})
@@ -2555,18 +2897,23 @@ func TestPromoteGuard2FiresForEmptyPromotedFile(t *testing.T) {
 	// Node B: fresh local repo connected to same bare, different branch.
 	workDirB := filepath.Join(t.TempDir(), "dotfilesB")
 	cfgPathB, statePathB := initPaths(t)
+
 	homeB, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Setenv("HDF_BRANCH", "node-b")
+
 	if err := runInit(strings.NewReader(localInitStdin(workDirB, bareDir)), cfgPathB, statePathB, ""); err != nil {
 		t.Fatalf("B runInit: %v", err)
 	}
+
 	cfgB, err := config.Load(cfgPathB)
 	if err != nil {
 		t.Fatalf("B Load: %v", err)
 	}
+
 	_ = statePathB
 
 	// B tries to promote without pulling A's empty .hushlogin — Guard 2 must refuse.
@@ -2574,6 +2921,7 @@ func TestPromoteGuard2FiresForEmptyPromotedFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected Guard 2 to block promote for empty promoted file, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "changes you haven't reviewed") {
 		t.Errorf("error = %q, want mention of 'changes you haven't reviewed'", err.Error())
 	}
@@ -2587,31 +2935,39 @@ func TestFetchAndShowIncoming_CorruptRemoteRegistry(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatalf("seed Init: %v", err)
 	}
+
 	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
 		t.Fatalf("seed CommitFile: %v", err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatalf("seed AddRemote: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
 
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatalf("CreateAndCheckoutBranch: %v", err)
 	}
@@ -2622,6 +2978,7 @@ func TestFetchAndShowIncoming_CorruptRemoteRegistry(t *testing.T) {
 	}, "hdf: corrupt registry"); err != nil {
 		t.Fatalf("CommitFilesToBranch: %v", err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatalf("seed Push main: %v", err)
 	}
@@ -2634,9 +2991,11 @@ func TestFetchAndShowIncoming_CorruptRemoteRegistry(t *testing.T) {
 	}
 
 	var callErr error
+
 	captureStdout(func() {
 		_, callErr = fetchAndShowIncoming(r, cfg, reg, homeDir, bufio.NewReader(strings.NewReader("")))
 	})
+
 	if callErr == nil {
 		t.Fatal("fetchAndShowIncoming: want error for corrupt remote registry, got nil")
 	}
@@ -2657,18 +3016,23 @@ func TestAcceptPromotedFileRejectsPreExistingStagedChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch("machine"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := config.SaveRegistry(workDir, &config.Registry{}); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.StageFile(".hdf/managed.toml"); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitStaged("init registry"); err != nil {
 		t.Fatal(err)
 	}
@@ -2678,12 +3042,14 @@ func TestAcceptPromotedFileRejectsPreExistingStagedChanges(t *testing.T) {
 	if err := os.WriteFile(unrelated, []byte("unrelated\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.StageFile("unrelated.txt"); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := &config.Config{Branch: "machine", LocalDotfilesDir: workDir}
 	homeDir := t.TempDir()
+
 	acceptErr := acceptPromotedFile(r, cfg, testRCRelPath, []byte("content\n"), filepath.Join(homeDir, tildeTestRC))
 	if acceptErr == nil {
 		t.Fatal("acceptPromotedFile: want error when pre-existing staged changes present, got nil")
@@ -2699,21 +3065,26 @@ const divergedMainV2 = "v2\n"
 func setupDivergedForPromote(t *testing.T) (*config.Config, string, *repo.Repo, *repo.Repo) {
 	t.Helper()
 	bareDir := t.TempDir()
+
 	bare, _, err := repo.InitOrOpenBare(bareDir)
 	if err != nil {
 		t.Fatalf("InitOrOpenBare: %v", err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	homeDir := t.TempDir()
 	homePath := filepath.Join(homeDir, testRCRelPath)
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	reg := &config.Registry{Files: []config.ManagedFile{{Path: homePath}}}
+
 	regBytes, err := config.RegistryToBytes(reg)
 	if err != nil {
 		t.Fatal(err)
@@ -2725,25 +3096,31 @@ func setupDivergedForPromote(t *testing.T) (*config.Config, string, *repo.Repo, 
 	}, "promote v1 from another machine"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Machine clones at v1 — its branch history therefore contains v1.
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(workDir, ".other"), []byte("machine-new\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".other", "machine: add .other"); err != nil {
 		t.Fatal(err)
 	}
@@ -2754,11 +3131,13 @@ func setupDivergedForPromote(t *testing.T) (*config.Config, string, *repo.Repo, 
 	}, "promote v2 from another machine"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
+
 	return cfg, homeDir, bare, seed
 }
 
@@ -2770,19 +3149,24 @@ func TestPromoteRefusesStaleOverwriteOnEOF(t *testing.T) {
 	cfg, homeDir, bare, _ := setupDivergedForPromote(t)
 
 	var err error
+
 	captureStdout(func() {
 		err = runPromote(cfg, homeDir, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	})
+
 	if err == nil {
 		t.Fatal("promote should refuse when main has unseen newer content and stdin is closed")
 	}
+
 	if !strings.Contains(err.Error(), "haven't reviewed") {
 		t.Errorf("error = %q, want mention of 'haven't reviewed'", err.Error())
 	}
+
 	got, err := bare.ReadFileFromBranch("main", testRCRelPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(got) != divergedMainV2 {
 		t.Errorf("main .testrc = %q, want v2 untouched after refusal", got)
 	}
@@ -2795,23 +3179,29 @@ func TestPromoteOverwriteDeclineKeepsMains(t *testing.T) {
 	cfg, homeDir, bare, _ := setupDivergedForPromote(t)
 
 	var err error
+
 	captureStdout(func() {
 		err = runPromote(cfg, homeDir, strings.NewReader("n\n"), filepath.Join(t.TempDir(), "state.toml"))
 	})
+
 	if err != nil {
 		t.Fatalf("runPromote with decline: %v", err)
 	}
+
 	got, err := bare.ReadFileFromBranch("main", testRCRelPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(got) != divergedMainV2 {
 		t.Errorf("main .testrc = %q, want main's v2 kept after decline", got)
 	}
+
 	got, err = bare.ReadFileFromBranch("main", ".other")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(got) != "machine-new\n" {
 		t.Errorf("main .other = %q, want machine's new file promoted", got)
 	}
@@ -2823,16 +3213,20 @@ func TestPromoteOverwriteAcceptTakesOurs(t *testing.T) {
 	cfg, homeDir, bare, _ := setupDivergedForPromote(t)
 
 	var err error
+
 	captureStdout(func() {
 		err = runPromote(cfg, homeDir, strings.NewReader("y\n"), filepath.Join(t.TempDir(), "state.toml"))
 	})
+
 	if err != nil {
 		t.Fatalf("runPromote with overwrite accept: %v", err)
 	}
+
 	got, err := bare.ReadFileFromBranch("main", testRCRelPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(got) != "v1\n" {
 		t.Errorf("main .testrc = %q, want machine's v1 after informed overwrite", got)
 	}
@@ -2845,29 +3239,37 @@ func TestPromoteOwnRePromoteNeedsNoPrompt(t *testing.T) {
 	bareDir := t.TempDir()
 	workDir := filepath.Join(t.TempDir(), "dotfiles")
 	cfgPath, statePath := initPaths(t)
+
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Setenv("HDF_BRANCH", "node-self")
+
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	dotfile := filepath.Join(home, ".testrc")
 	if err := os.WriteFile(dotfile, []byte("v1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	captureStdout(func() {
-		if err := runEnroll(tildeTestRC, home, cfg, statePath, strings.NewReader(""), true); err != nil {
+		err := runEnroll(tildeTestRC, home, cfg, statePath, strings.NewReader(""), true)
+		if err != nil {
 			t.Fatalf("runEnroll v1: %v", err)
 		}
 	})
 	captureStdout(func() {
-		if err := runPromote(cfg, home, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml")); err != nil {
+		err := runPromote(cfg, home, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
+		if err != nil {
 			t.Fatalf("first runPromote: %v", err)
 		}
 	})
@@ -2877,14 +3279,17 @@ func TestPromoteOwnRePromoteNeedsNoPrompt(t *testing.T) {
 	if err := os.WriteFile(dotfile, []byte("v2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	captureStdout(func() {
-		if err := runEnroll(tildeTestRC, home, cfg, statePath, strings.NewReader(""), true); err != nil {
+		err := runEnroll(tildeTestRC, home, cfg, statePath, strings.NewReader(""), true)
+		if err != nil {
 			t.Fatalf("runEnroll v2: %v", err)
 		}
 	})
 	captureStdout(func() {
 		err = runPromote(cfg, home, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	})
+
 	if err != nil {
 		t.Fatalf("re-promote of own edit must not prompt (EOF should be irrelevant): %v", err)
 	}
@@ -2899,57 +3304,70 @@ func TestPromoteProceedsPastPreservedFilesWithConsent(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatal(err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	homeDir := t.TempDir()
 	foreignHomePath := filepath.Join(homeDir, ".foreignrc")
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Machine clones before the foreign promote.
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(workDir, ".other"), []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".other", "machine: add .other"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Another machine promotes .foreignrc — registered and with content on main.
 	reg := &config.Registry{Files: []config.ManagedFile{{Path: foreignHomePath}}}
+
 	regBytes, err := config.RegistryToBytes(reg)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: regBytes},
 		{RepoRelPath: ".foreignrc", Content: []byte("foreign\n")},
 	}, "foreign promote"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
@@ -2957,9 +3375,11 @@ func TestPromoteProceedsPastPreservedFilesWithConsent(t *testing.T) {
 	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
 
 	var promoteErr error
+
 	captureStdout(func() {
 		promoteErr = runPromote(cfg, homeDir, strings.NewReader("y\n"), filepath.Join(t.TempDir(), "state.toml"))
 	})
+
 	if promoteErr != nil {
 		t.Fatalf("runPromote with consent: %v", promoteErr)
 	}
@@ -2968,17 +3388,21 @@ func TestPromoteProceedsPastPreservedFilesWithConsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	got, err := bare.ReadFileFromBranch("main", ".foreignrc")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(got) != "foreign\n" {
 		t.Errorf("main .foreignrc = %q, want foreign content preserved", got)
 	}
+
 	got, err = bare.ReadFileFromBranch("main", ".other")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(got) != "mine\n" {
 		t.Errorf("main .other = %q, want machine's file promoted", got)
 	}
@@ -2993,6 +3417,7 @@ func TestPromotePreservesForeignRegistryEntries(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatal(err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	homeDir := t.TempDir()
@@ -3000,40 +3425,49 @@ func TestPromotePreservesForeignRegistryEntries(t *testing.T) {
 	foreignPath := filepath.Join(homeDir, ".foreignrc")
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// main v1: registry with only this machine's file (enrolled, no blob).
 	regV1 := &config.Registry{Files: []config.ManagedFile{{Path: minePath}}}
+
 	regV1Bytes, err := config.RegistryToBytes(regV1)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: regV1Bytes},
 	}, "register .minerc"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Machine clones at v1 — its branch registry lists only .minerc.
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(workDir, ".minerc"), []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".minerc", "machine: add .minerc"); err != nil {
 		t.Fatal(err)
 	}
@@ -3046,24 +3480,30 @@ func TestPromotePreservesForeignRegistryEntries(t *testing.T) {
 			Branch: "other-machine", RepoPath: ".foreignrc.other-machine", Hash: "beef",
 		}}},
 	}}
+
 	regV2Bytes, err := config.RegistryToBytes(regV2)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: regV2Bytes},
 	}, "foreign machine registers .foreignrc"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
+
 	var promoteErr error
+
 	captureStdout(func() {
 		promoteErr = runPromote(cfg, homeDir, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	})
+
 	if promoteErr != nil {
 		t.Fatalf("runPromote: %v", promoteErr)
 	}
@@ -3072,29 +3512,36 @@ func TestPromotePreservesForeignRegistryEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	regBytes, err := bare.ReadFileFromBranch("main", managedTOMLPath)
 	if err != nil || regBytes == nil {
 		t.Fatalf("reading merged registry: %v", err)
 	}
+
 	merged, err := config.RegistryFromBytes(regBytes)
 	if err != nil {
 		t.Fatalf("parsing merged registry: %v", err)
 	}
+
 	var haveMine, haveForeign bool
+
 	for _, f := range merged.Files {
 		switch f.Path {
 		case minePath:
 			haveMine = true
 		case foreignPath:
 			haveForeign = true
+
 			if len(f.Variants) != 1 || f.Variants[0].Branch != "other-machine" {
 				t.Errorf("foreign entry variants = %+v, want other-machine variant preserved", f.Variants)
 			}
 		}
 	}
+
 	if !haveMine {
 		t.Error("merged registry lost this machine's .minerc entry")
 	}
+
 	if !haveForeign {
 		t.Error("merged registry lost the foreign .foreignrc entry — promote dropped another machine's enrollment")
 	}
@@ -3108,37 +3555,47 @@ func TestPushBranchesNotifiesOnSkippedMainPush(t *testing.T) {
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatal(err)
 	}
+
 	bareURL := "file://" + bareDir
 
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	workDir := t.TempDir()
+
 	r, err := repo.Clone(bareURL, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(workDir, ".mine"), []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".mine", "machine commit"); err != nil {
 		t.Fatal(err)
 	}
@@ -3154,18 +3611,23 @@ func TestPushBranchesNotifiesOnSkippedMainPush(t *testing.T) {
 	}, "another machine promotes"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := &config.Config{Branch: testBranch, LocalDotfilesDir: workDir, GitPushTarget: bareURL}
+
 	var pushErr error
+
 	out := captureStdout(func() {
 		pushErr = pushBranches(r, cfg)
 	})
+
 	if pushErr != nil {
 		t.Fatalf("pushBranches should tolerate main non-fast-forward: %v", pushErr)
 	}
+
 	if !strings.Contains(out, "main has moved") {
 		t.Errorf("stdout %q should notify the user that the main push was skipped", out)
 	}
@@ -3176,40 +3638,52 @@ func TestPushBranchesNotifiesOnSkippedMainPush(t *testing.T) {
 // previous install of this one) has already used.
 func seedBareWithBranch(t *testing.T, branch string) (bareURL string) {
 	t.Helper()
+
 	bareDir := t.TempDir()
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatal(err)
 	}
+
 	bareURL = "file://" + bareDir
 	seedDir := t.TempDir()
+
 	seed, err := repo.Init(seedDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".gitkeep", "initial"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.AddRemote("origin", bareURL); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push("main"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.CreateAndCheckoutBranch(branch); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(seedDir, ".machinerc"), []byte("existing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := seed.CommitFile(".machinerc", "machine content"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := seed.Push(branch); err != nil {
 		t.Fatal(err)
 	}
+
 	return bareURL
 }
 
@@ -3218,6 +3692,7 @@ func seedBareWithBranch(t *testing.T, branch string) (bareURL string) {
 // different machine, init creates a uniquely suffixed branch instead.
 func TestInitBranchCollisionUniqueName(t *testing.T) {
 	const shared = "shared-host"
+
 	bareURL := seedBareWithBranch(t, shared)
 	t.Setenv("HDF_BRANCH", shared)
 
@@ -3225,31 +3700,40 @@ func TestInitBranchCollisionUniqueName(t *testing.T) {
 	cloneDir := filepath.Join(t.TempDir(), "repo")
 	// choice 2 (remote clone), URL, then collision answer 2 (unique name).
 	stdin := "2\n" + bareURL + "\n2\n"
+
 	var err error
+
 	captureStdout(func() {
 		err = runInit(strings.NewReader(stdin), cfgPath, statePath, cloneDir)
 	})
+
 	if err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if cfg.Branch == shared {
 		t.Fatalf("cfg.Branch = %q — collision not avoided", cfg.Branch)
 	}
+
 	if !strings.HasPrefix(cfg.Branch, shared+"-") {
 		t.Errorf("cfg.Branch = %q, want prefix %q", cfg.Branch, shared+"-")
 	}
+
 	r, err := repo.Open(cloneDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	cur, err := r.CurrentBranch()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if cur != cfg.Branch {
 		t.Errorf("checked-out branch = %q, want %q", cur, cfg.Branch)
 	}
@@ -3260,6 +3744,7 @@ func TestInitBranchCollisionUniqueName(t *testing.T) {
 // branch at the remote's tip rather than at main.
 func TestInitBranchCollisionReuse(t *testing.T) {
 	const shared = "shared-host"
+
 	bareURL := seedBareWithBranch(t, shared)
 	t.Setenv("HDF_BRANCH", shared)
 
@@ -3267,20 +3752,26 @@ func TestInitBranchCollisionReuse(t *testing.T) {
 	cloneDir := filepath.Join(t.TempDir(), "repo")
 	// choice 2 (remote clone), URL, then collision answer 1 (reuse).
 	stdin := "2\n" + bareURL + "\n1\n"
+
 	var err error
+
 	captureStdout(func() {
 		err = runInit(strings.NewReader(stdin), cfgPath, statePath, cloneDir)
 	})
+
 	if err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if cfg.Branch != shared {
 		t.Fatalf("cfg.Branch = %q, want %q (reuse)", cfg.Branch, shared)
 	}
+
 	r, err := repo.Open(cloneDir)
 	if err != nil {
 		t.Fatal(err)
@@ -3291,6 +3782,7 @@ func TestInitBranchCollisionReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(got) != "existing\n" {
 		t.Errorf("reused branch .machinerc = %q, want previous install's content", got)
 	}
@@ -3300,36 +3792,46 @@ func TestInitBranchCollisionReuse(t *testing.T) {
 // match cfg.Branch — simulating a user who ran raw git in the dotfiles repo.
 func setupWrongBranchRepo(t *testing.T) (*config.Config, string) {
 	t.Helper()
+
 	bareDir := t.TempDir()
 	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
 		t.Fatal(err)
 	}
+
 	workDir := t.TempDir()
+
 	r, err := repo.Init(workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.AddRemote("origin", "file://"+bareDir); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.Push("main"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch("some-other-branch"); err != nil {
 		t.Fatal(err)
 	}
+
 	homeDir := t.TempDir()
 	cfg := &config.Config{
 		Branch:           "the-machine-branch",
 		LocalDotfilesDir: workDir,
 		GitPushTarget:    "file://" + bareDir,
 	}
+
 	return cfg, homeDir
 }
 
@@ -3337,10 +3839,12 @@ func setupWrongBranchRepo(t *testing.T) (*config.Config, string) {
 // that is not the configured machine branch.
 func TestPromoteRefusesWrongBranch(t *testing.T) {
 	cfg, homeDir := setupWrongBranchRepo(t)
+
 	err := runPromote(cfg, homeDir, strings.NewReader(""), filepath.Join(t.TempDir(), "state.toml"))
 	if err == nil {
 		t.Fatal("promote should refuse when HEAD is not the machine branch")
 	}
+
 	if !strings.Contains(err.Error(), "the-machine-branch") || !strings.Contains(err.Error(), "some-other-branch") {
 		t.Errorf("error should name both branches, got: %q", err.Error())
 	}
@@ -3351,13 +3855,17 @@ func TestPromoteRefusesWrongBranch(t *testing.T) {
 func TestRunLinkRefusesWrongBranch(t *testing.T) {
 	cfg, homeDir := setupWrongBranchRepo(t)
 	statePath := filepath.Join(t.TempDir(), "state.toml")
+
 	var err error
+
 	captureStdout(func() {
 		err = runLink(homeDir, cfg, false, strings.NewReader(""), statePath)
 	})
+
 	if err == nil {
 		t.Fatal("changes-pull should refuse when HEAD is not the machine branch")
 	}
+
 	if !strings.Contains(err.Error(), "the-machine-branch") {
 		t.Errorf("error should name the machine branch, got: %q", err.Error())
 	}
@@ -3368,17 +3876,22 @@ func TestRunLinkRefusesWrongBranch(t *testing.T) {
 func TestEnrollRefusesWrongBranch(t *testing.T) {
 	cfg, homeDir := setupWrongBranchRepo(t)
 	statePath := filepath.Join(t.TempDir(), "state.toml")
+
 	dotfile := filepath.Join(homeDir, ".testrc")
 	if err := os.WriteFile(dotfile, []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	var err error
+
 	captureStdout(func() {
 		err = runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true)
 	})
+
 	if err == nil {
 		t.Fatal("changes-push should refuse when HEAD is not the machine branch")
 	}
+
 	if !strings.Contains(err.Error(), "the-machine-branch") {
 		t.Errorf("error should name the machine branch, got: %q", err.Error())
 	}
@@ -3395,24 +3908,29 @@ func TestPromoteRecordsMainCommitInState(t *testing.T) {
 	if err := runInit(strings.NewReader(localInitStdin(workDir, bareDir)), cfgPath, statePath, ""); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	dotfile := filepath.Join(cfg.LocalDotfilesDir, "dot.txt")
 	if err := os.WriteFile(dotfile, []byte("content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile("dot.txt", "machine: add dot.txt"); err != nil {
 		t.Fatal(err)
 	}
 
 	captureStdout(func() {
-		if err := runPromote(cfg, t.TempDir(), strings.NewReader(""), statePath); err != nil {
+		err := runPromote(cfg, t.TempDir(), strings.NewReader(""), statePath)
+		if err != nil {
 			t.Fatalf("runPromote: %v", err)
 		}
 	})
@@ -3421,10 +3939,12 @@ func TestPromoteRecordsMainCommitInState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	state, err := config.LoadState(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if state.LastMainCommit != mainSHA {
 		t.Errorf("state.LastMainCommit = %q, want promoted main SHA %q", state.LastMainCommit, mainSHA)
 	}
@@ -3437,6 +3957,7 @@ func TestPromoteRecordsMainCommitInState(t *testing.T) {
 func TestPromoteRemembersDecline(t *testing.T) {
 	cfg, homeDir, bare, seed := setupDivergedForPromote(t)
 	statePath := filepath.Join(t.TempDir(), "state.toml")
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		t.Fatal(err)
@@ -3444,9 +3965,11 @@ func TestPromoteRemembersDecline(t *testing.T) {
 
 	// Round 1: decline the overwrite interactively; promote succeeds.
 	var promoteErr error
+
 	captureStdout(func() {
 		promoteErr = runPromote(cfg, homeDir, strings.NewReader("n\n"), statePath)
 	})
+
 	if promoteErr != nil {
 		t.Fatalf("first runPromote: %v", promoteErr)
 	}
@@ -3456,19 +3979,24 @@ func TestPromoteRemembersDecline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.LocalDotfilesDir, ".other2"), []byte("more\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".other2", "machine: add .other2"); err != nil {
 		t.Fatal(err)
 	}
+
 	captureStdout(func() {
 		promoteErr = runPromote(cfg, homeDir, strings.NewReader(""), statePath)
 	})
+
 	if promoteErr != nil {
 		t.Fatalf("second runPromote should be non-interactive after remembered decline: %v", promoteErr)
 	}
+
 	got, err := bare.ReadFileFromBranch("main", testRCRelPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(got) != divergedMainV2 {
 		t.Errorf("main .testrc = %q, want v2 preserved by remembered decline", got)
 	}
@@ -3477,27 +4005,34 @@ func TestPromoteRemembersDecline(t *testing.T) {
 	// so a closed-stdin promote must refuse again. Use a fresh clone to build
 	// v3 on top of the current bare main (the seed repo is stale by now).
 	_ = seed
+
 	fresh, err := repo.Clone(cfg.GitPushTarget, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := fresh.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: testRCRelPath, Content: []byte("v3\n")},
 	}, "another machine promotes v3"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := fresh.Push("main"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(cfg.LocalDotfilesDir, ".other3"), []byte("even more\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".other3", "machine: add .other3"); err != nil {
 		t.Fatal(err)
 	}
+
 	captureStdout(func() {
 		promoteErr = runPromote(cfg, homeDir, strings.NewReader(""), statePath)
 	})
+
 	if promoteErr == nil {
 		t.Fatal("third runPromote must refuse: main has NEW content the decline does not cover")
 	}
@@ -3509,11 +4044,16 @@ func captureStderr(f func()) string {
 	origStderr := os.Stderr
 	pr, pw, _ := os.Pipe()
 	os.Stderr = pw
+
 	f()
+
 	_ = pw.Close()
 	os.Stderr = origStderr
+
 	var buf bytes.Buffer
+
 	_, _ = io.Copy(&buf, pr)
+
 	return buf.String()
 }
 
@@ -3529,18 +4069,22 @@ func TestRunLinkSkipsVariantlessFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(workDir, ".gitkeep"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := r.CommitFile(".gitkeep", "init"); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := r.CreateAndCheckoutBranch(testBranch); err != nil {
 		t.Fatal(err)
 	}
 
 	// Registered file whose only variant belongs to a different machine.
 	homePath := filepath.Join(homeDir, ".testrc")
+
 	reg := &config.Registry{Files: []config.ManagedFile{{
 		Path: homePath,
 		Variants: []config.Variant{{
@@ -3555,9 +4099,11 @@ func TestRunLinkSkipsVariantlessFile(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.toml")
 
 	var stderr string
+
 	captureStdout(func() {
 		stderr = captureStderr(func() {
-			if err := runLink(homeDir, cfg, true, strings.NewReader(""), statePath); err != nil {
+			err := runLink(homeDir, cfg, true, strings.NewReader(""), statePath)
+			if err != nil {
 				t.Errorf("runLink must succeed and skip the variantless file, got: %v", err)
 			}
 		})
@@ -3584,12 +4130,16 @@ func TestRunLinkSkipsVariantlessFile(t *testing.T) {
 // state instead of false "CHANGED (uncommitted)" drift .
 func TestFileStatus(t *testing.T) {
 	const otherMachine = "other-machine"
+
 	homeDir := t.TempDir()
 	onDisk := filepath.Join(homeDir, ".testrc")
+
 	content := []byte("some content\n")
-	if err := os.WriteFile(onDisk, content, 0o644); err != nil {
+	err := os.WriteFile(onDisk, content, 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
+
 	contentHash := link.HashBytes(content)
 
 	cases := []struct {
@@ -3674,12 +4224,15 @@ func TestResolveRepoPathRejectsTraversal(t *testing.T) {
 			if err == nil {
 				t.Errorf("%s: want error for RepoPath %q, got path %q", tc.desc, tc.repoPath, got)
 			}
+
 			continue
 		}
+
 		if err != nil {
 			t.Errorf("%s: unexpected error: %v", tc.desc, err)
 			continue
 		}
+
 		if got != tc.wantPath {
 			t.Errorf("%s: path = %q, want %q", tc.desc, got, tc.wantPath)
 		}
@@ -3708,6 +4261,7 @@ func TestDaemonServiceCmds_DelegateToSvcFuncs(t *testing.T) {
 			if tc.viaRunDaemon {
 				origRunDaemon := runDaemon
 				defer func() { runDaemon = origRunDaemon }()
+
 				runDaemon = func(cfgPath string, run func(string) error) error { return run(cfgPath) }
 			}
 
@@ -3715,19 +4269,23 @@ func TestDaemonServiceCmds_DelegateToSvcFuncs(t *testing.T) {
 			defer func() { *tc.svcFunc = origFunc }()
 
 			var gotCfgPath string
+
 			*tc.svcFunc = func(cfgPath string) error {
 				gotCfgPath = cfgPath
 				return nil
 			}
-			if err := tc.cmd.RunE(tc.cmd, nil); err != nil {
+			err := tc.cmd.RunE(tc.cmd, nil)
+			if err != nil {
 				t.Fatalf("RunE() error = %v, want nil", err)
 			}
+
 			if gotCfgPath != config.DefaultPath() {
 				t.Errorf("cfgPath = %q, want %q", gotCfgPath, config.DefaultPath())
 			}
 
 			*tc.svcFunc = func(string) error { return errors.New("boom") }
-			if err := tc.cmd.RunE(tc.cmd, nil); err == nil {
+			err = tc.cmd.RunE(tc.cmd, nil)
+			if err == nil {
 				t.Fatal("expected error to propagate, got nil")
 			}
 		})
@@ -3741,17 +4299,23 @@ func TestDaemonStatusCmd_PrintsSvcStatus(t *testing.T) {
 	defer func() { svcStatus = origStatus }()
 
 	svcStatus = func(cfgPath string) (string, error) { return "running", nil }
+
 	var buf bytes.Buffer
 	daemonStatusCmd.SetOut(&buf)
-	if err := daemonStatusCmd.RunE(daemonStatusCmd, nil); err != nil {
+
+	err := daemonStatusCmd.RunE(daemonStatusCmd, nil)
+	if err != nil {
 		t.Fatalf("RunE() error = %v, want nil", err)
 	}
+
 	if !strings.Contains(buf.String(), "running") {
 		t.Errorf("output = %q, want it to contain %q", buf.String(), "running")
 	}
 
 	svcStatus = func(cfgPath string) (string, error) { return "", errors.New("boom") }
-	if err := daemonStatusCmd.RunE(daemonStatusCmd, nil); err == nil {
+
+	err = daemonStatusCmd.RunE(daemonStatusCmd, nil)
+	if err == nil {
 		t.Fatal("expected error to propagate, got nil")
 	}
 }
@@ -3774,16 +4338,21 @@ func TestRunDaemon(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfgPath := filepath.Join(t.TempDir(), "config.toml")
 			if tc.initialized {
-				if err := config.Save(cfgPath, &config.Config{Branch: testBranch, LocalDotfilesDir: t.TempDir()}); err != nil {
+				err := config.Save(cfgPath, &config.Config{Branch: testBranch, LocalDotfilesDir: t.TempDir()})
+				if err != nil {
 					t.Fatalf("config.Save: %v", err)
 				}
 			}
 
-			var called bool
-			var gotCfgPath string
+			var (
+				called     bool
+				gotCfgPath string
+			)
+
 			err := runDaemon(cfgPath, func(p string) error {
 				called = true
 				gotCfgPath = p
+
 				return tc.runErr
 			})
 
@@ -3791,20 +4360,26 @@ func TestRunDaemon(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected error, got nil")
 				}
+
 				if called {
 					t.Error("run func should not be called when hdf is not initialized")
 				}
+
 				return
 			}
+
 			if tc.runErr == nil && err != nil {
 				t.Fatalf("runDaemon() error = %v, want nil", err)
 			}
+
 			if tc.runErr != nil && err == nil {
 				t.Fatal("expected error from run func to propagate, got nil")
 			}
+
 			if !called {
 				t.Error("expected run func to be called when hdf is initialized")
 			}
+
 			if gotCfgPath != cfgPath {
 				t.Errorf("cfgPath passed to run = %q, want %q", gotCfgPath, cfgPath)
 			}
@@ -3824,6 +4399,7 @@ func TestHandlePanic_WritesPendingCrashAndEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
+
 	if !strings.Contains(s.PendingCrashReport, "boom") {
 		t.Errorf("PendingCrashReport = %q, want to contain %q", s.PendingCrashReport, "boom")
 	}
@@ -3832,6 +4408,7 @@ func TestHandlePanic_WritesPendingCrashAndEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("eventlog.ReadAll: %v", err)
 	}
+
 	if len(entries) != 1 || entries[0].Event != "panic" {
 		t.Errorf("entries = %+v, want one panic entry", entries)
 	}
@@ -3839,24 +4416,29 @@ func TestHandlePanic_WritesPendingCrashAndEvent(t *testing.T) {
 
 func TestRecoverPanic_RecordsCrashAndExits(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.toml")
+
 	origStatePathFn, origExit := statePathFn, cliExitFn
 	defer func() { statePathFn, cliExitFn = origStatePathFn, origExit }()
+
 	statePathFn = func() string { return statePath }
 	exitCode := -1
 	cliExitFn = func(code int) { exitCode = code }
 
 	func() {
 		defer recoverPanic()
+
 		panic("boom")
 	}()
 
 	if exitCode != 1 {
 		t.Errorf("exit code = %d, want 1", exitCode)
 	}
+
 	s, err := config.LoadState(statePath)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
+
 	if !strings.Contains(s.PendingCrashReport, "boom") {
 		t.Errorf("PendingCrashReport = %q, want to contain %q", s.PendingCrashReport, "boom")
 	}
@@ -3865,6 +4447,7 @@ func TestRecoverPanic_RecordsCrashAndExits(t *testing.T) {
 func TestRecoverPanic_NoPanicIsNoop(t *testing.T) {
 	origStatePathFn, origExit := statePathFn, cliExitFn
 	defer func() { statePathFn, cliExitFn = origStatePathFn, origExit }()
+
 	exitCalled := false
 	cliExitFn = func(int) { exitCalled = true }
 
@@ -3880,15 +4463,19 @@ func TestRecoverPanic_NoPanicIsNoop(t *testing.T) {
 func TestRunReportIssue_Success(t *testing.T) {
 	origBuild := buildReport
 	defer func() { buildReport = origBuild }()
+
 	var gotOpts report.BuildOptions
+
 	buildReport = func(opts report.BuildOptions, version string) (string, error) {
 		gotOpts = opts
 		return testReportZipPath, nil
 	}
 
-	if err := runReportIssue(report.BuildOptions{Trigger: report.TriggerManual, UserText: testReportUserText}); err != nil {
+	err := runReportIssue(report.BuildOptions{Trigger: report.TriggerManual, UserText: testReportUserText})
+	if err != nil {
 		t.Fatalf("runReportIssue: %v", err)
 	}
+
 	if gotOpts.Trigger != report.TriggerManual || gotOpts.UserText != testReportUserText {
 		t.Errorf("buildReport called with %+v", gotOpts)
 	}
@@ -3897,6 +4484,7 @@ func TestRunReportIssue_Success(t *testing.T) {
 func TestRunReportIssue_RepoTooLargeGivesFriendlyError(t *testing.T) {
 	origBuild := buildReport
 	defer func() { buildReport = origBuild }()
+
 	buildReport = func(report.BuildOptions, string) (string, error) {
 		return "", report.ErrRepoTooLarge
 	}
@@ -3916,9 +4504,11 @@ func TestReportIssueWarning_MentionsRedactionLimitsAndOptIn(t *testing.T) {
 	if !strings.Contains(msg, "redaction") || !strings.Contains(msg, "limited") {
 		t.Errorf("reportIssueWarning = %q, want it to warn that redaction is limited", reportIssueWarning)
 	}
+
 	if !strings.Contains(msg, "optional") && !strings.Contains(msg, "voluntary") {
 		t.Errorf("reportIssueWarning = %q, want it to state reporting is optional/voluntary", reportIssueWarning)
 	}
+
 	if !strings.Contains(msg, "review") {
 		t.Errorf("reportIssueWarning = %q, want it to tell the user to review the report before sharing", reportIssueWarning)
 	}
@@ -3926,7 +4516,8 @@ func TestReportIssueWarning_MentionsRedactionLimitsAndOptIn(t *testing.T) {
 
 func TestPromptPendingCrash_NoCrashIsNoop(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.toml")
-	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader(""))); err != nil {
+	err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("")))
+	if err != nil {
 		t.Fatalf("promptPendingCrash: %v", err)
 	}
 }
@@ -3936,8 +4527,10 @@ func TestPromptPendingCrash_UserDeclinesDoesNotBuildReportButClearsMarker(t *tes
 	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
 		t.Fatal(err)
 	}
+
 	origBuild := buildReport
 	defer func() { buildReport = origBuild }()
+
 	called := false
 	buildReport = func(report.BuildOptions, string) (string, error) {
 		called = true
@@ -3947,6 +4540,7 @@ func TestPromptPendingCrash_UserDeclinesDoesNotBuildReportButClearsMarker(t *tes
 	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("n\n"))); err != nil {
 		t.Fatalf("promptPendingCrash: %v", err)
 	}
+
 	if called {
 		t.Error("buildReport should not be called when the user declines")
 	}
@@ -3955,6 +4549,7 @@ func TestPromptPendingCrash_UserDeclinesDoesNotBuildReportButClearsMarker(t *tes
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
+
 	if s.PendingCrashReport != "" {
 		t.Errorf("PendingCrashReport = %q, want cleared after being surfaced once", s.PendingCrashReport)
 	}
@@ -3971,8 +4566,10 @@ func TestPromptPendingCrash_BuildFailureRestoresMarkerForRetry(t *testing.T) {
 	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
 		t.Fatal(err)
 	}
+
 	origBuild := buildReport
 	defer func() { buildReport = origBuild }()
+
 	buildReport = func(report.BuildOptions, string) (string, error) {
 		return "", report.ErrRepoTooLarge
 	}
@@ -3986,6 +4583,7 @@ func TestPromptPendingCrash_BuildFailureRestoresMarkerForRetry(t *testing.T) {
 	if loadErr != nil {
 		t.Fatalf("LoadState: %v", loadErr)
 	}
+
 	if s.PendingCrashReport != "panic: boom" {
 		t.Errorf("PendingCrashReport = %q, want restored to %q so the user can retry", s.PendingCrashReport, "panic: boom")
 	}
@@ -3993,20 +4591,26 @@ func TestPromptPendingCrash_BuildFailureRestoresMarkerForRetry(t *testing.T) {
 
 func TestPromptPendingCrash_UserAcceptsBuildsReportWithDetectedTrigger(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.toml")
-	if err := config.SetPendingCrash(statePath, "panic: boom"); err != nil {
+	err := config.SetPendingCrash(statePath, "panic: boom")
+	if err != nil {
 		t.Fatal(err)
 	}
+
 	origBuild := buildReport
 	defer func() { buildReport = origBuild }()
+
 	var gotOpts report.BuildOptions
+
 	buildReport = func(opts report.BuildOptions, version string) (string, error) {
 		gotOpts = opts
 		return testReportZipPath, nil
 	}
 
-	if err := promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("y\n"))); err != nil {
+	err = promptPendingCrash(statePath, bufio.NewReader(strings.NewReader("y\n")))
+	if err != nil {
 		t.Fatalf("promptPendingCrash: %v", err)
 	}
+
 	if gotOpts.Trigger != report.TriggerPanic || gotOpts.CrashDetail != "panic: boom" {
 		t.Errorf("buildReport called with %+v, want TriggerPanic/panic: boom", gotOpts)
 	}

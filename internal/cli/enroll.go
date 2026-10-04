@@ -52,10 +52,12 @@ func computeEnrollStart(cfgPath, homeDir, filePath string) (*EnrollStartInfo, *p
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
+
 	expanded, tildeFile, err := expandAndValidate(filePath, homeDir)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if fi, err := os.Stat(expanded); err == nil && fi.IsDir() {
 		return nil, nil, fmt.Errorf("%s is a directory; hdf only supports managing individual files", filePath)
 	}
@@ -64,13 +66,16 @@ func computeEnrollStart(cfgPath, homeDir, filePath string) (*EnrollStartInfo, *p
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening repo: %w", err)
 	}
+
 	if err := ensureOnMachineBranch(r, cfg); err != nil {
 		return nil, nil, err
 	}
+
 	ignoredPaths, err := ignoredPathsFromRemote(r)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if config.IsIgnored(tildeFile, ignoredPaths) {
 		return nil, nil, fmt.Errorf("%s matches an ignored path — edit %s on the main branch to override",
 			filePath, config.SharedSettingsFile)
@@ -80,14 +85,17 @@ func computeEnrollStart(cfgPath, homeDir, filePath string) (*EnrollStartInfo, *p
 	if err != nil {
 		return nil, nil, fmt.Errorf("computing repo path: %w", err)
 	}
+
 	relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("computing relative path: %w", err)
 	}
+
 	committedBytes, err := r.ReadFileFromBranch(cfg.Branch, filepath.ToSlash(relName))
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading committed version of %s: %w", relName, err)
 	}
+
 	diskBytes, err := os.ReadFile(expanded)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading %s: %w", expanded, err)
@@ -99,12 +107,14 @@ func computeEnrollStart(cfgPath, homeDir, filePath string) (*EnrollStartInfo, *p
 	} else {
 		info.Diff = daemon.GenerateUnifiedDiff(string(committedBytes), string(diskBytes))
 	}
+
 	pending := &pendingEnroll{
 		expanded:  expanded,
 		tildeFile: tildeFile,
 		relName:   relName,
 		filePath:  filePath,
 	}
+
 	return info, pending, nil
 }
 
@@ -125,6 +135,7 @@ func computeApplyEnroll(cfgPath, homeDir, statePath string, p pendingEnroll) (*E
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return nil, fmt.Errorf("opening repo: %w", err)
@@ -134,32 +145,42 @@ func computeApplyEnroll(cfgPath, homeDir, statePath string, p pendingEnroll) (*E
 	if err != nil {
 		return nil, fmt.Errorf("enrolling %s: %w", p.filePath, err)
 	}
+
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return nil, fmt.Errorf("loading registry: %w", err)
 	}
+
 	if registryContains(reg, p.tildeFile, hash) {
-		return &EnrollResult{Message: fmt.Sprintf("%s is already managed and unchanged", p.tildeFile)}, nil
+		return &EnrollResult{Message: p.tildeFile + " is already managed and unchanged"}, nil
 	}
+
 	upsertRegistryEntry(reg, p.tildeFile, hash)
+
 	if err := config.SaveRegistry(cfg.LocalDotfilesDir, reg); err != nil {
 		return nil, fmt.Errorf("saving registry: %w", err)
 	}
+
 	sha, err := stageAndCommit(r, p.relName, p.filePath)
 	if err != nil {
 		return nil, err
 	}
+
 	if err := updateMainRegistry(r, p.tildeFile, p.filePath); err != nil {
 		return nil, err
 	}
+
 	if err := pushBranches(r, cfg); err != nil {
 		return nil, err
 	}
+
 	if err := config.UpdateState(statePath, func(s *config.State) error {
 		s.LastCommit = sha
+
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("saving state: %w", err)
 	}
+
 	return &EnrollResult{Message: fmt.Sprintf("Enrolled %s (commit %s)", p.tildeFile, sha[:8])}, nil
 }

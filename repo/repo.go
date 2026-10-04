@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -36,6 +37,7 @@ func isNonFastForwardErr(err error) bool {
 	if err == nil {
 		return false
 	}
+
 	return errors.Is(err, git.ErrNonFastForwardUpdate) || strings.Contains(err.Error(), "non-fast-forward")
 }
 
@@ -50,9 +52,11 @@ func authForURL(rawURL string) transport.AuthMethod {
 			return auth
 		}
 	}
+
 	if token := os.Getenv("HDF_GIT_TOKEN"); token != "" {
 		return &githttp.BasicAuth{Username: "hdf", Password: token}
 	}
+
 	return nil
 }
 
@@ -62,10 +66,12 @@ func (r *Repo) RemoteURL() string {
 	if err != nil {
 		return ""
 	}
+
 	remote, ok := cfg.Remotes["origin"]
 	if !ok || len(remote.URLs) == 0 {
 		return ""
 	}
+
 	return remote.URLs[0]
 }
 
@@ -85,6 +91,7 @@ func Init(path string) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &Repo{r: r, path: path}, nil
 }
 
@@ -94,9 +101,12 @@ func InitOrOpen(path string) (*Repo, error) {
 	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		return Open(path)
 	}
-	if err := os.MkdirAll(path, 0o755); err != nil {
+
+	err := os.MkdirAll(path, 0o755)
+	if err != nil {
 		return nil, fmt.Errorf("creating repo directory: %w", err)
 	}
+
 	return Init(path)
 }
 
@@ -106,6 +116,7 @@ func Open(path string) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &Repo{r: r, path: path}, nil
 }
 
@@ -118,6 +129,7 @@ func Clone(url, path string) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &Repo{r: r, path: path}, nil
 }
 
@@ -130,6 +142,7 @@ func InitOrOpenBare(path string) (*Repo, bool, error) {
 	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		return nil, false, fmt.Errorf("repository at %s is not a bare repository; hdf requires a bare repo as push target", path)
 	}
+
 	r, err := git.PlainInitWithOptions(path, &git.PlainInitOptions{
 		Bare: true,
 		InitOptions: git.InitOptions{
@@ -139,20 +152,25 @@ func InitOrOpenBare(path string) (*Repo, bool, error) {
 	if err == nil {
 		return &Repo{r: r, path: path}, true, nil
 	}
+
 	if errors.Is(err, git.ErrRepositoryAlreadyExists) {
 		existing, openErr := git.PlainOpen(path)
 		if openErr != nil {
 			return nil, false, openErr
 		}
+
 		cfg, cfgErr := existing.Config()
 		if cfgErr != nil {
 			return nil, false, cfgErr
 		}
+
 		if !cfg.Core.IsBare {
 			return nil, false, fmt.Errorf("repository at %s is not a bare repository; hdf requires a bare repo as push target", path)
 		}
+
 		return &Repo{r: existing, path: path}, false, nil
 	}
+
 	return nil, false, err
 }
 
@@ -168,13 +186,14 @@ func (r *Repo) AddRemote(name, url string) error {
 		if remoteErr != nil {
 			return remoteErr
 		}
-		for _, u := range existing.Config().URLs {
-			if u == url {
-				return nil
-			}
+
+		if slices.Contains(existing.Config().URLs, url) {
+			return nil
 		}
+
 		return fmt.Errorf("remote %q already points to a different URL — remove it manually before running hdf init", name)
 	}
+
 	return err
 }
 
@@ -189,6 +208,7 @@ func (r *Repo) CreateAndCheckoutBranch(name string) error {
 	if err != nil {
 		return err
 	}
+
 	return w.Checkout(&git.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName(name),
 		Create: true,
@@ -201,6 +221,7 @@ func (r *Repo) CurrentBranch() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return head.Name().Short(), nil
 }
 
@@ -211,15 +232,18 @@ func (r *Repo) CommitFile(filename, message string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if _, err := w.Add(filename); err != nil {
 		return "", err
 	}
+
 	hash, err := w.Commit(message, &git.CommitOptions{
 		Author: gitAuthor(),
 	})
 	if err != nil {
 		return "", err
 	}
+
 	return hash.String(), nil
 }
 
@@ -229,7 +253,9 @@ func (r *Repo) StageFile(filename string) error {
 	if err != nil {
 		return err
 	}
+
 	_, err = w.Add(filename)
+
 	return err
 }
 
@@ -240,12 +266,14 @@ func (r *Repo) CommitStaged(message string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	hash, err := w.Commit(message, &git.CommitOptions{
 		Author: gitAuthor(),
 	})
 	if err != nil {
 		return "", err
 	}
+
 	return hash.String(), nil
 }
 
@@ -260,6 +288,7 @@ func gitAuthor() *object.Signature {
 			When:  time.Now(),
 		}
 	}
+
 	return &object.Signature{
 		Name:  "hdf",
 		Email: "hdf@localhost",
@@ -273,6 +302,7 @@ func (r *Repo) HeadSHA() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return head.Hash().String(), nil
 }
 
@@ -284,23 +314,29 @@ func (r *Repo) ReadFileFromBranch(branch, repoRelPath string) ([]byte, error) {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return nil, nil
 		}
+
 		return nil, err
 	}
+
 	commit, err := r.r.CommitObject(ref.Hash())
 	if err != nil {
 		return nil, err
 	}
+
 	file, err := commit.File(repoRelPath)
 	if err != nil {
 		if errors.Is(err, object.ErrFileNotFound) {
 			return nil, nil
 		}
+
 		return nil, err
 	}
+
 	contents, err := file.Contents()
 	if err != nil {
 		return nil, err
 	}
+
 	return []byte(contents), nil
 }
 
@@ -314,23 +350,29 @@ func (r *Repo) ReadFileFromRemoteBranch(remote, branch, repoRelPath string) ([]b
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return nil, nil
 		}
+
 		return nil, err
 	}
+
 	commit, err := r.r.CommitObject(ref.Hash())
 	if err != nil {
 		return nil, err
 	}
+
 	file, err := commit.File(repoRelPath)
 	if err != nil {
 		if errors.Is(err, object.ErrFileNotFound) {
 			return nil, nil
 		}
+
 		return nil, err
 	}
+
 	contents, err := file.Contents()
 	if err != nil {
 		return nil, err
 	}
+
 	return []byte(contents), nil
 }
 
@@ -340,17 +382,22 @@ func (r *Repo) CommitCount() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+
 	iter, err := r.r.Log(&git.LogOptions{From: head.Hash()})
 	if err != nil {
 		return 0, err
 	}
+
 	count := 0
+
 	if err := iter.ForEach(func(_ *object.Commit) error {
 		count++
+
 		return nil
 	}); err != nil {
 		return 0, err
 	}
+
 	return count, nil
 }
 
@@ -360,6 +407,7 @@ func (r *Repo) Fetch() error {
 	if errors.Is(err, git.NoErrAlreadyUpToDate) || errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return nil
 	}
+
 	return err
 }
 
@@ -375,9 +423,11 @@ func (r *Repo) Push(branch string) error {
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
 	}
+
 	if err != nil && isNonFastForwardErr(err) {
 		return fmt.Errorf("%w: %w", ErrNonFastForwardUpdate, err)
 	}
+
 	return err
 }
 
@@ -387,6 +437,7 @@ func (r *Repo) HasNewCommitsOnMain(lastCommitSHA string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	return ref.Hash().String() != lastCommitSHA, nil
 }
 
@@ -396,6 +447,7 @@ func (r *Repo) BranchSHA(branch string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return ref.Hash().String(), nil
 }
 
@@ -406,6 +458,7 @@ func (r *Repo) RemoteBranchSHA(remote, branch string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return ref.Hash().String(), nil
 }
 
@@ -415,15 +468,20 @@ func (r *Repo) LocalBranches() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var names []string
+
 	err = iter.ForEach(func(ref *plumbing.Reference) error {
 		names = append(names, ref.Name().Short())
+
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
 	sort.Strings(names)
+
 	return names, nil
 }
 
@@ -436,24 +494,32 @@ func (r *Repo) RemoteTrackingBranches(remote string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	prefix := fmt.Sprintf("refs/remotes/%s/", remote)
+
 	var names []string
+
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
 		name := string(ref.Name())
 		if !strings.HasPrefix(name, prefix) {
 			return nil
 		}
+
 		short := strings.TrimPrefix(name, prefix)
 		if short == "HEAD" {
 			return nil
 		}
+
 		names = append(names, short)
+
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
 	sort.Strings(names)
+
 	return names, nil
 }
 
@@ -464,9 +530,11 @@ func (r *Repo) RemoteHasBranch(remote, branch string) (bool, error) {
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, nil
 	}
+
 	if err != nil {
 		return false, err
 	}
+
 	return true, nil
 }
 
@@ -478,10 +546,12 @@ func (r *Repo) CheckoutTrackingBranch(branch, remote string) error {
 	if err != nil {
 		return fmt.Errorf("resolving %s/%s: %w", remote, branch, err)
 	}
+
 	w, err := r.r.Worktree()
 	if err != nil {
 		return err
 	}
+
 	return w.Checkout(&git.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName(branch),
 		Hash:   remoteRef.Hash(),
@@ -497,6 +567,7 @@ func (r *Repo) ResetBranchToRemote(branch, remote string) error {
 	if err != nil {
 		return fmt.Errorf("resolving %s/%s: %w", remote, branch, err)
 	}
+
 	return r.r.Storer.SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), remoteRef.Hash()),
 	)
@@ -509,9 +580,11 @@ func (r *Repo) SyncLocalMain(remote string) error {
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return nil
 	}
+
 	if err != nil {
 		return fmt.Errorf("resolving %s/main: %w", remote, err)
 	}
+
 	return r.r.Storer.SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), remoteRef.Hash()),
 	)
@@ -524,27 +597,34 @@ func (r *Repo) HasIncomingCommits() (bool, error) {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return false, nil
 		}
+
 		return false, fmt.Errorf("resolving origin/main: %w", err)
 	}
+
 	head, err := r.r.Head()
 	if err != nil {
 		return false, fmt.Errorf("resolving HEAD: %w", err)
 	}
+
 	if head.Hash() == remoteRef.Hash() {
 		return false, nil
 	}
+
 	headCommit, err := r.r.CommitObject(head.Hash())
 	if err != nil {
 		return false, fmt.Errorf("reading HEAD commit: %w", err)
 	}
+
 	remoteCommit, err := r.r.CommitObject(remoteRef.Hash())
 	if err != nil {
 		return false, fmt.Errorf("reading origin/main commit: %w", err)
 	}
+
 	bases, err := headCommit.MergeBase(remoteCommit)
 	if err != nil {
 		return false, fmt.Errorf("computing merge base: %w", err)
 	}
+
 	if len(bases) == 0 {
 		return true, nil
 	}
@@ -574,6 +654,7 @@ func (r *Repo) FastForwardFromMain() error {
 	if err != nil {
 		return fmt.Errorf("reading HEAD commit: %w", err)
 	}
+
 	remoteCommit, err := r.r.CommitObject(remoteRef.Hash())
 	if err != nil {
 		return fmt.Errorf("reading origin/main commit: %w", err)
@@ -583,26 +664,31 @@ func (r *Repo) FastForwardFromMain() error {
 	if err != nil {
 		return fmt.Errorf("computing merge base: %w", err)
 	}
+
 	if len(bases) == 0 {
-		return fmt.Errorf("no common ancestor between HEAD and origin/main")
+		return errors.New("no common ancestor between HEAD and origin/main")
 	}
+
 	if bases[0].Hash == remoteRef.Hash() {
 		return nil // already at or ahead of origin/main
 	}
+
 	if bases[0].Hash != head.Hash() {
-		return fmt.Errorf("cannot fast-forward: HEAD and origin/main have diverged; run 'git merge' manually")
+		return errors.New("cannot fast-forward: HEAD and origin/main have diverged; run 'git merge' manually")
 	}
 
 	w, err := r.r.Worktree()
 	if err != nil {
 		return fmt.Errorf("getting worktree: %w", err)
 	}
+
 	status, err := w.Status()
 	if err != nil {
 		return fmt.Errorf("checking worktree status: %w", err)
 	}
+
 	if !status.IsClean() {
-		return fmt.Errorf("cannot merge: uncommitted changes in your dotfiles repository — commit or stash them first")
+		return errors.New("cannot merge: uncommitted changes in your dotfiles repository — commit or stash them first")
 	}
 
 	return w.Reset(&git.ResetOptions{
@@ -618,6 +704,7 @@ func (r *Repo) UnstageAll() error {
 	if err != nil {
 		return err
 	}
+
 	return w.Reset(&git.ResetOptions{Mode: git.MixedReset})
 }
 
@@ -627,10 +714,12 @@ func (r *Repo) IsCleanForPromote() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("getting worktree: %w", err)
 	}
+
 	status, err := w.Status()
 	if err != nil {
 		return false, fmt.Errorf("checking status: %w", err)
 	}
+
 	return status.IsClean(), nil
 }
 
@@ -641,15 +730,18 @@ func (r *Repo) HasStagedChanges() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("getting worktree: %w", err)
 	}
+
 	status, err := w.Status()
 	if err != nil {
 		return false, fmt.Errorf("checking status: %w", err)
 	}
+
 	for _, s := range status {
 		if s.Staging != git.Unmodified {
 			return true, nil
 		}
 	}
+
 	return false, nil
 }
 
@@ -676,6 +768,7 @@ func (o *MergeOpts) merger(path string) ContentMerger {
 	if o == nil {
 		return nil
 	}
+
 	return o.ContentMergers[path]
 }
 
@@ -685,29 +778,36 @@ func (o *MergeOpts) merger(path string) ContentMerger {
 // opts may be nil for default ours-wins conflict resolution.
 func (r *Repo) MergeIntoBranch(targetBranch string, opts *MergeOpts) error {
 	targetRefName := plumbing.NewBranchReferenceName(targetBranch)
+
 	targetRef, err := r.r.Reference(targetRefName, true)
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", targetBranch, err)
 	}
+
 	head, err := r.r.Head()
 	if err != nil {
 		return fmt.Errorf("resolving HEAD: %w", err)
 	}
+
 	if head.Hash() == targetRef.Hash() {
 		return nil
 	}
+
 	headCommit, err := r.r.CommitObject(head.Hash())
 	if err != nil {
 		return fmt.Errorf("reading HEAD commit: %w", err)
 	}
+
 	targetCommit, err := r.r.CommitObject(targetRef.Hash())
 	if err != nil {
 		return fmt.Errorf("reading %s commit: %w", targetBranch, err)
 	}
+
 	bases, err := headCommit.MergeBase(targetCommit)
 	if err != nil {
 		return fmt.Errorf("computing merge base: %w", err)
 	}
+
 	if len(bases) == 0 {
 		return fmt.Errorf("no common ancestor between HEAD and %s", targetBranch)
 	}
@@ -725,6 +825,7 @@ func (r *Repo) MergeIntoBranch(targetBranch string, opts *MergeOpts) error {
 	if err != nil {
 		return fmt.Errorf("checking for deletions: %w", err)
 	}
+
 	if len(deleted) > 0 {
 		return fmt.Errorf(
 			"cannot promote: %s deleted file(s) that still exist on %s (%s) — run 'hdf changes-pull' first",
@@ -737,10 +838,12 @@ func (r *Repo) MergeIntoBranch(targetBranch string, opts *MergeOpts) error {
 	if err != nil {
 		return fmt.Errorf("merging trees: %w", err)
 	}
+
 	commitHash, err := writeMergeCommit(r.r, mergedTreeHash, head, targetRef, targetBranch)
 	if err != nil {
 		return err
 	}
+
 	return r.r.Storer.SetReference(plumbing.NewHashReference(targetRefName, commitHash))
 }
 
@@ -749,20 +852,25 @@ func (r *Repo) MergeIntoBranch(targetBranch string, opts *MergeOpts) error {
 // multiple bases; a deletion visible from any of them blocks the merge.
 func deletionsAcrossBases(r *git.Repository, bases []*object.Commit, headCommit, targetCommit *object.Commit) ([]string, error) {
 	deletedSet := make(map[string]struct{})
+
 	for _, base := range bases {
 		deleted, err := filesMissingFromHeadStillInTarget(r, base.TreeHash, headCommit.TreeHash, targetCommit.TreeHash)
 		if err != nil {
 			return nil, err
 		}
+
 		for _, p := range deleted {
 			deletedSet[p] = struct{}{}
 		}
 	}
+
 	deleted := make([]string, 0, len(deletedSet))
 	for p := range deletedSet {
 		deleted = append(deleted, p)
 	}
+
 	sort.Strings(deleted)
+
 	return deleted, nil
 }
 
@@ -779,14 +887,18 @@ func writeMergeCommit(r *git.Repository, treeHash plumbing.Hash, head, targetRef
 		TreeHash:     treeHash,
 		ParentHashes: []plumbing.Hash{targetRef.Hash(), head.Hash()},
 	}
+
 	obj := r.Storer.NewEncodedObject()
+
 	if err := mergeCommit.Encode(obj); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("encoding merge commit: %w", err)
 	}
+
 	commitHash, err := r.Storer.SetEncodedObject(obj)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("storing merge commit: %w", err)
 	}
+
 	return commitHash, nil
 }
 
@@ -806,6 +918,7 @@ func mergeTrees(r *git.Repository, treeA, treeB plumbing.Hash, prefix string, op
 	if treeA == treeB || treeB.IsZero() {
 		return treeA, nil
 	}
+
 	if treeA.IsZero() {
 		return treeB, nil
 	}
@@ -814,6 +927,7 @@ func mergeTrees(r *git.Repository, treeA, treeB plumbing.Hash, prefix string, op
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
+
 	b, err := r.TreeObject(treeB)
 	if err != nil {
 		return plumbing.ZeroHash, err
@@ -829,10 +943,12 @@ func mergeTrees(r *git.Repository, treeA, treeB plumbing.Hash, prefix string, op
 
 	for _, ea := range a.Entries {
 		aNames[ea.Name] = struct{}{}
+
 		entry, err := mergeEntry(r, ea, bEntries, prefix, opts)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
+
 		merged = append(merged, entry)
 	}
 
@@ -844,10 +960,13 @@ func mergeTrees(r *git.Repository, treeA, treeB plumbing.Hash, prefix string, op
 
 	sort.Sort(object.TreeEntrySorter(merged))
 	newTree := &object.Tree{Entries: merged}
+
 	obj := r.Storer.NewEncodedObject()
+
 	if err := newTree.Encode(obj); err != nil {
 		return plumbing.ZeroHash, err
 	}
+
 	return r.Storer.SetEncodedObject(obj)
 }
 
@@ -859,31 +978,41 @@ func mergeEntry(r *git.Repository, ea object.TreeEntry, bEntries map[string]obje
 	if !exists || ea.Hash == eb.Hash {
 		return ea, nil
 	}
+
 	path := ea.Name
 	if prefix != "" {
 		path = prefix + "/" + ea.Name
 	}
+
 	if merger := opts.merger(path); merger != nil && ea.Mode != filemode.Dir && eb.Mode != filemode.Dir {
 		h, err := mergeBlobContents(r, ea.Hash, eb.Hash, path, merger)
 		if err != nil {
 			return ea, err
 		}
+
 		ea.Hash = h
+
 		return ea, nil
 	}
+
 	if opts.preferTheirs(path) {
 		return eb, nil
 	}
-	if err := checkModeCompatible(ea, eb, path); err != nil {
+
+	err := checkModeCompatible(ea, eb, path)
+	if err != nil {
 		return ea, err
 	}
+
 	if ea.Mode == filemode.Dir {
 		h, err := mergeTrees(r, ea.Hash, eb.Hash, path, opts)
 		if err != nil {
 			return ea, err
 		}
+
 		ea.Hash = h
 	}
+
 	return ea, nil
 }
 
@@ -894,12 +1023,14 @@ func checkModeCompatible(ea, eb object.TreeEntry, path string) error {
 	if ea.Mode == eb.Mode {
 		return nil
 	}
+
 	isRegularOrExec := func(m filemode.FileMode) bool {
 		return m == filemode.Regular || m == filemode.Deprecated || m == filemode.Executable
 	}
 	if !isRegularOrExec(ea.Mode) || !isRegularOrExec(eb.Mode) {
 		return fmt.Errorf("entry %q has conflicting types: %s vs %s", path, ea.Mode, eb.Mode)
 	}
+
 	return nil
 }
 
@@ -910,18 +1041,22 @@ func mergeBlobContents(r *git.Repository, oursHash, theirsHash plumbing.Hash, pa
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("reading %s (ours): %w", path, err)
 	}
+
 	theirs, err := readBlob(r, theirsHash)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("reading %s (theirs): %w", path, err)
 	}
+
 	mergedBytes, err := merger(ours, theirs)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("merging %s: %w", path, err)
 	}
+
 	h, err := writeBlob(r, mergedBytes)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("writing merged %s: %w", path, err)
 	}
+
 	return h, nil
 }
 
@@ -931,11 +1066,14 @@ func readBlob(r *git.Repository, h plumbing.Hash) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	rd, err := blob.Reader()
 	if err != nil {
 		return nil, err
 	}
+
 	defer rd.Close() //nolint:errcheck
+
 	return io.ReadAll(rd)
 }
 
@@ -943,17 +1081,22 @@ func readBlob(r *git.Repository, h plumbing.Hash) ([]byte, error) {
 func writeBlob(r *git.Repository, content []byte) (plumbing.Hash, error) {
 	obj := r.Storer.NewEncodedObject()
 	obj.SetType(plumbing.BlobObject)
+
 	w, err := obj.Writer()
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
+
 	if _, err := w.Write(content); err != nil {
 		_ = w.Close()
+
 		return plumbing.ZeroHash, err
 	}
+
 	if err := w.Close(); err != nil {
 		return plumbing.ZeroHash, err
 	}
+
 	return r.Storer.SetEncodedObject(obj)
 }
 
@@ -968,36 +1111,48 @@ func (r *Repo) BranchHistoryHasFileContent(branch, repoRelPath string, content [
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return false, nil
 		}
+
 		return false, err
 	}
+
 	target := plumbing.ComputeHash(plumbing.BlobObject, content)
+
 	iter, err := r.r.Log(&git.LogOptions{From: ref.Hash()})
 	if err != nil {
 		return false, err
 	}
+
 	defer iter.Close()
+
 	found := false
+
 	err = iter.ForEach(func(c *object.Commit) error {
 		tree, err := c.Tree()
 		if err != nil {
 			return err
 		}
+
 		entry, err := tree.FindEntry(repoRelPath)
 		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
 			return nil // path absent in this commit — keep walking
 		}
+
 		if err != nil {
 			return err
 		}
+
 		if entry.Hash == target {
 			found = true
+
 			return errStop
 		}
+
 		return nil
 	})
 	if err != nil && !errors.Is(err, errStop) {
 		return false, err
 	}
+
 	return found, nil
 }
 
@@ -1011,12 +1166,15 @@ func filesMissingFromHeadStillInTarget(r *git.Repository, baseHash, headHash, ta
 		if err != nil {
 			return nil, err
 		}
+
 		iter := tree.Files()
 		paths := make(map[string]struct{})
 		err = iter.ForEach(func(f *object.File) error {
 			paths[f.Name] = struct{}{}
+
 			return nil
 		})
+
 		return paths, err
 	}
 
@@ -1024,25 +1182,31 @@ func filesMissingFromHeadStillInTarget(r *git.Repository, baseHash, headHash, ta
 	if err != nil {
 		return nil, err
 	}
+
 	inHead, err := collectPaths(headHash)
 	if err != nil {
 		return nil, err
 	}
+
 	inTarget, err := collectPaths(targetHash)
 	if err != nil {
 		return nil, err
 	}
 
 	var deleted []string
+
 	for path := range inBase {
 		if _, ok := inHead[path]; ok {
 			continue
 		}
+
 		if _, ok := inTarget[path]; ok {
 			deleted = append(deleted, path)
 		}
 	}
+
 	sort.Strings(deleted)
+
 	return deleted, nil
 }
 
@@ -1052,10 +1216,12 @@ func (r *Repo) HasUnpushedCommits(branch, base string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	baseRef, err := r.r.Reference(plumbing.NewBranchReferenceName(base), true)
 	if err != nil {
 		return false, err
 	}
+
 	if branchRef.Hash() == baseRef.Hash() {
 		return false, nil
 	}
@@ -1064,17 +1230,22 @@ func (r *Repo) HasUnpushedCommits(branch, base string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	merged := false
+
 	err = iter.ForEach(func(c *object.Commit) error {
 		if c.Hash == branchRef.Hash() {
 			merged = true
+
 			return errStop
 		}
+
 		return nil
 	})
 	if err != nil && !errors.Is(err, errStop) {
 		return false, err
 	}
+
 	return !merged, nil
 }
 
@@ -1092,13 +1263,16 @@ func (r *Repo) CommitFilesToBranch(branch string, files []BranchFile, message st
 
 	// Resolve current branch state (parent commit + root tree).
 	var treeHash, parentHash plumbing.Hash
+
 	ref, err := r.r.Reference(plumbing.NewBranchReferenceName(branch), true)
 	if err == nil {
 		parentHash = ref.Hash()
+
 		parent, err := r.r.CommitObject(parentHash)
 		if err != nil {
 			return "", fmt.Errorf("reading parent commit: %w", err)
 		}
+
 		treeHash = parent.TreeHash
 	}
 	// If the branch doesn't exist yet, treeHash is zero (empty tree).
@@ -1109,7 +1283,9 @@ func (r *Repo) CommitFilesToBranch(branch string, files []BranchFile, message st
 		if err != nil {
 			return "", fmt.Errorf("storing blob %s: %w", f.RepoRelPath, err)
 		}
+
 		parts := strings.Split(f.RepoRelPath, "/")
+
 		treeHash, err = upsertTreeEntry(r.r, storer, treeHash, parts, blobHash)
 		if err != nil {
 			return "", fmt.Errorf("updating tree for %s: %w", f.RepoRelPath, err)
@@ -1118,6 +1294,7 @@ func (r *Repo) CommitFilesToBranch(branch string, files []BranchFile, message st
 
 	// Build and store the commit object.
 	author := gitAuthor()
+
 	c := &object.Commit{
 		Author:    *author,
 		Committer: *author,
@@ -1127,10 +1304,12 @@ func (r *Repo) CommitFilesToBranch(branch string, files []BranchFile, message st
 	if !parentHash.IsZero() {
 		c.ParentHashes = []plumbing.Hash{parentHash}
 	}
+
 	obj := storer.NewEncodedObject()
 	if err := c.Encode(obj); err != nil {
 		return "", fmt.Errorf("encoding commit: %w", err)
 	}
+
 	commitHash, err := storer.SetEncodedObject(obj)
 	if err != nil {
 		return "", fmt.Errorf("storing commit: %w", err)
@@ -1141,6 +1320,7 @@ func (r *Repo) CommitFilesToBranch(branch string, files []BranchFile, message st
 	if err := storer.SetReference(newRef); err != nil {
 		return "", fmt.Errorf("updating branch ref: %w", err)
 	}
+
 	return commitHash.String(), nil
 }
 
@@ -1153,18 +1333,37 @@ func storeBlobObject(storer interface {
 	obj := storer.NewEncodedObject()
 	obj.SetType(plumbing.BlobObject)
 	obj.SetSize(int64(len(content)))
+
 	w, err := obj.Writer()
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
+
 	if _, err := w.Write(content); err != nil {
 		_ = w.Close()
+
 		return plumbing.ZeroHash, err
 	}
+
 	if err := w.Close(); err != nil {
 		return plumbing.ZeroHash, err
 	}
+
 	return storer.SetEncodedObject(obj)
+}
+
+// putTreeEntry replaces the entry in entries with e's name, or appends e
+// if there is none.
+func putTreeEntry(entries []object.TreeEntry, e object.TreeEntry) []object.TreeEntry {
+	for i := range entries {
+		if entries[i].Name == e.Name {
+			entries[i] = e
+
+			return entries
+		}
+	}
+
+	return append(entries, e)
 }
 
 // upsertTreeEntry recursively updates a tree so that the file described by
@@ -1181,54 +1380,39 @@ func upsertTreeEntry(
 ) (plumbing.Hash, error) {
 	// Load existing entries (empty if tree is zero).
 	var entries []object.TreeEntry
+
 	if !treeHash.IsZero() {
 		tree, err := gitRepo.TreeObject(treeHash)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
-		entries = make([]object.TreeEntry, len(tree.Entries))
-		copy(entries, tree.Entries)
+
+		entries = slices.Clone(tree.Entries)
 	}
 
 	name := pathParts[0]
 
 	if len(pathParts) == 1 {
 		// Leaf: update or insert a blob entry.
-		found := false
-		for i, e := range entries {
-			if e.Name == name {
-				entries[i] = object.TreeEntry{Name: name, Mode: filemode.Regular, Hash: blobHash}
-				found = true
-				break
-			}
-		}
-		if !found {
-			entries = append(entries, object.TreeEntry{Name: name, Mode: filemode.Regular, Hash: blobHash})
-		}
+		entries = putTreeEntry(entries, object.TreeEntry{Name: name, Mode: filemode.Regular, Hash: blobHash})
 	} else {
 		// Intermediate directory: descend, then update the subtree entry.
 		var subHash plumbing.Hash
+
 		for _, e := range entries {
 			if e.Name == name {
 				subHash = e.Hash
+
 				break
 			}
 		}
+
 		newSubHash, err := upsertTreeEntry(gitRepo, storer, subHash, pathParts[1:], blobHash)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
-		found := false
-		for i, e := range entries {
-			if e.Name == name {
-				entries[i] = object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: newSubHash}
-				found = true
-				break
-			}
-		}
-		if !found {
-			entries = append(entries, object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: newSubHash})
-		}
+
+		entries = putTreeEntry(entries, object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: newSubHash})
 	}
 
 	// go-git requires tree entries sorted by treeEntrySortName (dirs get "/").
@@ -1236,9 +1420,13 @@ func upsertTreeEntry(
 
 	// Store the updated tree object.
 	tree := &object.Tree{Entries: entries}
+
 	obj := storer.NewEncodedObject()
-	if err := tree.Encode(obj); err != nil {
+
+	err := tree.Encode(obj)
+	if err != nil {
 		return plumbing.ZeroHash, err
 	}
+
 	return storer.SetEncodedObject(obj)
 }

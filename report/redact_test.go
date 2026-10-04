@@ -48,13 +48,16 @@ func TestRedactURL(t *testing.T) {
 
 func TestRedactGitConfigBytes(t *testing.T) {
 	in := []byte("[core]\n\tbare = false\n[remote \"origin\"]\n\turl = " + testCredentialedURL + "\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n")
+
 	got := string(redactGitConfigBytes(in))
 	if contains(got, testCredentialedURL) {
 		t.Errorf("redactGitConfigBytes output still contains credentials:\n%s", got)
 	}
+
 	if !contains(got, testRedactedURL) {
 		t.Errorf("redactGitConfigBytes output missing redacted URL:\n%s", got)
 	}
+
 	if !contains(got, `bare = false`) {
 		t.Errorf("redactGitConfigBytes should leave unrelated lines untouched:\n%s", got)
 	}
@@ -66,16 +69,20 @@ func TestRedactGitConfigBytes(t *testing.T) {
 // match would miss.
 func TestRedactGitConfigBytes_RedactsPushURL(t *testing.T) {
 	const pushCredentialedURL = "https://pushuser:pushtoken@example.com/other-repo.git" //nolint:gosec // test fixture, not a real credential
+
 	const pushRedactedURL = "https://example.com/other-repo.git"
 
 	in := []byte("[remote \"origin\"]\n\turl = " + testCredentialedURL + "\n\tpushurl = " + pushCredentialedURL + "\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n")
+
 	got := string(redactGitConfigBytes(in))
 	if contains(got, "pushuser") || contains(got, "pushtoken") {
 		t.Errorf("redactGitConfigBytes output still contains pushurl credentials:\n%s", got)
 	}
+
 	if !contains(got, pushRedactedURL) {
 		t.Errorf("redactGitConfigBytes output missing redacted pushurl:\n%s", got)
 	}
+
 	if contains(got, testCredentialedURL) {
 		t.Errorf("redactGitConfigBytes output still contains url credentials:\n%s", got)
 	}
@@ -91,13 +98,16 @@ func TestRedactGitConfigBytes_RedactsHTTPExtraHeader(t *testing.T) {
 	in := []byte("[http]\n\textraHeader = Authorization: Basic dXNlcjpwYXNz\n" +
 		"[http \"https://example.com/\"]\n\textraheader = Authorization: Bearer abc123token\n" +
 		"[core]\n\tbare = false\n")
+
 	got := string(redactGitConfigBytes(in))
 	if contains(got, "dXNlcjpwYXNz") {
 		t.Errorf("redactGitConfigBytes output still contains global extraHeader credentials:\n%s", got)
 	}
+
 	if contains(got, "abc123token") {
 		t.Errorf("redactGitConfigBytes output still contains URL-scoped extraHeader credentials:\n%s", got)
 	}
+
 	if !contains(got, "bare = false") {
 		t.Errorf("redactGitConfigBytes should leave unrelated lines untouched:\n%s", got)
 	}
@@ -108,10 +118,12 @@ func TestRedactGitConfigBytes_RedactsHTTPExtraHeader(t *testing.T) {
 // matched, so an oddly-cased key can't bypass redaction.
 func TestRedactGitConfigBytes_KeyMatchIsCaseInsensitive(t *testing.T) {
 	in := []byte("[remote \"origin\"]\n\tURL = " + testCredentialedURL + "\n")
+
 	got := string(redactGitConfigBytes(in))
 	if contains(got, testCredentialedURL) {
 		t.Errorf("redactGitConfigBytes output still contains credentials for uppercase key:\n%s", got)
 	}
+
 	if !contains(got, testRedactedURL) {
 		t.Errorf("redactGitConfigBytes output missing redacted URL for uppercase key:\n%s", got)
 	}
@@ -124,6 +136,7 @@ func contains(haystack, needle string) bool {
 				return true
 			}
 		}
+
 		return false
 	}()
 }

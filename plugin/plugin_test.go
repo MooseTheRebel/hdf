@@ -13,6 +13,7 @@ import (
 
 func TestFind(t *testing.T) {
 	const exeDir, linux = "/opt/hdf", "linux"
+
 	notOnPath := func(string) (string, error) { return "", exec.ErrNotFound }
 	onPath := func(bin string) (string, error) { return "/usr/bin/" + bin, nil }
 	only := func(want string) func(string) bool {
@@ -99,6 +100,7 @@ type fakeUI struct {
 
 func (f *fakeUI) Launch(args []string) error {
 	f.gotArgs = args
+
 	return f.err
 }
 
@@ -106,19 +108,24 @@ func dispenseUI(t *testing.T, impl UI) UI {
 	t.Helper()
 	client, _ := goplugin.TestPluginRPCConn(t, goplugin.PluginSet{UIName: &uiPlugin{Impl: impl}}, nil)
 	t.Cleanup(func() { _ = client.Close() })
+
 	raw, err := client.Dispense(UIName)
 	if err != nil {
 		t.Fatalf("Dispense: %v", err)
 	}
+
 	return raw.(UI)
 }
 
 func TestLaunchOverRPC(t *testing.T) {
 	impl := &fakeUI{}
+
 	ui := dispenseUI(t, impl)
-	if err := ui.Launch([]string{"a", "b"}); err != nil {
+	err := ui.Launch([]string{"a", "b"})
+	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
+
 	if !reflect.DeepEqual(impl.gotArgs, []string{"a", "b"}) {
 		t.Errorf("plugin got args %v, want [a b]", impl.gotArgs)
 	}
@@ -128,17 +135,22 @@ func TestMainThreadUIRunsLaunchOnServingGoroutine(t *testing.T) {
 	reqs := make(chan launchRequest)
 	impl := &fakeUI{err: errors.New("closed")}
 	ui := dispenseUI(t, mainThreadUI{reqs: reqs})
+
 	result := make(chan error, 1)
+
 	go func() {
 		result <- ui.Launch([]string{"x"})
+
 		close(reqs)
 	}()
 
 	runLaunches(impl, reqs) // serves the call on this goroutine until reqs closes
 
-	if err := <-result; err == nil || err.Error() != "closed" {
+	err := <-result
+	if err == nil || err.Error() != "closed" {
 		t.Errorf("Launch error = %v, want %q", err, "closed")
 	}
+
 	if !reflect.DeepEqual(impl.gotArgs, []string{"x"}) {
 		t.Errorf("impl got args %v, want [x]", impl.gotArgs)
 	}
@@ -146,6 +158,7 @@ func TestMainThreadUIRunsLaunchOnServingGoroutine(t *testing.T) {
 
 func TestLaunchOverRPCReturnsPluginError(t *testing.T) {
 	ui := dispenseUI(t, &fakeUI{err: errors.New("no display")})
+
 	err := ui.Launch(nil)
 	if err == nil || err.Error() != "no display" {
 		t.Errorf("Launch error = %v, want %q", err, "no display")
@@ -154,6 +167,7 @@ func TestLaunchOverRPCReturnsPluginError(t *testing.T) {
 
 func TestDropDebugLines(t *testing.T) {
 	var out bytes.Buffer
+
 	w := dropDebugLines{w: &out}
 	for _, line := range []string{
 		"2026/10/03 21:42:14 [DEBUG] plugin: plugin server: accept unix /tmp/x: use of closed network connection\n",
@@ -165,6 +179,7 @@ func TestDropDebugLines(t *testing.T) {
 			t.Fatalf("Write(%q) = %d, %v", line, n, err)
 		}
 	}
+
 	want := "2026/10/03 21:42:14 [WARN] fetchDiff: HTTP 500 from https://example.com\n" +
 		"2026/10/03 21:42:14 [ERR] plugin: plugin server: accept failed\n"
 	if out.String() != want {

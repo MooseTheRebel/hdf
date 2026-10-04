@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"hdf/config"
 	"hdf/repo"
@@ -59,6 +60,7 @@ func checkNotAlreadyInitialized(cfgPath string) error {
 	if _, err := os.Stat(cfgPath); err == nil {
 		return fmt.Errorf("hdf is already initialized (%s).\nEdit that file to change settings, or delete it to run hdf init again", cfgPath)
 	}
+
 	return nil
 }
 
@@ -71,10 +73,12 @@ func resolveInitPath(raw string) (string, error) {
 	if filepath.IsAbs(expanded) {
 		return expanded, nil
 	}
+
 	abs, err := filepath.Abs(expanded)
 	if err != nil {
 		return "", fmt.Errorf("resolving path: %w", err)
 	}
+
 	return abs, nil
 }
 
@@ -88,10 +92,12 @@ func computeInitLocalStart(cfgPath, repoPath, pushTarget string) (*InitStartInfo
 	if err := checkNotAlreadyInitialized(cfgPath); err != nil {
 		return nil, nil, err
 	}
+
 	resolvedRepoPath, err := resolveInitPath(strings.TrimSpace(repoPath))
 	if err != nil {
 		return nil, nil, err
 	}
+
 	r, err := repo.InitOrOpen(resolvedRepoPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialising repo at %s: %w", resolvedRepoPath, err)
@@ -101,7 +107,33 @@ func computeInitLocalStart(cfgPath, repoPath, pushTarget string) (*InitStartInfo
 	if err != nil {
 		return nil, nil, err
 	}
+
 	return finishInitStart(r, resolvedRepoPath, gitURL)
+}
+
+// localPushURL creates (or opens) a bare repo at pushPath to serve as the
+// push target for the working copy at repoPath, and returns its file://
+// URL. The two must be different directories, symlinks included.
+func localPushURL(repoPath, pushPath string) (string, error) {
+	resolvedPush := pushPath
+	if rp, err := filepath.EvalSymlinks(pushPath); err == nil {
+		resolvedPush = rp
+	}
+
+	resolvedRepo := repoPath
+	if rr, err := filepath.EvalSymlinks(repoPath); err == nil {
+		resolvedRepo = rr
+	}
+
+	if pushPath == repoPath || resolvedPush == resolvedRepo {
+		return "", errors.New("push target and working copy must differ")
+	}
+
+	if _, _, err := repo.InitOrOpenBare(pushPath); err != nil {
+		return "", fmt.Errorf("initialising bare repo at %s: %w", pushPath, err)
+	}
+
+	return localPathToFileURL(pushPath), nil
 }
 
 // setUpLocalPushTarget wires up repo's "origin" remote from a push target
@@ -111,33 +143,25 @@ func setUpLocalPushTarget(r *repo.Repo, repoPath, pushTarget string) (string, er
 	if pushTarget == "" {
 		return "", nil
 	}
-	var gitURL string
-	if isRemoteURL(pushTarget) {
-		gitURL = pushTarget
-	} else {
+
+	gitURL := pushTarget
+	if !isRemoteURL(pushTarget) {
 		pushPath, err := resolveInitPath(pushTarget)
 		if err != nil {
 			return "", err
 		}
-		resolvedPush := pushPath
-		if rp, err := filepath.EvalSymlinks(pushPath); err == nil {
-			resolvedPush = rp
+
+		gitURL, err = localPushURL(repoPath, pushPath)
+		if err != nil {
+			return "", err
 		}
-		resolvedRepo := repoPath
-		if rr, err := filepath.EvalSymlinks(repoPath); err == nil {
-			resolvedRepo = rr
-		}
-		if pushPath == repoPath || resolvedPush == resolvedRepo {
-			return "", fmt.Errorf("push target and working copy must differ")
-		}
-		if _, _, err := repo.InitOrOpenBare(pushPath); err != nil {
-			return "", fmt.Errorf("initialising bare repo at %s: %w", pushPath, err)
-		}
-		gitURL = localPathToFileURL(pushPath)
 	}
-	if err := r.AddRemote("origin", gitURL); err != nil {
+
+	err := r.AddRemote("origin", gitURL)
+	if err != nil {
 		return "", fmt.Errorf("adding remote: %w", err)
 	}
+
 	return gitURL, nil
 }
 
@@ -150,10 +174,12 @@ func computeInitRemoteStart(cfgPath, homeDir, gitURL, cloneDir string) (*InitSta
 	if err := checkNotAlreadyInitialized(cfgPath); err != nil {
 		return nil, nil, err
 	}
+
 	gitURL = strings.TrimSpace(gitURL)
 	if gitURL == "" {
-		return nil, nil, fmt.Errorf("remote git URL cannot be empty")
+		return nil, nil, errors.New("remote git URL cannot be empty")
 	}
+
 	dest := strings.TrimSpace(cloneDir)
 	if dest == "" {
 		dest = defaultRepoPath(homeDir)
@@ -162,12 +188,15 @@ func computeInitRemoteStart(cfgPath, homeDir, gitURL, cloneDir string) (*InitSta
 		if err != nil {
 			return nil, nil, err
 		}
+
 		dest = resolved
 	}
+
 	r, err := repo.Clone(gitURL, dest)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cloning %s: %w", gitURL, err)
 	}
+
 	return finishInitStart(r, dest, gitURL)
 }
 
@@ -179,6 +208,7 @@ func finishInitStart(r *repo.Repo, repoPath, gitURL string) (*InitStartInfo, *pe
 	if err != nil {
 		return nil, nil, err
 	}
+
 	pending := &pendingInit{
 		repo:     r,
 		repoPath: repoPath,
@@ -189,13 +219,16 @@ func finishInitStart(r *repo.Repo, repoPath, gitURL string) (*InitStartInfo, *pe
 	if gitURL == "" {
 		return &InitStartInfo{}, pending, nil
 	}
+
 	hasCollision, err := detectBranchCollision(r, pending.branch)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if !hasCollision {
 		return &InitStartInfo{}, pending, nil
 	}
+
 	return &InitStartInfo{Collision: &InitBranchCollision{Branch: pending.branch}}, pending, nil
 }
 
@@ -206,12 +239,15 @@ func finishInitStart(r *repo.Repo, repoPath, gitURL string) (*InitStartInfo, *pe
 func detectBranchCollision(r *repo.Repo, branch string) (bool, error) {
 	if err := r.Fetch(); err != nil {
 		log.Printf("[WARN] detectBranchCollision: could not fetch from remote to check for an existing %q branch: %v", branch, err)
+
 		return false, nil
 	}
+
 	has, err := r.RemoteHasBranch("origin", branch)
 	if err != nil {
 		return false, fmt.Errorf("checking remote for branch %q: %w", branch, err)
 	}
+
 	return has, nil
 }
 
@@ -224,14 +260,20 @@ func computeResolveBranchCollision(p *pendingInit, useUnique bool) error {
 	if useUnique {
 		p.branch = p.branch + "-" + randomBranchSuffix()
 		p.adopted = false
+
 		return nil
 	}
-	if err := p.repo.CheckoutTrackingBranch(p.branch, "origin"); err != nil {
+
+	err := p.repo.CheckoutTrackingBranch(p.branch, "origin")
+	if err != nil {
 		log.Printf("[WARN] computeResolveBranchCollision: could not adopt remote branch %q (%v); creating it locally", p.branch, err)
 		p.adopted = false
+
 		return nil
 	}
+
 	p.adopted = true
+
 	return nil
 }
 
@@ -242,18 +284,23 @@ func computeFinishInit(cfgPath, statePath string, p *pendingInit) (*InitResult, 
 	if !p.adopted {
 		_ = p.repo.CreateAndCheckoutBranch(p.branch) // CLI tolerates "already exists" the same way
 	}
+
 	cfg := &config.Config{
 		GitPushTarget:    p.gitURL,
 		LocalDotfilesDir: p.repoPath,
 		Branch:           p.branch,
 	}
-	if err := config.Save(cfgPath, cfg); err != nil {
+	err := config.Save(cfgPath, cfg)
+	if err != nil {
 		return nil, fmt.Errorf("saving config: %w", err)
 	}
+
 	state := &config.State{LastCommit: p.headSHA, LastMainCommit: p.headSHA}
-	if err := config.SaveState(statePath, state); err != nil {
+	err = config.SaveState(statePath, state)
+	if err != nil {
 		return nil, fmt.Errorf("saving state: %w", err)
 	}
+
 	return &InitResult{Message: fmt.Sprintf(
 		"hdf initialized (branch %s). Use Enroll to start managing dot files.", p.branch,
 	)}, nil

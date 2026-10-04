@@ -22,8 +22,10 @@ const maxDiffFileSize = 1 << 20 // 1 MB
 // warnings survive daemon restarts and are readable by the CLI process.
 func addWarning(msg, statePath string) {
 	notify.LogAndNotify(notify.LevelWarning, "hdf", msg)
+
 	_ = config.UpdateState(statePath, func(state *config.State) error {
 		state.PendingWarnings = append(state.PendingWarnings, msg)
+
 		return nil
 	})
 }
@@ -37,16 +39,22 @@ func notifyFailureThrottled(n notify.Notifier, title, msg, statePath string, coo
 	_ = config.UpdateState(statePath, func(s *config.State) error {
 		if !s.LastFailureNotifyAt.IsZero() && time.Since(s.LastFailureNotifyAt) < cooldown {
 			throttled = true
+
 			return nil
 		}
+
 		s.LastFailureNotifyAt = time.Now()
+
 		return nil
 	})
+
 	if throttled {
 		// Still log for debuggability; skip the user-facing channels.
 		notify.LogAndNotify(notify.LevelWarning, title, msg)
+
 		return
 	}
+
 	_ = n.Send(title, msg)
 	addWarning(msg, statePath)
 }
@@ -56,14 +64,17 @@ func notifyFailureThrottled(n notify.Notifier, title, msg, statePath string, coo
 // promptPendingWarnings) before proceeding so the user can be prompted to act.
 func PendingWarnings(statePath string) ([]string, error) {
 	var warnings []string
+
 	err := config.UpdateState(statePath, func(state *config.State) error {
 		warnings = state.PendingWarnings
 		state.PendingWarnings = nil
+
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
 	return warnings, nil
 }
 
@@ -76,20 +87,25 @@ func Run(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("cannot open dotfiles repo at %s: %w", cfg.LocalDotfilesDir, err)
 	}
+
 	if r.RemoteURL() == "" {
 		return fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
 	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("getting home dir: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "hdf daemon started\n")
+
 	statePath := config.DefaultStatePath()
+
 	for {
 		interval, err := syncWithHome(cfgPath, statePath, nil, nil, homeDir)
 		if err != nil {
@@ -97,14 +113,18 @@ func Run(ctx context.Context, cfgPath string) error {
 			// avoid modal OS alerts on every offline period.
 			notify.LogAndNotify(notify.LevelWarning, "hdf sync error", err.Error())
 			addWarning(fmt.Sprintf("sync error: %v", err), statePath)
+
 			interval = time.Duration(config.DefaultSyncIntervalMinutes) * time.Minute
 		}
+
 		fmt.Fprintf(os.Stderr, "next sync in %s\n", interval)
+
 		timer := time.NewTimer(interval)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
+
 			return ctx.Err()
 		}
 	}
@@ -117,7 +137,9 @@ func Sync(cfgPath, statePath string, n notify.Notifier) error {
 	if err != nil {
 		return fmt.Errorf("getting home dir: %w", err)
 	}
+
 	_, err = syncWithHome(cfgPath, statePath, n, nil, homeDir)
+
 	return err
 }
 
@@ -138,6 +160,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	if n == nil {
 		n = notify.Default
 	}
+
 	if cn == nil {
 		cn = notify.Critical
 	}
@@ -146,6 +169,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	if err != nil {
 		return 0, fmt.Errorf("loading config: %w", err)
 	}
+
 	state, err := config.LoadState(statePath)
 	if err != nil {
 		return 0, fmt.Errorf("loading state: %w", err)
@@ -153,13 +177,16 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	// Snapshot the loaded values before this cycle mutates state; the final
 	// save uses it to detect fields changed by concurrent processes.
 	loadedSnapshot := *state
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return 0, fmt.Errorf("opening repo at %s: %w", cfg.LocalDotfilesDir, err)
 	}
+
 	if r.RemoteURL() == "" {
 		return 0, fmt.Errorf("no remote configured in %s — re-run 'hdf init' to set a push target", cfg.LocalDotfilesDir)
 	}
+
 	if err := r.Fetch(); err != nil {
 		// Fetch failures are often transient (offline). Use the standard notifier
 		// to avoid intrusive modal alerts, and throttle so an offline laptop is
@@ -168,6 +195,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 		msg := fmt.Sprintf("fetch from remote failed: %v", err)
 		notifyFailureThrottled(n, "hdf: remote fetch failed", msg, statePath,
 			time.Duration(config.DefaultNotifyCooldownMinutes)*time.Minute)
+
 		return 0, fmt.Errorf("fetching from remote: %w", err)
 	}
 
@@ -179,6 +207,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	if err != nil {
 		return 0, err
 	}
+
 	interval = time.Duration(ss.SyncIntervalMinutes) * time.Minute
 	threshold := ss.NotifyThreshold
 	cooldown := time.Duration(ss.NotifyCooldownMinutes) * time.Minute
@@ -188,6 +217,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	if err != nil {
 		return 0, fmt.Errorf("loading registry: %w", err)
 	}
+
 	totalHunks := countDrift(reg, cfg, r, homeDir)
 
 	if totalHunks >= threshold {
@@ -196,6 +226,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 			_ = n.Send("hdf", msg)
 			// Also record as a warning so hdf changes-push/changes-pull can surface it.
 			addWarning(msg, statePath)
+
 			state.LastNotifiedAt = time.Now()
 		}
 	}
@@ -205,6 +236,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	if err := r.Push(cfg.Branch); err != nil {
 		msg := fmt.Sprintf("push %s failed: %v", cfg.Branch, err)
 		notifyFailureThrottled(cn, "hdf: push failed", msg, statePath, cooldown)
+
 		return 0, fmt.Errorf("pushing branch %s: %w", cfg.Branch, err)
 	}
 
@@ -225,9 +257,11 @@ func mergeSyncResults(loaded, computed *config.State) func(*config.State) error 
 		if s.LastMainCommit == loaded.LastMainCommit {
 			s.LastMainCommit = computed.LastMainCommit
 		}
+
 		if s.LastNotifiedAt.Equal(loaded.LastNotifiedAt) {
 			s.LastNotifiedAt = computed.LastNotifiedAt
 		}
+
 		return nil
 	}
 }
@@ -241,12 +275,15 @@ func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
 	if err != nil {
 		mainSHA, err = r.BranchSHA("main")
 	}
+
 	if err != nil {
 		return
 	}
+
 	if state.LastMainCommit != "" && state.LastMainCommit != mainSHA {
 		_ = n.Send("hdf", "New commits on main — run 'hdf changes-pull' to review")
 	}
+
 	state.LastMainCommit = mainSHA
 }
 
@@ -258,14 +295,18 @@ func loadSharedSettings(r *repo.Repo) (*config.SharedSettings, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading shared settings from origin/main: %w", err)
 	}
+
 	if len(ssBytes) == 0 {
 		return config.DefaultSharedSettings(), nil
 	}
+
 	parsed, err := config.SharedSettingsFromBytes(ssBytes)
 	if err != nil {
 		return nil, fmt.Errorf("parsing shared settings: %w", err)
 	}
+
 	parsed.ApplyDefaults()
+
 	return parsed, nil
 }
 
@@ -277,6 +318,7 @@ func countDrift(reg *config.Registry, cfg *config.Config, r *repo.Repo, homeDir 
 	for _, f := range reg.Files {
 		total += fileDrift(f, cfg, r, homeDir)
 	}
+
 	return total
 }
 
@@ -293,6 +335,7 @@ func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir s
 	if err != nil {
 		return 1 // missing or unreadable counts as drift
 	}
+
 	if info.Size() > maxDiffFileSize {
 		return 1 // oversized: skip diff, count as one hunk
 	}
@@ -306,6 +349,7 @@ func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir s
 	if res == config.VariantMatch {
 		registryHash = variant.Hash
 	}
+
 	diskHash, _ := link.HashFile(expanded)
 	if diskHash == registryHash {
 		return 0 // file is clean
@@ -321,6 +365,7 @@ func fileDrift(f config.ManagedFile, cfg *config.Config, r *repo.Repo, homeDir s
 		if err != nil {
 			return 0
 		}
+
 		rel, err = filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
 		if err != nil {
 			return 0
@@ -344,17 +389,20 @@ type diffEntry struct {
 
 func diffToEntries(diffs []diffmatchpatch.Diff) []diffEntry {
 	var entries []diffEntry
+
 	for _, d := range diffs {
-		for _, text := range strings.Split(strings.TrimSuffix(d.Text, "\n"), "\n") {
+		for text := range strings.SplitSeq(strings.TrimSuffix(d.Text, "\n"), "\n") {
 			entries = append(entries, diffEntry{d.Type, text})
 		}
 	}
+
 	return entries
 }
 
 func markIncluded(entries []diffEntry) []bool {
 	n := len(entries)
 	include := make([]bool, n)
+
 	for i, e := range entries {
 		if e.op != diffmatchpatch.DiffEqual {
 			for j := max(0, i-contextLines); j < min(n, i+contextLines+1); j++ {
@@ -362,6 +410,7 @@ func markIncluded(entries []diffEntry) []bool {
 			}
 		}
 	}
+
 	return include
 }
 
@@ -370,29 +419,36 @@ func hunkLineCounts(entries []diffEntry, start, end int) (oldCount, newCount int
 		if entries[k].op != diffmatchpatch.DiffInsert {
 			oldCount++
 		}
+
 		if entries[k].op != diffmatchpatch.DiffDelete {
 			newCount++
 		}
 	}
+
 	return oldCount, newCount
 }
 
 func writeHunk(sb *strings.Builder, entries []diffEntry, start, end int, oldLine, newLine *int) {
 	oldCount, newCount := hunkLineCounts(entries, start, end)
 	fmt.Fprintf(sb, "@@ -%d,%d +%d,%d @@\n", *oldLine, oldCount, *newLine, newCount)
+
 	for k := start; k < end; k++ {
 		switch entries[k].op {
 		case diffmatchpatch.DiffInsert:
 			sb.WriteByte('+')
+
 			*newLine++
 		case diffmatchpatch.DiffDelete:
 			sb.WriteByte('-')
+
 			*oldLine++
 		case diffmatchpatch.DiffEqual:
 			sb.WriteByte(' ')
+
 			*oldLine++
 			*newLine++
 		}
+
 		sb.WriteString(entries[k].text)
 		sb.WriteByte('\n')
 	}
@@ -405,6 +461,7 @@ func GenerateUnifiedDiff(committed, disk string) string {
 	if committed == disk {
 		return ""
 	}
+
 	dmp := diffmatchpatch.New()
 	a, b, lineMap := dmp.DiffLinesToChars(committed, disk)
 	diffs := dmp.DiffMain(a, b, false)
@@ -415,25 +472,34 @@ func GenerateUnifiedDiff(committed, disk string) string {
 	n := len(entries)
 
 	var sb strings.Builder
+
 	oldLine, newLine := 1, 1
+
 	i := 0
 	for i < n {
 		if !include[i] {
 			if entries[i].op != diffmatchpatch.DiffInsert {
 				oldLine++
 			}
+
 			if entries[i].op != diffmatchpatch.DiffDelete {
 				newLine++
 			}
+
 			i++
+
 			continue
 		}
+
 		hunkStart := i
+
 		for i < n && include[i] {
 			i++
 		}
+
 		writeHunk(&sb, entries, hunkStart, i, &oldLine, &newLine)
 	}
+
 	return sb.String()
 }
 
@@ -448,6 +514,7 @@ func countHunks(committed, disk string) int {
 	diffs := dmp.DiffMain(a, b, false)
 	diffs = dmp.DiffCharsToLines(diffs, lines)
 	hunks, inHunk := 0, false
+
 	for _, d := range diffs {
 		if d.Type != diffmatchpatch.DiffEqual {
 			if !inHunk {
@@ -458,5 +525,6 @@ func countHunks(committed, disk string) int {
 			inHunk = false
 		}
 	}
+
 	return hunks
 }

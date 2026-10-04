@@ -68,6 +68,7 @@ func HostExecutable() string {
 	if !IsPluginProcess() {
 		return ""
 	}
+
 	return os.Getenv(HostExecutableEnv)
 }
 
@@ -94,6 +95,7 @@ func Serve(impl UI) {
 		})
 		close(reqs)
 	}()
+
 	runLaunches(impl, reqs)
 }
 
@@ -108,6 +110,7 @@ func (d dropDebugLines) Write(p []byte) (int, error) {
 	if bytes.Contains(p, []byte("[DEBUG] ")) || bytes.Contains(p, []byte("[TRACE] ")) {
 		return len(p), nil
 	}
+
 	return d.w.Write(p)
 }
 
@@ -124,6 +127,7 @@ type mainThreadUI struct {
 func (m mainThreadUI) Launch(args []string) error {
 	done := make(chan error)
 	m.reqs <- launchRequest{args: args, done: done}
+
 	return <-done
 }
 
@@ -149,7 +153,9 @@ func launch(path string, args []string, stdout, stderr io.Writer) error {
 	// append the host's after ours, so HostExecutableEnv always wins over
 	// any inherited value.
 	cmd := exec.CommandContext(context.Background(), path)
+
 	cmd.Env = os.Environ()
+
 	if exe, err := os.Executable(); err == nil {
 		cmd.Env = append(cmd.Env, HostExecutableEnv+"="+exe)
 	}
@@ -177,10 +183,12 @@ func launch(path string, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("starting plugin %s: %w", path, err)
 	}
+
 	raw, err := rpcClient.Dispense(UIName)
 	if err != nil {
 		return fmt.Errorf("loading plugin %s: %w", path, err)
 	}
+
 	return raw.(UI).Launch(args)
 }
 
@@ -205,12 +213,15 @@ type uiRPCClient struct {
 
 func (c *uiRPCClient) Launch(args []string) error {
 	var errMsg string
-	if err := c.client.Call("Plugin.Launch", args, &errMsg); err != nil {
+	err := c.client.Call("Plugin.Launch", args, &errMsg)
+	if err != nil {
 		return err
 	}
+
 	if errMsg != "" {
 		return fmt.Errorf("%s", errMsg)
 	}
+
 	return nil
 }
 
@@ -221,8 +232,10 @@ type uiRPCServer struct {
 }
 
 func (s *uiRPCServer) Launch(args []string, errMsg *string) error {
-	if err := s.impl.Launch(args); err != nil {
+	err := s.impl.Launch(args)
+	if err != nil {
 		*errMsg = err.Error()
 	}
+
 	return nil
 }
