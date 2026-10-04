@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {ref} from 'vue';
+import {fmt, msg} from '@locales';
 import {FinishPromote, ResolveDivergedFile, StartPromote} from '../../wailsjs/go/cli/App';
 import type {cli} from '../../wailsjs/go/models';
 import StepPage from '../components/StepPage.vue';
@@ -14,10 +15,10 @@ type Step =
     | {kind: 'done'; result: cli.PromoteResult}
     | {kind: 'error'; message: string};
 
-const step = ref<Step>({kind: 'busy', message: 'Checking for changes to promote...'});
+const step = ref<Step>({kind: 'busy', message: msg.promote.checking});
 
-function fail(prefix: string) {
-    return (err: unknown) => { step.value = {kind: 'error', message: prefix + err}; };
+function fail(template: string, params: Record<string, string> = {}) {
+    return (err: unknown) => { step.value = {kind: 'error', message: fmt(template, {...params, error: String(err)})}; };
 }
 
 function reviewOrFinish(diverged: cli.DivergedFile[]) {
@@ -32,14 +33,14 @@ function resolve(files: cli.DivergedFile[], index: number, keepMine: boolean) {
             if (index + 1 < files.length) step.value = {kind: 'review', files, index: index + 1};
             else finish();
         })
-        .catch(fail('Error resolving ' + files[index].path + ': '));
+        .catch(fail(msg.promote.resolveError, {path: files[index].path}));
 }
 
 function finish() {
-    step.value = {kind: 'busy', message: 'Promoting...'};
+    step.value = {kind: 'busy', message: msg.promote.promoting};
     FinishPromote()
         .then((result) => { step.value = {kind: 'done', result}; })
-        .catch(fail('Error promoting: '));
+        .catch(fail(msg.promote.error));
 }
 
 StartPromote()
@@ -47,21 +48,21 @@ StartPromote()
         if (info.preserved.length > 0) step.value = {kind: 'preserved', info};
         else reviewOrFinish(info.diverged);
     })
-    .catch(fail('Error starting promote: '));
+    .catch(fail(msg.promote.startError));
 </script>
 
 <template>
-    <StepPage title="Promote">
+    <StepPage :title="msg.promote.title">
         <template v-if="step.kind === 'busy' || step.kind === 'error'">{{ step.message }}</template>
         <template v-else-if="step.kind === 'preserved'">
-            <p>main has file(s) promoted by other machines that you haven't pulled. They will be preserved by promote:</p>
+            <p>{{ msg.promote.preservedIntro }}</p>
             <div class="link-warning-list">
                 <div v-for="f in step.info.preserved" :key="f.path" class="link-warning-row">{{ f.path }}</div>
             </div>
-            <p>Continue promoting?</p>
+            <p>{{ msg.promote.preservedPrompt }}</p>
         </template>
         <template v-else-if="step.kind === 'review'">
-            <div class="link-review-counter">File {{ step.index + 1 }} of {{ step.files.length }}</div>
+            <div class="link-review-counter">{{ fmt(msg.common.reviewCounter, {index: step.index + 1, total: step.files.length}) }}</div>
             <div class="link-review-path">{{ step.files[step.index].path }}</div>
             <div class="link-review-diff"><DiffContent :content="step.files[step.index].diff"/></div>
         </template>
@@ -69,15 +70,15 @@ StartPromote()
 
         <template #controls>
             <template v-if="step.kind === 'preserved'">
-                <button class="control-btn" @click="reviewOrFinish(step.info.diverged)">Continue</button>
-                <button class="control-btn" @click="emit('back')">Cancel</button>
+                <button class="control-btn" @click="reviewOrFinish(step.info.diverged)">{{ msg.common.continue }}</button>
+                <button class="control-btn" @click="emit('back')">{{ msg.common.cancel }}</button>
             </template>
             <template v-else-if="step.kind === 'review'">
-                <button id="promote-keep-mine-btn" class="control-btn" @click="resolve(step.files, step.index, true)">Overwrite main with mine</button>
-                <button id="promote-keep-theirs-btn" class="control-btn" @click="resolve(step.files, step.index, false)">Keep main's version</button>
+                <button id="promote-keep-mine-btn" class="control-btn" @click="resolve(step.files, step.index, true)">{{ msg.promote.keepMine }}</button>
+                <button id="promote-keep-theirs-btn" class="control-btn" @click="resolve(step.files, step.index, false)">{{ msg.promote.keepTheirs }}</button>
             </template>
-            <button v-else-if="step.kind === 'done'" class="control-btn" @click="emit('back')">Continue</button>
-            <button v-else-if="step.kind === 'error'" class="control-btn" @click="emit('back')">Back</button>
+            <button v-else-if="step.kind === 'done'" class="control-btn" @click="emit('back')">{{ msg.common.continue }}</button>
+            <button v-else-if="step.kind === 'error'" class="control-btn" @click="emit('back')">{{ msg.common.back }}</button>
         </template>
     </StepPage>
 </template>

@@ -135,7 +135,9 @@ The GUI is a separate plugin binary, in two interchangeable variants:
 `just build-gui-vuejs`). Each lives entirely in its directory: Go entry
 point, `wails.json`, and `frontend/`. Running `hdf` with no subcommand launches
 the first GUI installed next to `hdf` or on `$PATH`, preferring vanilla;
-`hdf --gui vuejs` picks one. With none, `hdf` prints help. For a
+`hdf --gui vuejs` picks one. With none, `hdf` prints help. Both GUIs take
+all their text from `locales/en.json`, the single place to edit (and,
+later, translate) GUI wording. For a
 headless, CLI-only install (e.g. a server), build `hdf` alone:
 
 ```bash

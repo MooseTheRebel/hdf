@@ -1,12 +1,7 @@
 import { cli } from '../wailsjs/go/models';
-
-function escapeHtml(s: string): string {
-    return s
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
+import { msg } from '@locales';
+import { escapeHtml, html } from './i18n';
 
 export function renderReportIssueResult(result: cli.ReportIssueResult): string {
-    return `<p class="init-result-message">Report written to <code>${escapeHtml(result.path)}</code></p>`;
+    return `<p class="init-result-message">${html(msg.reportIssue.written, {}, {path: `<code>${escapeHtml(result.path)}</code>`})}</p>`;
 }

@@ -13,6 +13,8 @@ import {renderEnrollPreview, renderEnrollResult} from './enrollflow';
 import {renderLocalForm, renderRemoteForm, renderBranchCollision, renderInitResult} from './initflow';
 import {renderPreservedFiles, renderDivergedFileReview, renderPromoteResult} from './promoteflow';
 import {renderReportIssueResult} from './reportissueflow';
+import {fmt, msg} from '@locales';
+import {html} from './i18n';
 
 HasDiff().then((hasDiff) => {
     if (hasDiff) {
@@ -29,106 +31,45 @@ function displayHomeScreen() {
     if (!app) return;
     IsInitialized().then((initialized) => {
         if (initialized) {
+            const c = msg.home.commands;
             app.innerHTML = `
                 <div class="home-container">
-                    <div class="home-header">
-                        <h1 class="home-title">home-dawt-files</h1>
-                        <span class="home-badge initialized">initialized</span>
-                    </div>
-                    <p class="home-subtitle">Your dotfiles are managed by hdf.</p>
+                    ${homeHeader(msg.home.badgeInitialized, 'initialized')}
+                    <p class="home-subtitle">${html(msg.home.subtitleInitialized)}</p>
                     <div class="command-list">
-                        <button class="command-row command-row-clickable" id="enroll-btn">
-                            <code class="cmd">hdf enroll &lt;path&gt;</code>
-                            <span class="cmd-desc">Start managing a new dotfile</span>
-                        </button>
-                        <button class="command-row command-row-clickable" id="link-btn">
-                            <code class="cmd">hdf link</code>
-                            <span class="cmd-desc">Re-create all managed symlinks</span>
-                        </button>
-                        <button class="command-row command-row-clickable" id="link-no-fetch-btn">
-                            <code class="cmd">hdf link --no-fetch</code>
-                            <span class="cmd-desc">Re-create symlinks without fetching from remote</span>
-                        </button>
-                        <button class="command-row command-row-clickable" id="promote-btn">
-                            <code class="cmd">hdf promote</code>
-                            <span class="cmd-desc">Merge your machine branch into main and push</span>
-                        </button>
-                        <button class="command-row command-row-clickable" id="status-btn">
-                            <code class="cmd">hdf status</code>
-                            <span class="cmd-desc">Show managed files and sync state</span>
-                        </button>
-                        <div class="command-row">
-                            <code class="cmd">hdf daemon</code>
-                            <span class="cmd-desc">Start the background sync daemon</span>
-                        </div>
-                        <div class="command-row">
-                            <code class="cmd">hdf diff [url]</code>
-                            <span class="cmd-desc">View a diff in this window</span>
-                        </div>
-                        <button class="command-row command-row-clickable" id="config-btn">
-                            <code class="cmd">hdf config</code>
-                            <span class="cmd-desc">Show the current configuration</span>
-                        </button>
-                        <button class="command-row command-row-clickable" id="daemon-status-btn">
-                            <code class="cmd">hdf daemon status</code>
-                            <span class="cmd-desc">Check whether the sync daemon service is running</span>
-                        </button>
-                        <button class="command-row command-row-clickable" id="daemon-management-btn">
-                            <code class="cmd">hdf daemon install/start/stop/uninstall</code>
-                            <span class="cmd-desc">Manage the sync daemon background service</span>
-                        </button>
-                        <button class="command-row command-row-clickable" id="report-issue-btn">
-                            <code class="cmd">hdf report-issue</code>
-                            <span class="cmd-desc">Package diagnostics into a .zip for sharing with an admin</span>
-                        </button>
+                        ${commandRow(c.enroll, 'enroll-btn')}
+                        ${commandRow(c.link, 'link-btn')}
+                        ${commandRow(c.linkNoFetch, 'link-no-fetch-btn')}
+                        ${commandRow(c.promote, 'promote-btn')}
+                        ${commandRow(c.status, 'status-btn')}
+                        ${commandRow(c.daemon)}
+                        ${commandRow(c.diff)}
+                        ${commandRow(c.config, 'config-btn')}
+                        ${commandRow(c.daemonStatus, 'daemon-status-btn')}
+                        ${commandRow(c.daemonManagement, 'daemon-management-btn')}
+                        ${commandRow(c.reportIssue, 'report-issue-btn')}
                     </div>
-                    <button class="close-button" id="close-btn">Close</button>
+                    <button class="close-button" id="close-btn">${html(msg.common.close)}</button>
                 </div>
             `;
         } else {
+            const steps = msg.home.steps.map((step, i) => `
+                        <div class="step">
+                            <span class="step-number">${i + 1}</span>
+                            <div class="step-body">
+                                <div class="step-label">${html(step.label)}</div>
+                                <code class="step-cmd">${html(step.command)}</code>
+                                <div class="step-hint">${html(step.hint)}</div>
+                            </div>
+                        </div>`).join('');
             app.innerHTML = `
                 <div class="home-container">
-                    <div class="home-header">
-                        <h1 class="home-title">home-dawt-files</h1>
-                        <span class="home-badge not-initialized">not initialized</span>
+                    ${homeHeader(msg.home.badgeNotInitialized, 'not-initialized')}
+                    <p class="home-subtitle">${html(msg.home.subtitleNotInitialized)}</p>
+                    <div class="steps">${steps}
                     </div>
-                    <p class="home-subtitle">Manage your dotfiles with git — across every machine.</p>
-                    <div class="steps">
-                        <div class="step">
-                            <span class="step-number">1</span>
-                            <div class="step-body">
-                                <div class="step-label">Initialize hdf</div>
-                                <code class="step-cmd">hdf init</code>
-                                <div class="step-hint">Sets up a local git repo and push target.</div>
-                            </div>
-                        </div>
-                        <div class="step">
-                            <span class="step-number">2</span>
-                            <div class="step-body">
-                                <div class="step-label">Enroll a dotfile</div>
-                                <code class="step-cmd">hdf enroll ~/.bashrc</code>
-                                <div class="step-hint">Copies the file into the repo and replaces it with a symlink.</div>
-                            </div>
-                        </div>
-                        <div class="step">
-                            <span class="step-number">3</span>
-                            <div class="step-body">
-                                <div class="step-label">On a new machine — re-link</div>
-                                <code class="step-cmd">hdf link</code>
-                                <div class="step-hint">Recreates symlinks for all managed files after cloning.</div>
-                            </div>
-                        </div>
-                        <div class="step">
-                            <span class="step-number">4</span>
-                            <div class="step-body">
-                                <div class="step-label">Check drift</div>
-                                <code class="step-cmd">hdf status</code>
-                                <div class="step-hint">Shows which files have uncommitted local changes.</div>
-                            </div>
-                        </div>
-                    </div>
-                    <button class="control-btn" id="get-started-btn">Get Started</button>
-                    <button class="close-button" id="close-btn">Close</button>
+                    <button class="control-btn" id="get-started-btn">${html(msg.home.getStarted)}</button>
+                    <button class="close-button" id="close-btn">${html(msg.common.close)}</button>
                 </div>
             `;
         }
@@ -147,13 +88,10 @@ function displayHomeScreen() {
     }).catch((err) => {
         app.innerHTML = `
             <div class="home-container">
-                <div class="home-header">
-                    <h1 class="home-title">home-dawt-files</h1>
-                    <span class="home-badge not-initialized">error</span>
-                </div>
-                <p class="home-subtitle">Could not read hdf configuration.</p>
+                ${homeHeader(msg.home.badgeError, 'not-initialized')}
+                <p class="home-subtitle">${html(msg.home.configError)}</p>
                 <p class="home-subtitle" id="error-message"></p>
-                <button class="close-button" id="error-close-btn">Close</button>
+                <button class="close-button" id="error-close-btn">${html(msg.common.close)}</button>
             </div>
         `;
         const errorMsgEl = document.getElementById('error-message');
@@ -162,18 +100,38 @@ function displayHomeScreen() {
     });
 }
 
+function homeHeader(badge: string, badgeClass: string): string {
+    return `
+        <div class="home-header">
+            <h1 class="home-title">${html(msg.home.title)}</h1>
+            <span class="home-badge ${badgeClass}">${html(badge)}</span>
+        </div>
+    `;
+}
+
+// commandRow renders a home-screen command: a button when it has an id
+// (clickable), otherwise a plain row.
+function commandRow(command: {command: string; description: string}, id?: string): string {
+    const body = `
+        <code class="cmd">${html(command.command)}</code>
+        <span class="cmd-desc">${html(command.description)}</span>`;
+    return id
+        ? `<button class="command-row command-row-clickable" id="${id}">${body}</button>`
+        : `<div class="command-row">${body}</div>`;
+}
+
 function displayStatusView() {
     const app = document.querySelector('#app');
     if (!app) return;
     app.innerHTML = `
         <div class="status-container">
             <div class="status-header-section">
-                <h1>Status</h1>
+                <h1>${html(msg.status.title)}</h1>
             </div>
-            <div id="status-loading">Loading status...</div>
+            <div id="status-loading">${html(msg.status.loading)}</div>
             <div id="status-content" style="display: none;"></div>
             <div class="status-controls">
-                <button id="status-back-btn" class="control-btn">Back</button>
+                <button id="status-back-btn" class="control-btn">${html(msg.common.back)}</button>
             </div>
         </div>
     `;
@@ -189,7 +147,7 @@ function displayStatusView() {
         }
     }).catch((err) => {
         const loadingEl = document.getElementById('status-loading');
-        if (loadingEl) loadingEl.textContent = 'Error loading status: ' + err;
+        if (loadingEl) loadingEl.textContent = fmt(msg.status.loadError, {error: String(err)});
     });
 }
 
@@ -199,12 +157,12 @@ function displayConfigView() {
     app.innerHTML = `
         <div class="config-container">
             <div class="config-header-section">
-                <h1>Config</h1>
+                <h1>${html(msg.config.title)}</h1>
             </div>
-            <div id="config-loading">Loading config...</div>
+            <div id="config-loading">${html(msg.config.loading)}</div>
             <div id="config-content" style="display: none;"></div>
             <div class="config-controls">
-                <button id="config-back-btn" class="control-btn">Back</button>
+                <button id="config-back-btn" class="control-btn">${html(msg.common.back)}</button>
             </div>
         </div>
     `;
@@ -220,7 +178,7 @@ function displayConfigView() {
         }
     }).catch((err) => {
         const loadingEl = document.getElementById('config-loading');
-        if (loadingEl) loadingEl.textContent = 'Error loading config: ' + err;
+        if (loadingEl) loadingEl.textContent = fmt(msg.config.loadError, {error: String(err)});
     });
 }
 
@@ -230,12 +188,12 @@ function displayDaemonStatusView() {
     app.innerHTML = `
         <div class="daemon-status-container">
             <div class="daemon-status-header-section">
-                <h1>Daemon Status</h1>
+                <h1>${html(msg.daemon.statusTitle)}</h1>
             </div>
-            <div id="daemon-status-loading">Loading daemon status...</div>
+            <div id="daemon-status-loading">${html(msg.daemon.loading)}</div>
             <div id="daemon-status-content" style="display: none;"></div>
             <div class="daemon-status-controls">
-                <button id="daemon-status-back-btn" class="control-btn">Back</button>
+                <button id="daemon-status-back-btn" class="control-btn">${html(msg.common.back)}</button>
             </div>
         </div>
     `;
@@ -251,7 +209,7 @@ function displayDaemonStatusView() {
         }
     }).catch((err) => {
         const loadingEl = document.getElementById('daemon-status-loading');
-        if (loadingEl) loadingEl.textContent = 'Error loading daemon status: ' + err;
+        if (loadingEl) loadingEl.textContent = fmt(msg.daemon.loadError, {error: String(err)});
     });
 }
 
@@ -261,13 +219,13 @@ function displayDaemonManagementView() {
     app.innerHTML = `
         <div class="daemon-management-container">
             <div class="daemon-management-header-section">
-                <h1>Daemon Management</h1>
+                <h1>${html(msg.daemon.managementTitle)}</h1>
             </div>
-            <div id="daemon-management-loading">Loading daemon status...</div>
+            <div id="daemon-management-loading">${html(msg.daemon.loading)}</div>
             <div id="daemon-management-content" style="display: none;"></div>
             <div id="daemon-management-result"></div>
             <div class="daemon-management-controls">
-                <button id="daemon-management-back-btn" class="control-btn">Back</button>
+                <button id="daemon-management-back-btn" class="control-btn">${html(msg.common.back)}</button>
             </div>
         </div>
     `;
@@ -290,7 +248,7 @@ function refreshDaemonManagementStatus() {
         }
         wireDaemonManagementActions();
     }).catch((err) => {
-        if (loadingEl) loadingEl.textContent = 'Error loading daemon status: ' + err;
+        if (loadingEl) loadingEl.textContent = fmt(msg.daemon.loadError, {error: String(err)});
     });
 }
 
@@ -302,14 +260,14 @@ function wireDaemonManagementActions() {
             if (resultEl) resultEl.textContent = successMessage;
             refreshDaemonManagementStatus();
         }).catch((err) => {
-            if (resultEl) resultEl.textContent = 'Error: ' + err;
+            if (resultEl) resultEl.textContent = fmt(msg.daemon.actionError, {error: String(err)});
         });
     };
 
-    document.getElementById('daemon-install-btn')?.addEventListener('click', () => runAction(InstallDaemon, 'Daemon installed and started.'));
-    document.getElementById('daemon-uninstall-btn')?.addEventListener('click', () => runAction(UninstallDaemon, 'Daemon uninstalled.'));
-    document.getElementById('daemon-start-btn')?.addEventListener('click', () => runAction(StartDaemon, 'Daemon started.'));
-    document.getElementById('daemon-stop-btn')?.addEventListener('click', () => runAction(StopDaemon, 'Daemon stopped.'));
+    document.getElementById('daemon-install-btn')?.addEventListener('click', () => runAction(InstallDaemon, msg.daemon.installed));
+    document.getElementById('daemon-uninstall-btn')?.addEventListener('click', () => runAction(UninstallDaemon, msg.daemon.uninstalled));
+    document.getElementById('daemon-start-btn')?.addEventListener('click', () => runAction(StartDaemon, msg.daemon.started));
+    document.getElementById('daemon-stop-btn')?.addEventListener('click', () => runAction(StopDaemon, msg.daemon.stopped));
 }
 
 function startEnrollFlow() {
@@ -317,7 +275,7 @@ function startEnrollFlow() {
         if (!path) return;
         displayEnrollView(path);
     }).catch((err) => {
-        displayEnrollErrorScreen('Error picking a file: ' + err);
+        displayEnrollErrorScreen(fmt(msg.enroll.pickError, {error: String(err)}));
     });
 }
 
@@ -327,9 +285,9 @@ function displayEnrollView(path: string) {
     app.innerHTML = `
         <div class="link-container">
             <div class="link-header-section">
-                <h1>Enroll</h1>
+                <h1>${html(msg.enroll.title)}</h1>
             </div>
-            <div id="enroll-step-content">Checking for pending warnings...</div>
+            <div id="enroll-step-content">${html(msg.warnings.checking)}</div>
             <div class="link-controls" id="enroll-controls"></div>
         </div>
     `;
@@ -342,7 +300,7 @@ function displayEnrollErrorScreen(message: string) {
     app.innerHTML = `
         <div class="link-container">
             <div class="link-header-section">
-                <h1>Enroll</h1>
+                <h1>${html(msg.enroll.title)}</h1>
             </div>
             <div id="enroll-step-content"></div>
             <div class="link-controls" id="enroll-controls"></div>
@@ -359,7 +317,7 @@ function runEnrollWarningsStep(path: string) {
             runEnrollStartStep(path);
         }
     }).catch((err) => {
-        showEnrollError('Error checking pending warnings: ' + err);
+        showEnrollError(fmt(msg.warnings.checkError, {error: String(err)}));
     });
 }
 
@@ -369,8 +327,8 @@ function showEnrollWarnings(warnings: string[], path: string) {
     if (contentEl) contentEl.innerHTML = renderPendingWarnings(warnings);
     if (controlsEl) {
         controlsEl.innerHTML = `
-            <button id="enroll-warnings-continue-btn" class="control-btn">Continue</button>
-            <button id="enroll-warnings-cancel-btn" class="control-btn">Cancel</button>
+            <button id="enroll-warnings-continue-btn" class="control-btn">${html(msg.common.continue)}</button>
+            <button id="enroll-warnings-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
         `;
     }
     document.getElementById('enroll-warnings-continue-btn')?.addEventListener('click', () => runEnrollStartStep(path));
@@ -380,36 +338,36 @@ function showEnrollWarnings(warnings: string[], path: string) {
 function runEnrollStartStep(path: string) {
     const contentEl = document.getElementById('enroll-step-content');
     const controlsEl = document.getElementById('enroll-controls');
-    if (contentEl) contentEl.textContent = 'Preparing enroll preview...';
+    if (contentEl) contentEl.textContent = msg.enroll.preparing;
     if (controlsEl) controlsEl.innerHTML = '';
 
     StartEnroll(path).then((info) => {
         if (contentEl) contentEl.innerHTML = renderEnrollPreview(info);
         if (controlsEl) {
             controlsEl.innerHTML = `
-                <button id="enroll-confirm-btn" class="control-btn">Enroll</button>
-                <button id="enroll-cancel-btn" class="control-btn">Cancel</button>
+                <button id="enroll-confirm-btn" class="control-btn">${html(msg.enroll.confirm)}</button>
+                <button id="enroll-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
             `;
         }
         document.getElementById('enroll-confirm-btn')?.addEventListener('click', () => runEnrollConfirmStep());
         document.getElementById('enroll-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
-        showEnrollError('Error starting enroll: ' + err);
+        showEnrollError(fmt(msg.enroll.startError, {error: String(err)}));
     });
 }
 
 function runEnrollConfirmStep() {
     const contentEl = document.getElementById('enroll-step-content');
     const controlsEl = document.getElementById('enroll-controls');
-    if (contentEl) contentEl.textContent = 'Enrolling...';
+    if (contentEl) contentEl.textContent = msg.enroll.enrolling;
     if (controlsEl) controlsEl.innerHTML = '';
 
     ConfirmEnroll().then((result) => {
         if (contentEl) contentEl.innerHTML = renderEnrollResult(result);
-        if (controlsEl) controlsEl.innerHTML = '<button id="enroll-done-back-btn" class="control-btn">Back</button>';
+        if (controlsEl) controlsEl.innerHTML = '<button id="enroll-done-back-btn" class="control-btn">${html(msg.common.back)}</button>';
         document.getElementById('enroll-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
-        showEnrollError('Error enrolling: ' + err);
+        showEnrollError(fmt(msg.enroll.error, {error: String(err)}));
     });
 }
 
@@ -417,7 +375,7 @@ function showEnrollError(message: string) {
     const contentEl = document.getElementById('enroll-step-content');
     const controlsEl = document.getElementById('enroll-controls');
     if (contentEl) contentEl.textContent = message;
-    if (controlsEl) controlsEl.innerHTML = '<button id="enroll-error-back-btn" class="control-btn">Back</button>';
+    if (controlsEl) controlsEl.innerHTML = '<button id="enroll-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
     document.getElementById('enroll-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
@@ -427,15 +385,15 @@ function displayInitModeSelect() {
     app.innerHTML = `
         <div class="link-container">
             <div class="link-header-section">
-                <h1>Get Started</h1>
+                <h1>${html(msg.init.title)}</h1>
             </div>
             <div id="init-step-content">
-                <p>How do you want to store your dot files?</p>
+                <p>${html(msg.init.modePrompt)}</p>
             </div>
             <div class="link-controls" id="init-controls">
-                <button id="init-mode-local-btn" class="control-btn">Local directory</button>
-                <button id="init-mode-remote-btn" class="control-btn">Remote repository</button>
-                <button id="init-mode-cancel-btn" class="control-btn">Cancel</button>
+                <button id="init-mode-local-btn" class="control-btn">${html(msg.init.modeLocal)}</button>
+                <button id="init-mode-remote-btn" class="control-btn">${html(msg.init.modeRemote)}</button>
+                <button id="init-mode-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
             </div>
         </div>
     `;
@@ -447,15 +405,15 @@ function displayInitModeSelect() {
 function displayInitLocalForm() {
     const contentEl = document.getElementById('init-step-content');
     const controlsEl = document.getElementById('init-controls');
-    if (contentEl) contentEl.textContent = 'Loading default path...';
+    if (contentEl) contentEl.textContent = msg.init.loadingDefaults;
     if (controlsEl) controlsEl.innerHTML = '';
 
     DefaultRepoPath().then((defaultPath) => {
         if (contentEl) contentEl.innerHTML = renderLocalForm(defaultPath);
         if (controlsEl) {
             controlsEl.innerHTML = `
-                <button id="init-continue-btn" class="control-btn">Continue</button>
-                <button id="init-cancel-btn" class="control-btn">Cancel</button>
+                <button id="init-continue-btn" class="control-btn">${html(msg.common.continue)}</button>
+                <button id="init-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
             `;
         }
         document.getElementById('init-repo-browse-btn')?.addEventListener('click', () => {
@@ -464,7 +422,7 @@ function displayInitLocalForm() {
                 const input = document.getElementById('init-repo-path') as HTMLInputElement | null;
                 if (input) input.value = path;
             }).catch((err) => {
-                console.error('Error picking a directory: ' + err);
+                console.error(fmt(msg.init.pickDirectoryError, {error: String(err)}));
             });
         });
         document.getElementById('init-push-browse-btn')?.addEventListener('click', () => {
@@ -473,7 +431,7 @@ function displayInitLocalForm() {
                 const input = document.getElementById('init-push-target') as HTMLInputElement | null;
                 if (input) input.value = path;
             }).catch((err) => {
-                console.error('Error picking a directory: ' + err);
+                console.error(fmt(msg.init.pickDirectoryError, {error: String(err)}));
             });
         });
         document.getElementById('init-continue-btn')?.addEventListener('click', () => {
@@ -483,22 +441,22 @@ function displayInitLocalForm() {
         });
         document.getElementById('init-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
-        showInitError('Error loading default path: ' + err);
+        showInitError(fmt(msg.init.defaultsError, {error: String(err)}));
     });
 }
 
 function displayInitRemoteForm() {
     const contentEl = document.getElementById('init-step-content');
     const controlsEl = document.getElementById('init-controls');
-    if (contentEl) contentEl.textContent = 'Loading default path...';
+    if (contentEl) contentEl.textContent = msg.init.loadingDefaults;
     if (controlsEl) controlsEl.innerHTML = '';
 
     DefaultRepoPath().then((defaultPath) => {
         if (contentEl) contentEl.innerHTML = renderRemoteForm(defaultPath);
         if (controlsEl) {
             controlsEl.innerHTML = `
-                <button id="init-continue-btn" class="control-btn">Continue</button>
-                <button id="init-cancel-btn" class="control-btn">Cancel</button>
+                <button id="init-continue-btn" class="control-btn">${html(msg.common.continue)}</button>
+                <button id="init-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
             `;
         }
         document.getElementById('init-clone-browse-btn')?.addEventListener('click', () => {
@@ -507,7 +465,7 @@ function displayInitRemoteForm() {
                 const input = document.getElementById('init-clone-dir') as HTMLInputElement | null;
                 if (input) input.value = path;
             }).catch((err) => {
-                console.error('Error picking a directory: ' + err);
+                console.error(fmt(msg.init.pickDirectoryError, {error: String(err)}));
             });
         });
         document.getElementById('init-continue-btn')?.addEventListener('click', () => {
@@ -517,14 +475,14 @@ function displayInitRemoteForm() {
         });
         document.getElementById('init-cancel-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
-        showInitError('Error loading default path: ' + err);
+        showInitError(fmt(msg.init.defaultsError, {error: String(err)}));
     });
 }
 
 function runInitStart(start: () => Promise<cli.InitStartInfo>) {
     const contentEl = document.getElementById('init-step-content');
     const controlsEl = document.getElementById('init-controls');
-    if (contentEl) contentEl.textContent = 'Setting up...';
+    if (contentEl) contentEl.textContent = msg.init.settingUp;
     if (controlsEl) controlsEl.innerHTML = '';
 
     start().then((info) => {
@@ -534,7 +492,7 @@ function runInitStart(start: () => Promise<cli.InitStartInfo>) {
             runFinishInit();
         }
     }).catch((err) => {
-        showInitError('Error setting up: ' + err);
+        showInitError(fmt(msg.init.setupError, {error: String(err)}));
     });
 }
 
@@ -544,8 +502,8 @@ function displayInitCollision(branch: string) {
     if (contentEl) contentEl.innerHTML = renderBranchCollision(branch);
     if (controlsEl) {
         controlsEl.innerHTML = `
-            <button id="init-collision-reuse-btn" class="control-btn">Reuse it</button>
-            <button id="init-collision-unique-btn" class="control-btn">Create a unique branch</button>
+            <button id="init-collision-reuse-btn" class="control-btn">${html(msg.init.reuse)}</button>
+            <button id="init-collision-unique-btn" class="control-btn">${html(msg.init.unique)}</button>
         `;
     }
     document.getElementById('init-collision-reuse-btn')?.addEventListener('click', () => resolveInitCollision(false));
@@ -555,28 +513,28 @@ function displayInitCollision(branch: string) {
 function resolveInitCollision(useUnique: boolean) {
     const contentEl = document.getElementById('init-step-content');
     const controlsEl = document.getElementById('init-controls');
-    if (contentEl) contentEl.textContent = 'Setting up...';
+    if (contentEl) contentEl.textContent = msg.init.settingUp;
     if (controlsEl) controlsEl.innerHTML = '';
 
     ResolveBranchCollision(useUnique).then(() => {
         runFinishInit();
     }).catch((err) => {
-        showInitError('Error resolving branch collision: ' + err);
+        showInitError(fmt(msg.init.collisionError, {error: String(err)}));
     });
 }
 
 function runFinishInit() {
     const contentEl = document.getElementById('init-step-content');
     const controlsEl = document.getElementById('init-controls');
-    if (contentEl) contentEl.textContent = 'Finishing setup...';
+    if (contentEl) contentEl.textContent = msg.init.finishing;
     if (controlsEl) controlsEl.innerHTML = '';
 
     FinishInit().then((result) => {
         if (contentEl) contentEl.innerHTML = renderInitResult(result);
-        if (controlsEl) controlsEl.innerHTML = '<button id="init-done-continue-btn" class="control-btn">Continue</button>';
+        if (controlsEl) controlsEl.innerHTML = '<button id="init-done-continue-btn" class="control-btn">${html(msg.common.continue)}</button>';
         document.getElementById('init-done-continue-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
-        showInitError('Error finishing setup: ' + err);
+        showInitError(fmt(msg.init.finishError, {error: String(err)}));
     });
 }
 
@@ -584,15 +542,9 @@ function showInitError(message: string) {
     const contentEl = document.getElementById('init-step-content');
     const controlsEl = document.getElementById('init-controls');
     if (contentEl) contentEl.textContent = message;
-    if (controlsEl) controlsEl.innerHTML = '<button id="init-error-back-btn" class="control-btn">Back</button>';
+    if (controlsEl) controlsEl.innerHTML = '<button id="init-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
     document.getElementById('init-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
-
-const reportIssueWarning = "Warning: hdf's automatic redaction is limited — it strips a few known " +
-    'credential patterns, but this is not a guarantee that all sensitive information is removed. ' +
-    "Review the report's contents yourself before sharing it with anyone. " +
-    'Reporting an issue is entirely optional and voluntary. Securing your own systems should ' +
-    'always be your first priority.';
 
 function displayReportIssueView() {
     const app = document.querySelector('#app');
@@ -600,16 +552,16 @@ function displayReportIssueView() {
     app.innerHTML = `
         <div class="link-container">
             <div class="link-header-section">
-                <h1>Report Issue</h1>
+                <h1>${html(msg.reportIssue.title)}</h1>
             </div>
             <div id="report-issue-step-content">
-                <p>${reportIssueWarning}</p>
-                <label class="init-field-label" for="report-issue-text">What was expected? What actually happened? (optional)</label>
+                <p>${html(msg.reportIssue.warning)}</p>
+                <label class="init-field-label" for="report-issue-text">${html(msg.reportIssue.prompt)}</label>
                 <textarea id="report-issue-text" class="init-text-input report-issue-textarea"></textarea>
             </div>
             <div class="link-controls" id="report-issue-controls">
-                <button id="report-issue-submit-btn" class="control-btn">Build Report</button>
-                <button id="report-issue-cancel-btn" class="control-btn">Cancel</button>
+                <button id="report-issue-submit-btn" class="control-btn">${html(msg.reportIssue.submit)}</button>
+                <button id="report-issue-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
             </div>
         </div>
     `;
@@ -623,16 +575,16 @@ function displayReportIssueView() {
 function runSubmitReportIssue(text: string) {
     const contentEl = document.getElementById('report-issue-step-content');
     const controlsEl = document.getElementById('report-issue-controls');
-    if (contentEl) contentEl.textContent = 'Building report...';
+    if (contentEl) contentEl.textContent = msg.reportIssue.building;
     if (controlsEl) controlsEl.innerHTML = '';
 
     SubmitReportIssue(text).then((result) => {
         if (contentEl) contentEl.innerHTML = renderReportIssueResult(result);
-        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-done-back-btn" class="control-btn">Back</button>';
+        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-done-back-btn" class="control-btn">${html(msg.common.back)}</button>';
         document.getElementById('report-issue-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
-        if (contentEl) contentEl.textContent = 'Error building report: ' + err;
-        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-error-back-btn" class="control-btn">Back</button>';
+        if (contentEl) contentEl.textContent = fmt(msg.reportIssue.error, {error: String(err)});
+        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
         document.getElementById('report-issue-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
     });
 }
@@ -643,9 +595,9 @@ function displayPromoteView() {
     app.innerHTML = `
         <div class="link-container">
             <div class="link-header-section">
-                <h1>Promote</h1>
+                <h1>${html(msg.promote.title)}</h1>
             </div>
-            <div id="promote-step-content">Checking for changes to promote...</div>
+            <div id="promote-step-content">${html(msg.promote.checking)}</div>
             <div class="link-controls" id="promote-controls"></div>
         </div>
     `;
@@ -659,7 +611,7 @@ function displayPromoteView() {
             runFinishPromote();
         }
     }).catch((err) => {
-        showPromoteError('Error starting promote: ' + err);
+        showPromoteError(fmt(msg.promote.startError, {error: String(err)}));
     });
 }
 
@@ -669,8 +621,8 @@ function showPromotePreserved(info: cli.PromoteStartInfo) {
     if (contentEl) contentEl.innerHTML = renderPreservedFiles(info.preserved);
     if (controlsEl) {
         controlsEl.innerHTML = `
-            <button id="promote-preserved-continue-btn" class="control-btn">Continue</button>
-            <button id="promote-preserved-cancel-btn" class="control-btn">Cancel</button>
+            <button id="promote-preserved-continue-btn" class="control-btn">${html(msg.common.continue)}</button>
+            <button id="promote-preserved-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
         `;
     }
     document.getElementById('promote-preserved-continue-btn')?.addEventListener('click', () => {
@@ -689,8 +641,8 @@ function runPromoteReview(files: cli.DivergedFile[], index: number) {
     if (contentEl) contentEl.innerHTML = renderDivergedFileReview(files[index], index, files.length);
     if (controlsEl) {
         controlsEl.innerHTML = `
-            <button id="promote-keep-mine-btn" class="control-btn">Overwrite main with mine</button>
-            <button id="promote-keep-theirs-btn" class="control-btn">Keep main's version</button>
+            <button id="promote-keep-mine-btn" class="control-btn">${html(msg.promote.keepMine)}</button>
+            <button id="promote-keep-theirs-btn" class="control-btn">${html(msg.promote.keepTheirs)}</button>
         `;
     }
     const advance = () => {
@@ -704,13 +656,13 @@ function runPromoteReview(files: cli.DivergedFile[], index: number) {
     document.getElementById('promote-keep-mine-btn')?.addEventListener('click', () => {
         if (controlsEl) controlsEl.innerHTML = '';
         ResolveDivergedFile(index, true).then(advance).catch((err) => {
-            showPromoteError('Error resolving ' + files[index].path + ': ' + err);
+            showPromoteError(fmt(msg.promote.resolveError, {path: files[index].path, error: String(err)}));
         });
     });
     document.getElementById('promote-keep-theirs-btn')?.addEventListener('click', () => {
         if (controlsEl) controlsEl.innerHTML = '';
         ResolveDivergedFile(index, false).then(advance).catch((err) => {
-            showPromoteError('Error resolving ' + files[index].path + ': ' + err);
+            showPromoteError(fmt(msg.promote.resolveError, {path: files[index].path, error: String(err)}));
         });
     });
 }
@@ -718,15 +670,15 @@ function runPromoteReview(files: cli.DivergedFile[], index: number) {
 function runFinishPromote() {
     const contentEl = document.getElementById('promote-step-content');
     const controlsEl = document.getElementById('promote-controls');
-    if (contentEl) contentEl.textContent = 'Promoting...';
+    if (contentEl) contentEl.textContent = msg.promote.promoting;
     if (controlsEl) controlsEl.innerHTML = '';
 
     FinishPromote().then((result) => {
         if (contentEl) contentEl.innerHTML = renderPromoteResult(result);
-        if (controlsEl) controlsEl.innerHTML = '<button id="promote-done-continue-btn" class="control-btn">Continue</button>';
+        if (controlsEl) controlsEl.innerHTML = '<button id="promote-done-continue-btn" class="control-btn">${html(msg.common.continue)}</button>';
         document.getElementById('promote-done-continue-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
-        showPromoteError('Error promoting: ' + err);
+        showPromoteError(fmt(msg.promote.error, {error: String(err)}));
     });
 }
 
@@ -734,7 +686,7 @@ function showPromoteError(message: string) {
     const contentEl = document.getElementById('promote-step-content');
     const controlsEl = document.getElementById('promote-controls');
     if (contentEl) contentEl.textContent = message;
-    if (controlsEl) controlsEl.innerHTML = '<button id="promote-error-back-btn" class="control-btn">Back</button>';
+    if (controlsEl) controlsEl.innerHTML = '<button id="promote-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
     document.getElementById('promote-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
@@ -744,9 +696,9 @@ function displayLinkView(noFetch: boolean) {
     app.innerHTML = `
         <div class="link-container">
             <div class="link-header-section">
-                <h1>Link</h1>
+                <h1>${html(msg.link.title)}</h1>
             </div>
-            <div id="link-step-content">Checking for pending warnings...</div>
+            <div id="link-step-content">${html(msg.warnings.checking)}</div>
             <div class="link-controls" id="link-controls"></div>
         </div>
     `;
@@ -761,7 +713,7 @@ function runLinkWarningsStep(noFetch: boolean) {
             runLinkStartStep(noFetch);
         }
     }).catch((err) => {
-        showLinkError('Error checking pending warnings: ' + err);
+        showLinkError(fmt(msg.warnings.checkError, {error: String(err)}));
     });
 }
 
@@ -771,8 +723,8 @@ function showLinkWarnings(warnings: string[], noFetch: boolean) {
     if (contentEl) contentEl.innerHTML = renderPendingWarnings(warnings);
     if (controlsEl) {
         controlsEl.innerHTML = `
-            <button id="link-warnings-continue-btn" class="control-btn">Continue</button>
-            <button id="link-warnings-cancel-btn" class="control-btn">Cancel</button>
+            <button id="link-warnings-continue-btn" class="control-btn">${html(msg.common.continue)}</button>
+            <button id="link-warnings-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
         `;
     }
     document.getElementById('link-warnings-continue-btn')?.addEventListener('click', () => runLinkStartStep(noFetch));
@@ -782,7 +734,7 @@ function showLinkWarnings(warnings: string[], noFetch: boolean) {
 function runLinkStartStep(noFetch: boolean) {
     const contentEl = document.getElementById('link-step-content');
     const controlsEl = document.getElementById('link-controls');
-    if (contentEl) contentEl.textContent = noFetch ? 'Skipping fetch...' : 'Fetching from remote...';
+    if (contentEl) contentEl.textContent = noFetch ? msg.link.skippingFetch : msg.link.fetching;
     if (controlsEl) controlsEl.innerHTML = '';
 
     StartLink(noFetch).then((info) => {
@@ -792,7 +744,7 @@ function runLinkStartStep(noFetch: boolean) {
             runLinkFinishStep(info.message);
         }
     }).catch((err) => {
-        showLinkError('Error starting link: ' + err);
+        showLinkError(fmt(msg.link.startError, {error: String(err)}));
     });
 }
 
@@ -802,8 +754,8 @@ function runLinkReviewStep(files: cli.IncomingFile[], index: number) {
     if (contentEl) contentEl.innerHTML = renderIncomingFileReview(files[index], index, files.length);
     if (controlsEl) {
         controlsEl.innerHTML = `
-            <button id="link-accept-btn" class="control-btn">Accept</button>
-            <button id="link-skip-btn" class="control-btn">Skip</button>
+            <button id="link-accept-btn" class="control-btn">${html(msg.link.accept)}</button>
+            <button id="link-skip-btn" class="control-btn">${html(msg.link.skip)}</button>
         `;
     }
     document.getElementById('link-accept-btn')?.addEventListener('click', () => {
@@ -834,12 +786,12 @@ function showLinkAcceptError(files: cli.IncomingFile[], index: number, errMessag
     if (contentEl) {
         contentEl.innerHTML = '<p class="link-error"></p>';
         const errorEl = contentEl.querySelector('.link-error');
-        if (errorEl) errorEl.textContent = `Error accepting ${files[index].path}: ${errMessage}`;
+        if (errorEl) errorEl.textContent = fmt(msg.link.acceptError, {path: files[index].path, error: errMessage});
     }
     if (controlsEl) {
         controlsEl.innerHTML = `
-            <button id="link-error-skip-btn" class="control-btn">Skip and continue</button>
-            <button id="link-error-cancel-btn" class="control-btn">Cancel</button>
+            <button id="link-error-skip-btn" class="control-btn">${html(msg.link.skipAndContinue)}</button>
+            <button id="link-error-cancel-btn" class="control-btn">${html(msg.common.cancel)}</button>
         `;
     }
     document.getElementById('link-error-skip-btn')?.addEventListener('click', () => advanceLinkReview(files, index));
@@ -849,15 +801,15 @@ function showLinkAcceptError(files: cli.IncomingFile[], index: number, errMessag
 function runLinkFinishStep(message: string) {
     const contentEl = document.getElementById('link-step-content');
     const controlsEl = document.getElementById('link-controls');
-    if (contentEl) contentEl.textContent = 'Re-creating symlinks...';
+    if (contentEl) contentEl.textContent = msg.link.relinking;
     if (controlsEl) controlsEl.innerHTML = '';
 
     FinishLink().then((results) => {
         if (contentEl) contentEl.innerHTML = renderLinkResults(message, results);
-        if (controlsEl) controlsEl.innerHTML = '<button id="link-done-back-btn" class="control-btn">Back</button>';
+        if (controlsEl) controlsEl.innerHTML = '<button id="link-done-back-btn" class="control-btn">${html(msg.common.back)}</button>';
         document.getElementById('link-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
-        showLinkError('Error finishing link: ' + err);
+        showLinkError(fmt(msg.link.finishError, {error: String(err)}));
     });
 }
 
@@ -865,7 +817,7 @@ function showLinkError(message: string) {
     const contentEl = document.getElementById('link-step-content');
     const controlsEl = document.getElementById('link-controls');
     if (contentEl) contentEl.textContent = message;
-    if (controlsEl) controlsEl.innerHTML = '<button id="link-error-back-btn" class="control-btn">Back</button>';
+    if (controlsEl) controlsEl.innerHTML = '<button id="link-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
     document.getElementById('link-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
@@ -884,7 +836,7 @@ function loadCurrentDiff() {
         }
         updateNavigationState();
     }).catch((err) => {
-        if (loadingEl) loadingEl.textContent = 'Error loading diff: ' + err;
+        if (loadingEl) loadingEl.textContent = fmt(msg.diff.loadError, {error: String(err)});
         updateNavigationState();
     });
 }
@@ -894,7 +846,7 @@ function updateNavigationState() {
         const counterEl = document.getElementById('diff-counter');
         const prevBtn = document.getElementById('prev-btn') as HTMLButtonElement;
         const nextBtn = document.getElementById('next-btn') as HTMLButtonElement;
-        if (counterEl) counterEl.textContent = `Diff ${currentIndex + 1} of ${totalDiffs}`;
+        if (counterEl) counterEl.textContent = fmt(msg.diff.counter, {index: currentIndex + 1, total: totalDiffs});
         if (prevBtn) prevBtn.disabled = currentIndex === 0;
         if (nextBtn) nextBtn.disabled = currentIndex === totalDiffs - 1;
     });
@@ -904,15 +856,15 @@ function displayDiffViewer() {
     document.querySelector('#app')!.innerHTML = `
         <div class="diff-container">
             <div class="diff-header-section">
-                <h1>Diff Viewer</h1>
+                <h1>${html(msg.diff.title)}</h1>
                 <div id="diff-counter" class="diff-counter"></div>
             </div>
-            <div id="loading">Loading diff...</div>
+            <div id="loading">${html(msg.diff.loading)}</div>
             <div id="diff-content" style="display: none;"></div>
             <div class="diff-controls">
-                <button id="prev-btn" class="control-btn">Previous</button>
-                <button id="next-btn" class="control-btn">Next</button>
-                <button id="close-btn" class="control-btn close-btn">Close</button>
+                <button id="prev-btn" class="control-btn">${html(msg.diff.previous)}</button>
+                <button id="next-btn" class="control-btn">${html(msg.diff.next)}</button>
+                <button id="close-btn" class="control-btn close-btn">${html(msg.common.close)}</button>
             </div>
         </div>
     `;

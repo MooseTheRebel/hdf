@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import {ref} from 'vue';
+import {fmt, msg} from '@locales';
 import {CloseWindow, IsInitialized, PickFileToEnroll} from '../../wailsjs/go/cli/App';
 import type {View} from '../view';
+import CommandRow from '../components/CommandRow.vue';
 
 const emit = defineEmits<{navigate: [view: View]}>();
+
+const c = msg.home.commands;
 
 // null while loading.
 const initialized = ref<boolean | null>(null);
@@ -16,117 +20,60 @@ IsInitialized()
 function startEnroll() {
     PickFileToEnroll()
         .then((path) => { if (path) emit('navigate', {name: 'enroll', path}); })
-        .catch((err) => emit('navigate', {name: 'enroll', path: '', pickError: 'Error picking a file: ' + err}));
+        .catch((err) => emit('navigate', {name: 'enroll', path: '', pickError: fmt(msg.enroll.pickError, {error: String(err)})}));
 }
 </script>
 
 <template>
     <div v-if="error" class="home-container">
         <div class="home-header">
-            <h1 class="home-title">home-dawt-files</h1>
-            <span class="home-badge not-initialized">error</span>
+            <h1 class="home-title">{{ msg.home.title }}</h1>
+            <span class="home-badge not-initialized">{{ msg.home.badgeError }}</span>
         </div>
-        <p class="home-subtitle">Could not read hdf configuration.</p>
+        <p class="home-subtitle">{{ msg.home.configError }}</p>
         <p class="home-subtitle" id="error-message">{{ error }}</p>
-        <button class="close-button" @click="CloseWindow()">Close</button>
+        <button class="close-button" @click="CloseWindow()">{{ msg.common.close }}</button>
     </div>
 
     <div v-else-if="initialized" class="home-container">
         <div class="home-header">
-            <h1 class="home-title">home-dawt-files</h1>
-            <span class="home-badge initialized">initialized</span>
+            <h1 class="home-title">{{ msg.home.title }}</h1>
+            <span class="home-badge initialized">{{ msg.home.badgeInitialized }}</span>
         </div>
-        <p class="home-subtitle">Your dotfiles are managed by hdf.</p>
+        <p class="home-subtitle">{{ msg.home.subtitleInitialized }}</p>
         <div class="command-list">
-            <button class="command-row command-row-clickable" id="enroll-btn" @click="startEnroll">
-                <code class="cmd">hdf enroll &lt;path&gt;</code>
-                <span class="cmd-desc">Start managing a new dotfile</span>
-            </button>
-            <button class="command-row command-row-clickable" id="link-btn" @click="emit('navigate', {name: 'link', noFetch: false})">
-                <code class="cmd">hdf link</code>
-                <span class="cmd-desc">Re-create all managed symlinks</span>
-            </button>
-            <button class="command-row command-row-clickable" id="link-no-fetch-btn" @click="emit('navigate', {name: 'link', noFetch: true})">
-                <code class="cmd">hdf link --no-fetch</code>
-                <span class="cmd-desc">Re-create symlinks without fetching from remote</span>
-            </button>
-            <button class="command-row command-row-clickable" id="promote-btn" @click="emit('navigate', {name: 'promote'})">
-                <code class="cmd">hdf promote</code>
-                <span class="cmd-desc">Merge your machine branch into main and push</span>
-            </button>
-            <button class="command-row command-row-clickable" id="status-btn" @click="emit('navigate', {name: 'status'})">
-                <code class="cmd">hdf status</code>
-                <span class="cmd-desc">Show managed files and sync state</span>
-            </button>
-            <div class="command-row">
-                <code class="cmd">hdf daemon</code>
-                <span class="cmd-desc">Start the background sync daemon</span>
-            </div>
-            <div class="command-row">
-                <code class="cmd">hdf diff [url]</code>
-                <span class="cmd-desc">View a diff in this window</span>
-            </div>
-            <button class="command-row command-row-clickable" id="config-btn" @click="emit('navigate', {name: 'config'})">
-                <code class="cmd">hdf config</code>
-                <span class="cmd-desc">Show the current configuration</span>
-            </button>
-            <button class="command-row command-row-clickable" id="daemon-status-btn" @click="emit('navigate', {name: 'daemonStatus'})">
-                <code class="cmd">hdf daemon status</code>
-                <span class="cmd-desc">Check whether the sync daemon service is running</span>
-            </button>
-            <button class="command-row command-row-clickable" id="daemon-management-btn" @click="emit('navigate', {name: 'daemonManagement'})">
-                <code class="cmd">hdf daemon install/start/stop/uninstall</code>
-                <span class="cmd-desc">Manage the sync daemon background service</span>
-            </button>
-            <button class="command-row command-row-clickable" id="report-issue-btn" @click="emit('navigate', {name: 'reportIssue'})">
-                <code class="cmd">hdf report-issue</code>
-                <span class="cmd-desc">Package diagnostics into a .zip for sharing with an admin</span>
-            </button>
+            <CommandRow :command="c.enroll" clickable id="enroll-btn" @click="startEnroll"/>
+            <CommandRow :command="c.link" clickable id="link-btn" @click="emit('navigate', {name: 'link', noFetch: false})"/>
+            <CommandRow :command="c.linkNoFetch" clickable id="link-no-fetch-btn" @click="emit('navigate', {name: 'link', noFetch: true})"/>
+            <CommandRow :command="c.promote" clickable id="promote-btn" @click="emit('navigate', {name: 'promote'})"/>
+            <CommandRow :command="c.status" clickable id="status-btn" @click="emit('navigate', {name: 'status'})"/>
+            <CommandRow :command="c.daemon"/>
+            <CommandRow :command="c.diff"/>
+            <CommandRow :command="c.config" clickable id="config-btn" @click="emit('navigate', {name: 'config'})"/>
+            <CommandRow :command="c.daemonStatus" clickable id="daemon-status-btn" @click="emit('navigate', {name: 'daemonStatus'})"/>
+            <CommandRow :command="c.daemonManagement" clickable id="daemon-management-btn" @click="emit('navigate', {name: 'daemonManagement'})"/>
+            <CommandRow :command="c.reportIssue" clickable id="report-issue-btn" @click="emit('navigate', {name: 'reportIssue'})"/>
         </div>
-        <button class="close-button" id="close-btn" @click="CloseWindow()">Close</button>
+        <button class="close-button" id="close-btn" @click="CloseWindow()">{{ msg.common.close }}</button>
     </div>
 
     <div v-else-if="initialized === false" class="home-container">
         <div class="home-header">
-            <h1 class="home-title">home-dawt-files</h1>
-            <span class="home-badge not-initialized">not initialized</span>
+            <h1 class="home-title">{{ msg.home.title }}</h1>
+            <span class="home-badge not-initialized">{{ msg.home.badgeNotInitialized }}</span>
         </div>
-        <p class="home-subtitle">Manage your dotfiles with git — across every machine.</p>
+        <p class="home-subtitle">{{ msg.home.subtitleNotInitialized }}</p>
         <div class="steps">
-            <div class="step">
-                <span class="step-number">1</span>
+            <div v-for="(step, i) in msg.home.steps" :key="i" class="step">
+                <span class="step-number">{{ i + 1 }}</span>
                 <div class="step-body">
-                    <div class="step-label">Initialize hdf</div>
-                    <code class="step-cmd">hdf init</code>
-                    <div class="step-hint">Sets up a local git repo and push target.</div>
-                </div>
-            </div>
-            <div class="step">
-                <span class="step-number">2</span>
-                <div class="step-body">
-                    <div class="step-label">Enroll a dotfile</div>
-                    <code class="step-cmd">hdf enroll ~/.bashrc</code>
-                    <div class="step-hint">Copies the file into the repo and replaces it with a symlink.</div>
-                </div>
-            </div>
-            <div class="step">
-                <span class="step-number">3</span>
-                <div class="step-body">
-                    <div class="step-label">On a new machine — re-link</div>
-                    <code class="step-cmd">hdf link</code>
-                    <div class="step-hint">Recreates symlinks for all managed files after cloning.</div>
-                </div>
-            </div>
-            <div class="step">
-                <span class="step-number">4</span>
-                <div class="step-body">
-                    <div class="step-label">Check drift</div>
-                    <code class="step-cmd">hdf status</code>
-                    <div class="step-hint">Shows which files have uncommitted local changes.</div>
+                    <div class="step-label">{{ step.label }}</div>
+                    <code class="step-cmd">{{ step.command }}</code>
+                    <div class="step-hint">{{ step.hint }}</div>
                 </div>
             </div>
         </div>
-        <button class="control-btn" id="get-started-btn" @click="emit('navigate', {name: 'init'})">Get Started</button>
-        <button class="close-button" id="close-btn" @click="CloseWindow()">Close</button>
+        <button class="control-btn" id="get-started-btn" @click="emit('navigate', {name: 'init'})">{{ msg.home.getStarted }}</button>
+        <button class="close-button" id="close-btn" @click="CloseWindow()">{{ msg.common.close }}</button>
     </div>
 </template>

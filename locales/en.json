@@ -1,0 +1,155 @@
+{
+  "common": {
+    "back": "Back",
+    "cancel": "Cancel",
+    "continue": "Continue",
+    "close": "Close",
+    "browse": "Browse...",
+    "noManagedFiles": "No managed files.",
+    "reviewCounter": "File {index} of {total}"
+  },
+  "home": {
+    "title": "home-dawt-files",
+    "badgeInitialized": "initialized",
+    "badgeNotInitialized": "not initialized",
+    "badgeError": "error",
+    "subtitleInitialized": "Your dotfiles are managed by hdf.",
+    "subtitleNotInitialized": "Manage your dotfiles with git — across every machine.",
+    "configError": "Could not read hdf configuration.",
+    "getStarted": "Get Started",
+    "commands": {
+      "enroll": { "command": "hdf enroll <path>", "description": "Start managing a new dotfile" },
+      "link": { "command": "hdf link", "description": "Re-create all managed symlinks" },
+      "linkNoFetch": { "command": "hdf link --no-fetch", "description": "Re-create symlinks without fetching from remote" },
+      "promote": { "command": "hdf promote", "description": "Merge your machine branch into main and push" },
+      "status": { "command": "hdf status", "description": "Show managed files and sync state" },
+      "daemon": { "command": "hdf daemon", "description": "Start the background sync daemon" },
+      "diff": { "command": "hdf diff [url]", "description": "View a diff in this window" },
+      "config": { "command": "hdf config", "description": "Show the current configuration" },
+      "daemonStatus": { "command": "hdf daemon status", "description": "Check whether the sync daemon service is running" },
+      "daemonManagement": { "command": "hdf daemon install/start/stop/uninstall", "description": "Manage the sync daemon background service" },
+      "reportIssue": { "command": "hdf report-issue", "description": "Package diagnostics into a .zip for sharing with an admin" }
+    },
+    "steps": [
+      { "label": "Initialize hdf", "command": "hdf init", "hint": "Sets up a local git repo and push target." },
+      { "label": "Enroll a dotfile", "command": "hdf enroll ~/.bashrc", "hint": "Copies the file into the repo and replaces it with a symlink." },
+      { "label": "On a new machine — re-link", "command": "hdf link", "hint": "Recreates symlinks for all managed files after cloning." },
+      { "label": "Check drift", "command": "hdf status", "hint": "Shows which files have uncommitted local changes." }
+    ]
+  },
+  "status": {
+    "title": "Status",
+    "loading": "Loading status...",
+    "loadError": "Error loading status: {error}",
+    "gitPushTarget": "Git push target",
+    "localDotfilesDir": "Local dotfiles dir",
+    "branch": "Branch",
+    "lastCommit": "Last commit",
+    "lastSync": "Last sync",
+    "filesHeading": "Managed files ({count})"
+  },
+  "config": {
+    "title": "Config",
+    "loading": "Loading config...",
+    "loadError": "Error loading config: {error}",
+    "missing": "No config found. Run {command} to get started.",
+    "missingCommand": "hdf init",
+    "file": "Config file"
+  },
+  "daemon": {
+    "statusTitle": "Daemon Status",
+    "managementTitle": "Daemon Management",
+    "loading": "Loading daemon status...",
+    "loadError": "Error loading daemon status: {error}",
+    "install": "Install",
+    "uninstall": "Uninstall",
+    "start": "Start",
+    "stop": "Stop",
+    "installed": "Daemon installed and started.",
+    "uninstalled": "Daemon uninstalled.",
+    "started": "Daemon started.",
+    "stopped": "Daemon stopped.",
+    "actionError": "Error: {error}"
+  },
+  "warnings": {
+    "checking": "Checking for pending warnings...",
+    "checkError": "Error checking pending warnings: {error}",
+    "intro": "The hdf daemon has recorded the following warnings:",
+    "prompt": "Continue anyway?"
+  },
+  "enroll": {
+    "title": "Enroll",
+    "pickError": "Error picking a file: {error}",
+    "preparing": "Preparing enroll preview...",
+    "startError": "Error starting enroll: {error}",
+    "newFile": "This is a new file.",
+    "noChanges": "There are no changes to enroll.",
+    "confirm": "Enroll",
+    "enrolling": "Enrolling...",
+    "error": "Error enrolling: {error}"
+  },
+  "init": {
+    "title": "Get Started",
+    "modePrompt": "How do you want to store your dot files?",
+    "modeLocal": "Local directory",
+    "modeRemote": "Remote repository",
+    "loadingDefaults": "Loading default path...",
+    "defaultsError": "Error loading default path: {error}",
+    "repoPath": "Local repo path",
+    "pushTarget": "Push target path or remote URL (optional)",
+    "gitUrl": "Remote repository URL",
+    "cloneDir": "Clone destination",
+    "pickDirectoryError": "Error picking a directory: {error}",
+    "settingUp": "Setting up...",
+    "setupError": "Error setting up: {error}",
+    "collision": "A branch named {branch} already exists on the remote.",
+    "collisionQuestion": "Is this machine re-initializing (reuse it), or is this a different machine that happens to share this name (create a unique branch)?",
+    "reuse": "Reuse it",
+    "unique": "Create a unique branch",
+    "collisionError": "Error resolving branch collision: {error}",
+    "finishing": "Finishing setup...",
+    "finishError": "Error finishing setup: {error}"
+  },
+  "link": {
+    "title": "Link",
+    "skippingFetch": "Skipping fetch...",
+    "fetching": "Fetching from remote...",
+    "startError": "Error starting link: {error}",
+    "accept": "Accept",
+    "skip": "Skip",
+    "acceptError": "Error accepting {path}: {error}",
+    "skipAndContinue": "Skip and continue",
+    "relinking": "Re-creating symlinks...",
+    "finishError": "Error finishing link: {error}",
+    "linked": "linked"
+  },
+  "promote": {
+    "title": "Promote",
+    "checking": "Checking for changes to promote...",
+    "startError": "Error starting promote: {error}",
+    "preservedIntro": "main has file(s) promoted by other machines that you haven't pulled. They will be preserved by promote:",
+    "preservedPrompt": "Continue promoting?",
+    "keepMine": "Overwrite main with mine",
+    "keepTheirs": "Keep main's version",
+    "resolveError": "Error resolving {path}: {error}",
+    "promoting": "Promoting...",
+    "error": "Error promoting: {error}"
+  },
+  "reportIssue": {
+    "title": "Report Issue",
+    "warning": "Warning: hdf's automatic redaction is limited — it strips a few known credential patterns, but this is not a guarantee that all sensitive information is removed. Review the report's contents yourself before sharing it with anyone. Reporting an issue is entirely optional and voluntary. Securing your own systems should always be your first priority.",
+    "prompt": "What was expected? What actually happened? (optional)",
+    "submit": "Build Report",
+    "building": "Building report...",
+    "written": "Report written to {path}",
+    "error": "Error building report: {error}"
+  },
+  "diff": {
+    "title": "Diff Viewer",
+    "loading": "Loading diff...",
+    "loadError": "Error loading diff: {error}",
+    "counter": "Diff {index} of {total}",
+    "previous": "Previous",
+    "next": "Next"
+  }
+}

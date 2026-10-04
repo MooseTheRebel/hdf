@@ -1,25 +1,20 @@
 import { cli } from '../wailsjs/go/models';
+import { msg } from '@locales';
 import { renderDiffContent } from './diff';
-
-function escapeHtml(s: string): string {
-    return s
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
+import { escapeHtml, html } from './i18n';
 
 export function renderPreservedFiles(files: cli.PreservedFile[]): string {
     const rows = files.map(f => `<div class="link-warning-row">${escapeHtml(f.path)}</div>`).join('');
     return `
-        <p>main has file(s) promoted by other machines that you haven't pulled. They will be preserved by promote:</p>
+        <p>${html(msg.promote.preservedIntro)}</p>
         <div class="link-warning-list">${rows}</div>
-        <p>Continue promoting?</p>
+        <p>${html(msg.promote.preservedPrompt)}</p>
     `;
 }
 
 export function renderDivergedFileReview(file: cli.DivergedFile, index: number, total: number): string {
     return `
-        <div class="link-review-counter">File ${index + 1} of ${total}</div>
+        <div class="link-review-counter">${html(msg.common.reviewCounter, {index: index + 1, total})}</div>
         <div class="link-review-path">${escapeHtml(file.path)}</div>
         <div class="link-review-diff">${renderDiffContent(file.diff)}</div>
     `;

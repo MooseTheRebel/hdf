@@ -1,11 +1,6 @@
 import { cli } from '../wailsjs/go/models';
-
-function escapeHtml(s: string): string {
-    return s
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
+import { msg } from '@locales';
+import { escapeHtml, html } from './i18n';
 
 export function renderStatus(info: cli.StatusInfo): string {
     const fileRows = info.files.map(f => `
@@ -15,15 +10,18 @@ export function renderStatus(info: cli.StatusInfo): string {
         </div>
     `).join('');
 
+    const field = (label: string, value: string) =>
+        `<div class="status-field"><span class="status-label">${html(label)}</span><span class="status-value">${escapeHtml(value)}</span></div>`;
+
     return `
         <div class="status-summary">
-            <div class="status-field"><span class="status-label">Git push target</span><span class="status-value">${escapeHtml(info.git_push_target)}</span></div>
-            <div class="status-field"><span class="status-label">Local dotfiles dir</span><span class="status-value">${escapeHtml(info.local_dotfiles_dir)}</span></div>
-            <div class="status-field"><span class="status-label">Branch</span><span class="status-value">${escapeHtml(info.branch)}</span></div>
-            <div class="status-field"><span class="status-label">Last commit</span><span class="status-value">${escapeHtml(info.last_commit)}</span></div>
-            <div class="status-field"><span class="status-label">Last sync</span><span class="status-value">${escapeHtml(info.last_sync)}</span></div>
+            ${field(msg.status.gitPushTarget, info.git_push_target)}
+            ${field(msg.status.localDotfilesDir, info.local_dotfiles_dir)}
+            ${field(msg.status.branch, info.branch)}
+            ${field(msg.status.lastCommit, info.last_commit)}
+            ${field(msg.status.lastSync, info.last_sync)}
         </div>
-        <h2 class="status-files-heading">Managed files (${info.files.length})</h2>
-        <div class="status-file-list">${fileRows || '<div class="status-empty">No managed files.</div>'}</div>
+        <h2 class="status-files-heading">${html(msg.status.filesHeading, {count: info.files.length})}</h2>
+        <div class="status-file-list">${fileRows || `<div class="status-empty">${html(msg.common.noManagedFiles)}</div>`}</div>
     `;
 }

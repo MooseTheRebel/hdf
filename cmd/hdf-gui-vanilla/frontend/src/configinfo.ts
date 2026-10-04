@@ -1,20 +1,15 @@
 import { cli } from '../wailsjs/go/models';
-
-function escapeHtml(s: string): string {
-    return s
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
+import { msg } from '@locales';
+import { escapeHtml, html } from './i18n';
 
 export function renderConfig(info: cli.ConfigInfo): string {
     if (!info.exists) {
         return `
-            <p class="config-missing">No config found. Run <code>hdf init</code> to get started.</p>
+            <p class="config-missing">${html(msg.config.missing, {}, {command: `<code>${html(msg.config.missingCommand)}</code>`})}</p>
         `;
     }
     return `
-        <div class="config-field"><span class="config-label">Config file</span><span class="config-value">${escapeHtml(info.path)}</span></div>
+        <div class="config-field"><span class="config-label">${html(msg.config.file)}</span><span class="config-value">${escapeHtml(info.path)}</span></div>
         <pre class="config-content">${escapeHtml(info.content)}</pre>
     `;
 }

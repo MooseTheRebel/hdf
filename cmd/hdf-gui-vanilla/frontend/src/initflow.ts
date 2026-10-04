@@ -1,49 +1,40 @@
 import { cli } from '../wailsjs/go/models';
-
-function escapeHtml(s: string): string {
-    return s
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-
-function escapeAttr(s: string): string {
-    return escapeHtml(s).replace(/"/g, '&quot;');
-}
+import { msg } from '@locales';
+import { escapeAttr, escapeHtml, html } from './i18n';
 
 export function renderLocalForm(defaultRepoPath: string): string {
     return `
-        <label class="init-field-label" for="init-repo-path">Local repo path</label>
+        <label class="init-field-label" for="init-repo-path">${html(msg.init.repoPath)}</label>
         <div class="init-field-row">
             <input type="text" id="init-repo-path" class="init-text-input" value="${escapeAttr(defaultRepoPath)}">
-            <button id="init-repo-browse-btn" class="control-btn">Browse...</button>
+            <button id="init-repo-browse-btn" class="control-btn">${html(msg.common.browse)}</button>
         </div>
-        <label class="init-field-label" for="init-push-target">Push target path or remote URL (optional)</label>
+        <label class="init-field-label" for="init-push-target">${html(msg.init.pushTarget)}</label>
         <div class="init-field-row">
             <input type="text" id="init-push-target" class="init-text-input" value="">
-            <button id="init-push-browse-btn" class="control-btn">Browse...</button>
+            <button id="init-push-browse-btn" class="control-btn">${html(msg.common.browse)}</button>
         </div>
     `;
 }
 
 export function renderRemoteForm(defaultCloneDir: string): string {
     return `
-        <label class="init-field-label" for="init-git-url">Remote repository URL</label>
+        <label class="init-field-label" for="init-git-url">${html(msg.init.gitUrl)}</label>
         <div class="init-field-row">
             <input type="text" id="init-git-url" class="init-text-input" value="">
         </div>
-        <label class="init-field-label" for="init-clone-dir">Clone destination</label>
+        <label class="init-field-label" for="init-clone-dir">${html(msg.init.cloneDir)}</label>
         <div class="init-field-row">
             <input type="text" id="init-clone-dir" class="init-text-input" value="${escapeAttr(defaultCloneDir)}">
-            <button id="init-clone-browse-btn" class="control-btn">Browse...</button>
+            <button id="init-clone-browse-btn" class="control-btn">${html(msg.common.browse)}</button>
         </div>
     `;
 }
 
 export function renderBranchCollision(branch: string): string {
     return `
-        <p>A branch named <strong>${escapeHtml(branch)}</strong> already exists on the remote.</p>
-        <p>Is this machine re-initializing (reuse it), or is this a different machine that happens to share this name (create a unique branch)?</p>
+        <p>${html(msg.init.collision, {}, {branch: `<strong>${escapeHtml(branch)}</strong>`})}</p>
+        <p>${html(msg.init.collisionQuestion)}</p>
     `;
 }
 

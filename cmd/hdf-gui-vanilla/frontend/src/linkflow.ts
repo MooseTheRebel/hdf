@@ -1,25 +1,20 @@
 import { cli } from '../wailsjs/go/models';
+import { msg } from '@locales';
 import { renderDiffContent } from './diff';
-
-function escapeHtml(s: string): string {
-    return s
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
+import { escapeHtml, html } from './i18n';
 
 export function renderPendingWarnings(warnings: string[]): string {
     const rows = warnings.map(w => `<div class="link-warning-row">${escapeHtml(w)}</div>`).join('');
     return `
-        <p>The hdf daemon has recorded the following warnings:</p>
+        <p>${html(msg.warnings.intro)}</p>
         <div class="link-warning-list">${rows}</div>
-        <p>Continue anyway?</p>
+        <p>${html(msg.warnings.prompt)}</p>
     `;
 }
 
 export function renderIncomingFileReview(file: cli.IncomingFile, index: number, total: number): string {
     return `
-        <div class="link-review-counter">File ${index + 1} of ${total}</div>
+        <div class="link-review-counter">${html(msg.common.reviewCounter, {index: index + 1, total})}</div>
         <div class="link-review-path">${escapeHtml(file.path)}</div>
         <div class="link-review-diff">${renderDiffContent(file.diff)}</div>
     `;
@@ -33,10 +28,10 @@ export function renderLinkResults(message: string, results: cli.LinkedFile[]): s
         if (r.error) {
             return `<div class="link-result-row link-result-error"><span class="link-result-path">${escapeHtml(r.path)}</span><span class="link-result-status">${escapeHtml(r.error)}</span></div>`;
         }
-        return `<div class="link-result-row link-result-ok"><span class="link-result-path">${escapeHtml(r.path)}</span><span class="link-result-status">linked</span></div>`;
+        return `<div class="link-result-row link-result-ok"><span class="link-result-path">${escapeHtml(r.path)}</span><span class="link-result-status">${html(msg.link.linked)}</span></div>`;
     }).join('');
     return `
         ${messageHtml}
-        <div class="link-results-list">${rows || '<div class="link-results-empty">No managed files.</div>'}</div>
+        <div class="link-results-list">${rows || `<div class="link-results-empty">${html(msg.common.noManagedFiles)}</div>`}</div>
     `;
 }

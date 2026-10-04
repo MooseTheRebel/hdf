@@ -17,7 +17,12 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "@locales": [
+        "../../../locales/index.ts"
+      ]
+    }
   },
   "include": [
     "src"
