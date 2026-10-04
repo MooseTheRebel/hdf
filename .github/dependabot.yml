@@ -1,5 +1,10 @@
 version: 2
 updates:
+  # Manage pre-commit hooks
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "monthly"
   - package-ecosystem: gomod
     directory: /
     schedule:
