@@ -31,9 +31,11 @@ func TestRoundTrip(t *testing.T) {
 	if got.GitPushTarget != want.GitPushTarget {
 		t.Errorf("GitPushTarget: got %q, want %q", got.GitPushTarget, want.GitPushTarget)
 	}
+
 	if got.LocalDotfilesDir != want.LocalDotfilesDir {
 		t.Errorf("LocalDotfilesDir: got %q, want %q", got.LocalDotfilesDir, want.LocalDotfilesDir)
 	}
+
 	if got.Branch != want.Branch {
 		t.Errorf("Branch: got %q, want %q", got.Branch, want.Branch)
 	}
@@ -64,10 +66,12 @@ func TestRegistryRoundTrip(t *testing.T) {
 	if len(got.Files) != len(want.Files) {
 		t.Fatalf("Files len: got %d, want %d", len(got.Files), len(want.Files))
 	}
+
 	for i, f := range want.Files {
 		if got.Files[i].Path != f.Path {
 			t.Errorf("Files[%d].Path: got %q, want %q", i, got.Files[i].Path, f.Path)
 		}
+
 		if got.Files[i].Hash != f.Hash {
 			t.Errorf("Files[%d].Hash: got %q, want %q", i, got.Files[i].Hash, f.Hash)
 		}
@@ -93,6 +97,7 @@ func TestRegistryWithVariants(t *testing.T) {
 	if err := SaveRegistry(repoDir, want); err != nil {
 		t.Fatalf("SaveRegistry: %v", err)
 	}
+
 	got, err := LoadRegistry(repoDir)
 	if err != nil {
 		t.Fatalf("LoadRegistry: %v", err)
@@ -101,16 +106,20 @@ func TestRegistryWithVariants(t *testing.T) {
 	if len(got.Files) != 1 {
 		t.Fatalf("Files len: got %d, want 1", len(got.Files))
 	}
+
 	f := got.Files[0]
 	if f.Path != "~/.ssh/id_rsa" {
 		t.Errorf("Path: got %q, want ~/.ssh/id_rsa", f.Path)
 	}
+
 	if len(f.Variants) != 2 {
 		t.Fatalf("Variants len: got %d, want 2", len(f.Variants))
 	}
+
 	if f.Variants[0].Branch != "work-macbook" || f.Variants[0].RepoPath != ".ssh/id_rsa_work-macbook" {
 		t.Errorf("Variants[0]: got %+v", f.Variants[0])
 	}
+
 	if f.Variants[1].Branch != "home-laptop" || f.Variants[1].RepoPath != ".ssh/id_rsa_home-laptop" {
 		t.Errorf("Variants[1]: got %+v", f.Variants[1])
 	}
@@ -121,6 +130,7 @@ func TestLoadRegistryMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRegistry on missing file should return empty registry, got error: %v", err)
 	}
+
 	if len(reg.Files) != 0 {
 		t.Errorf("expected empty registry, got %d files", len(reg.Files))
 	}
@@ -156,9 +166,11 @@ hash = "sha256:cafebabe"
 	if err != nil {
 		t.Fatalf("LoadRegistry after migration: %v", err)
 	}
+
 	if len(reg.Files) != 2 {
 		t.Fatalf("Files len after migration: got %d, want 2", len(reg.Files))
 	}
+
 	if reg.Files[0].Path != testBashrcPath || reg.Files[0].Hash != "sha256:deadbeef" {
 		t.Errorf("Files[0]: got %+v", reg.Files[0])
 	}
@@ -167,10 +179,12 @@ hash = "sha256:cafebabe"
 	if err := MigrateFilesToRegistry(cfgPath, repoDir); err != nil {
 		t.Fatalf("second MigrateFilesToRegistry: %v", err)
 	}
+
 	reg2, err := LoadRegistry(repoDir)
 	if err != nil {
 		t.Fatalf("second LoadRegistry call failed: %v", err)
 	}
+
 	if len(reg2.Files) != 2 {
 		t.Errorf("idempotent: Files len = %d, want 2", len(reg2.Files))
 	}
@@ -197,6 +211,7 @@ func TestStateRoundTrip(t *testing.T) {
 	if !got.LastSync.Equal(want.LastSync) {
 		t.Errorf("LastSync: got %v, want %v", got.LastSync, want.LastSync)
 	}
+
 	if got.LastCommit != want.LastCommit {
 		t.Errorf("LastCommit: got %q, want %q", got.LastCommit, want.LastCommit)
 	}
@@ -207,9 +222,11 @@ func TestLoadStateMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState on missing file should return empty state, got error: %v", err)
 	}
+
 	if state == nil {
 		t.Fatal("expected non-nil state")
 	}
+
 	if state.LastCommit != "" {
 		t.Errorf("expected empty LastCommit, got %q", state.LastCommit)
 	}
@@ -276,6 +293,7 @@ func TestNormalizePath(t *testing.T) {
 // would produce a ".." prefix and falsely leave the path un-normalised.
 func TestNormalizePathSymlinks(t *testing.T) {
 	rawHome := t.TempDir()
+
 	homeDir, err := filepath.EvalSymlinks(rawHome)
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +307,9 @@ func TestNormalizePathSymlinks(t *testing.T) {
 	}
 
 	got := NormalizePath(absPath, homeDir)
+
 	want := testBashrcPath
+
 	if got != want {
 		t.Errorf("NormalizePath(%q, %q) = %q, want %q (symlink resolution failed)", absPath, homeDir, got, want)
 	}
@@ -303,6 +323,7 @@ func TestNormalizePathDoesNotFollowFileSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	repoDir := t.TempDir()
 
 	// Simulate an enrolled file: repo copy exists, home path is a symlink to it.
@@ -310,6 +331,7 @@ func TestNormalizePathDoesNotFollowFileSymlink(t *testing.T) {
 	if err := os.WriteFile(repoFile, []byte("# config"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	homePath := filepath.Join(homeDir, ".bashrc")
 	if err := os.Symlink(repoFile, homePath); err != nil {
 		t.Fatal(err)
@@ -368,6 +390,7 @@ func TestResolveVariant(t *testing.T) {
 		if res != tc.wantRes {
 			t.Errorf("%s: resolution = %v, want %v", tc.desc, res, tc.wantRes)
 		}
+
 		if v.Hash != tc.wantHash {
 			t.Errorf("%s: variant hash = %q, want %q", tc.desc, v.Hash, tc.wantHash)
 		}

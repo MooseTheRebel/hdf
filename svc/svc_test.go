@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hdf/config"
 	"hdf/eventlog"
+	"hdf/plugin"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -39,26 +40,31 @@ type fakeService struct {
 
 func (f *fakeService) Run() error {
 	f.calls = append(f.calls, callRun)
+
 	return f.runErr
 }
 
 func (f *fakeService) Start() error {
 	f.calls = append(f.calls, callStart)
+
 	return f.startErr
 }
 
 func (f *fakeService) Stop() error {
 	f.calls = append(f.calls, callStop)
+
 	return f.stopErr
 }
 func (f *fakeService) Restart() error { return nil }
 func (f *fakeService) Install() error {
 	f.calls = append(f.calls, callInstall)
+
 	return f.installErr
 }
 
 func (f *fakeService) Uninstall() error {
 	f.calls = append(f.calls, callUninstall)
+
 	return f.uninstallErr
 }
 func (f *fakeService) Logger(errs chan<- error) (kservice.Logger, error)       { return nil, nil }
@@ -72,10 +78,12 @@ func (f *fakeService) Status() (kservice.Status, error) {
 // withFakeService overrides newService for the duration of a test.
 func withFakeService(t *testing.T, fake *fakeService) {
 	t.Helper()
+
 	orig := newService
 	newService = func(kservice.Interface, *kservice.Config) (kservice.Service, error) {
 		return fake, nil
 	}
+
 	t.Cleanup(func() { newService = orig })
 }
 
@@ -85,20 +93,52 @@ func TestBuildConfig_Fields(t *testing.T) {
 	if cfg.Name != "com.moosetherebel.hdf" {
 		t.Errorf("Name = %q, want %q", cfg.Name, "com.moosetherebel.hdf")
 	}
+
 	wantArgs := []string{"daemon", RunSubcommand}
 	if len(cfg.Arguments) != len(wantArgs) {
 		t.Fatalf("Arguments = %v, want %v", cfg.Arguments, wantArgs)
 	}
+
 	for i, a := range wantArgs {
 		if cfg.Arguments[i] != a {
 			t.Errorf("Arguments[%d] = %q, want %q", i, cfg.Arguments[i], a)
 		}
 	}
+
 	if userService, _ := cfg.Option["UserService"].(bool); !userService {
 		t.Errorf("Option[UserService] = %v, want true", cfg.Option["UserService"])
 	}
+
 	if runAtLoad, _ := cfg.Option["RunAtLoad"].(bool); !runAtLoad {
 		t.Errorf("Option[RunAtLoad] = %v, want true", cfg.Option["RunAtLoad"])
+	}
+}
+
+// TestBuildConfig_Executable verifies the service runs the hdf that
+// launched a GUI plugin when built inside one, and otherwise the running
+// binary (an empty Executable).
+func TestBuildConfig_Executable(t *testing.T) {
+	const hdf = "/usr/local/bin/hdf"
+
+	cases := []struct {
+		name   string
+		cookie string
+		host   string
+		want   string
+	}{
+		{name: "hdf itself", want: ""},
+		{name: "inside a GUI plugin", cookie: plugin.Handshake.MagicCookieValue, host: hdf, want: hdf},
+		{name: "host path without the plugin handshake is ignored", host: hdf, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(plugin.Handshake.MagicCookieKey, tc.cookie)
+			t.Setenv(plugin.HostExecutableEnv, tc.host)
+
+			if got := buildConfig().Executable; got != tc.want {
+				t.Errorf("Executable = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -152,15 +192,19 @@ func TestInstallUninstall(t *testing.T) {
 			if tc.wantErr && err == nil {
 				t.Fatal("expected error, got nil")
 			}
+
 			if !tc.wantErr && err != nil {
 				t.Fatalf("error = %v, want nil", err)
 			}
+
 			if tc.wantCalls != nil && !slices.Equal(tc.fake.calls, tc.wantCalls) {
 				t.Errorf("calls = %v, want %v", tc.fake.calls, tc.wantCalls)
 			}
+
 			if tc.mustHave != "" && !slices.Contains(tc.fake.calls, tc.mustHave) {
 				t.Errorf("expected calls to include %q, got %v", tc.mustHave, tc.fake.calls)
 			}
+
 			if tc.mustNotHave != "" && slices.Contains(tc.fake.calls, tc.mustNotHave) {
 				t.Errorf("expected calls not to include %q, got %v", tc.mustNotHave, tc.fake.calls)
 			}
@@ -180,7 +224,10 @@ func TestStartStop_Delegate(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			withFakeService(t, tc.fake)
-			if err := tc.call("/cfg"); err == nil {
+
+			err := tc.call("/cfg")
+
+			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
 		})
@@ -210,11 +257,14 @@ func TestStatus(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected error, got nil")
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("Status() error = %v, want nil", err)
 			}
+
 			if got != tc.want {
 				t.Errorf("Status() = %q, want %q", got, tc.want)
 			}
@@ -240,11 +290,14 @@ func TestRun(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected error, got nil")
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("Run() error = %v, want nil", err)
 			}
+
 			if !slices.Equal(tc.fake.calls, []string{callRun}) {
 				t.Errorf("calls = %v, want [run]", tc.fake.calls)
 			}
@@ -280,7 +333,9 @@ func TestRunDaemonLoop(t *testing.T) {
 
 			runFn = func(context.Context, string) error { return tc.runErr }
 			statePathFn = func() string { return filepath.Join(t.TempDir(), "state.toml") }
+
 			var gotCode int
+
 			exitCalled := false
 			exitFn = func(code int) {
 				exitCalled = true
@@ -299,6 +354,7 @@ func TestRunDaemonLoop(t *testing.T) {
 			if tc.wantExit != exitCalled {
 				t.Errorf("exitFn called = %v, want %v", exitCalled, tc.wantExit)
 			}
+
 			if tc.wantExit && gotCode != 1 {
 				t.Errorf("exit code = %d, want 1", gotCode)
 			}
@@ -321,6 +377,7 @@ func TestRunDaemonLoop_RecordsPendingCrashOnUnexpectedExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
+
 	if !strings.Contains(s.PendingCrashReport, "repo vanished") {
 		t.Errorf("PendingCrashReport = %q, want to contain %q", s.PendingCrashReport, "repo vanished")
 	}
@@ -329,6 +386,7 @@ func TestRunDaemonLoop_RecordsPendingCrashOnUnexpectedExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("eventlog.ReadAll: %v", err)
 	}
+
 	if len(entries) != 1 || entries[0].Event != "daemon_crash" {
 		t.Errorf("entries = %+v, want one daemon_crash entry", entries)
 	}

@@ -39,20 +39,24 @@ func Append(path, event, detail string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+
 	unlock, err := lockFile(path + ".lock")
 	if err != nil {
 		return err
 	}
+
 	defer unlock()
 
 	entries, err := ReadAll(path)
 	if err != nil {
 		return err
 	}
+
 	entries = append(entries, Entry{Time: time.Now(), Event: event, Detail: detail})
 	if len(entries) > MaxEntries {
 		entries = entries[len(entries)-MaxEntries:]
 	}
+
 	return writeAll(path, entries)
 }
 
@@ -64,26 +68,34 @@ func ReadAll(path string) ([]Entry, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+
 		return nil, err
 	}
+
 	defer func() { _ = f.Close() }()
 
 	var entries []Entry
+
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
+
 		var e Entry
-		if err := json.Unmarshal(line, &e); err != nil {
+		err := json.Unmarshal(line, &e)
+		if err != nil {
 			return nil, fmt.Errorf("parsing event log line: %w", err)
 		}
+
 		entries = append(entries, e)
 	}
+
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
+
 	return entries, nil
 }
 
@@ -92,22 +104,30 @@ func writeAll(path string, entries []Entry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+
 	tmp := path + ".tmp"
+
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
+
 	enc := json.NewEncoder(f)
 	for _, e := range entries {
-		if err := enc.Encode(e); err != nil {
+		err := enc.Encode(e)
+		if err != nil {
 			_ = f.Close()
 			_ = os.Remove(tmp)
+
 			return err
 		}
 	}
+
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
+
 		return err
 	}
+
 	return os.Rename(tmp, path)
 }

@@ -64,13 +64,16 @@ func computeLinkStart(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening repo: %w", err)
 	}
+
 	if err := ensureOnMachineBranch(r, cfg); err != nil {
 		return nil, nil, err
 	}
+
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading registry: %w", err)
@@ -79,16 +82,20 @@ func computeLinkStart(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []
 	if noFetch {
 		return &LinkStartInfo{IncomingFiles: []IncomingFile{}}, nil, nil
 	}
+
 	if r.RemoteURL() == "" {
 		return &LinkStartInfo{Message: "No remote configured; skipping fetch.", IncomingFiles: []IncomingFile{}}, nil, nil
 	}
+
 	if err := r.Fetch(); err != nil {
 		return nil, nil, fmt.Errorf("fetching from remote: %w", err)
 	}
+
 	hasIncoming, err := r.HasIncomingCommits()
 	if err != nil {
 		return nil, nil, fmt.Errorf("checking incoming commits: %w", err)
 	}
+
 	if !hasIncoming {
 		return &LinkStartInfo{Message: "Already up to date.", IncomingFiles: []IncomingFile{}}, nil, nil
 	}
@@ -102,9 +109,11 @@ func computeLinkStart(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if incoming == nil {
 		incoming = []IncomingFile{}
 	}
+
 	return &LinkStartInfo{IncomingFiles: incoming}, pending, nil
 }
 
@@ -113,38 +122,50 @@ func computeLinkStart(cfgPath, homeDir string, noFetch bool) (*LinkStartInfo, []
 // diff and the pendingIncomingFile needed to later accept it. Split out of
 // computeLinkStart to keep that function's cyclomatic complexity in check.
 func computeIncomingDiffs(r *repo.Repo, cfg *config.Config, reg *config.Registry, homeDir string) ([]IncomingFile, []pendingIncomingFile, error) {
-	var incoming []IncomingFile
-	var pending []pendingIncomingFile
+	var (
+		incoming []IncomingFile
+		pending  []pendingIncomingFile
+	)
+
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
+
 		var repoFile string
 		if len(f.Variants) > 0 {
 			repoFile, _ = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir)
 		} else {
 			repoFile, _ = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 		}
+
 		if repoFile == "" {
 			continue
 		}
+
 		relPath, err := filepath.Rel(cfg.LocalDotfilesDir, repoFile)
 		if err != nil {
 			continue
 		}
+
 		relPath = filepath.ToSlash(relPath)
+
 		mainBytes, err := r.ReadFileFromRemoteBranch("origin", "main", relPath)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading %s from origin/main: %w", relPath, err)
 		}
+
 		if mainBytes == nil {
 			continue
 		}
+
 		branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relPath)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading %s from branch %s: %w", relPath, cfg.Branch, err)
 		}
+
 		if branchBytes != nil && string(mainBytes) == string(branchBytes) {
 			continue
 		}
+
 		incoming = append(incoming, IncomingFile{
 			Path: f.Path,
 			Diff: daemon.GenerateUnifiedDiff(string(branchBytes), string(mainBytes)),
@@ -155,6 +176,7 @@ func computeIncomingDiffs(r *repo.Repo, cfg *config.Config, reg *config.Registry
 			mainBytes: mainBytes,
 		})
 	}
+
 	return incoming, pending, nil
 }
 
@@ -168,10 +190,12 @@ func acceptIncomingFile(cfgPath string, item pendingIncomingFile) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
 	}
+
 	return acceptPromotedFile(r, cfg, item.relPath, item.mainBytes, item.tildePath)
 }
 
@@ -184,37 +208,50 @@ func computeRelink(cfgPath, homeDir string) ([]LinkedFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
+
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return nil, fmt.Errorf("loading registry: %w", err)
 	}
 
 	results := []LinkedFile{}
+
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
-		var repoFile string
-		var err error
+
+		var (
+			repoFile string
+			err      error
+		)
 		if len(f.Variants) > 0 {
 			repoFile, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir)
 		} else {
 			repoFile, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 		}
+
 		if err != nil {
 			results = append(results, LinkedFile{Path: f.Path, Error: err.Error()})
+
 			continue
 		}
+
 		if repoFile == "" {
 			results = append(results, LinkedFile{Path: f.Path, Error: fmt.Sprintf(
 				"no variant for branch %q — add a variant for this branch to %s to manage the file here",
 				cfg.Branch, managedTOMLPath,
 			)})
+
 			continue
 		}
+
 		if err := link.Link(expanded, repoFile); err != nil {
 			results = append(results, LinkedFile{Path: f.Path, Error: err.Error()})
+
 			continue
 		}
+
 		results = append(results, LinkedFile{Path: f.Path})
 	}
+
 	return results, nil
 }

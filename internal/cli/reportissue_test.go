@@ -10,9 +10,12 @@ import (
 func TestComputeReportIssue_Success(t *testing.T) {
 	origBuild := buildReport
 	defer func() { buildReport = origBuild }()
+
 	var gotOpts report.BuildOptions
+
 	buildReport = func(opts report.BuildOptions, version string) (string, error) {
 		gotOpts = opts
+
 		return testReportZipPath, nil
 	}
 
@@ -20,9 +23,11 @@ func TestComputeReportIssue_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computeReportIssue: %v", err)
 	}
+
 	if result.Path != testReportZipPath {
 		t.Errorf("Path = %q, want %q", result.Path, testReportZipPath)
 	}
+
 	if gotOpts.Trigger != report.TriggerManual || gotOpts.UserText != testReportUserText {
 		t.Errorf("buildReport called with %+v", gotOpts)
 	}
@@ -31,6 +36,7 @@ func TestComputeReportIssue_Success(t *testing.T) {
 func TestComputeReportIssue_RepoTooLargeGivesFriendlyError(t *testing.T) {
 	origBuild := buildReport
 	defer func() { buildReport = origBuild }()
+
 	buildReport = func(report.BuildOptions, string) (string, error) {
 		return "", report.ErrRepoTooLarge
 	}
@@ -44,6 +50,7 @@ func TestComputeReportIssue_RepoTooLargeGivesFriendlyError(t *testing.T) {
 func TestComputeReportIssue_OtherErrorPropagates(t *testing.T) {
 	origBuild := buildReport
 	defer func() { buildReport = origBuild }()
+
 	buildReport = func(report.BuildOptions, string) (string, error) {
 		return "", errors.New("boom")
 	}

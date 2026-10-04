@@ -7,7 +7,7 @@ import (
 	"hdf/repo"
 )
 
-// Status label constants
+// Status label constants.
 const (
 	statusNoVariant = "no variant for this branch"
 	statusMissing   = "missing"
@@ -24,18 +24,23 @@ func fileStatus(f config.ManagedFile, branch, homeDir string) string {
 	if res == config.VariantNoBranchMatch {
 		return statusNoVariant
 	}
+
 	expectedHash := f.Hash
 	if res == config.VariantMatch {
 		expectedHash = v.Hash
 	}
+
 	expanded := config.ExpandPathIn(f.Path, homeDir)
+
 	currentHash, err := link.HashFile(expanded)
 	if err != nil {
 		return statusMissing
 	}
+
 	if currentHash != expectedHash {
 		return statusChanged
 	}
+
 	return statusOk
 }
 
@@ -76,6 +81,7 @@ func computeStatus(cfgPath, statePath, homeDir string) (*StatusInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening repo: %w", err)
 	}
+
 	branch, _ := r.CurrentBranch()
 	state, _ := config.LoadState(statePath)
 

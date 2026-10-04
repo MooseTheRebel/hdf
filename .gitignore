@@ -2,7 +2,7 @@ docs/superpowers/
 build/
 dist/
 node_modules
-frontend/dist
+cmd/hdf-gui-*/frontend/dist
 
 # Created by https://www.toptal.com/developers/gitignore/api/go
 # Edit at https://www.toptal.com/developers/gitignore?templates=go

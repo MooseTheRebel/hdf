@@ -13,6 +13,6 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
+      - run: for d in cmd/hdf-gui-*/frontend; do mkdir -p $d/dist && touch $d/dist/.gitkeep; done
       - run: go test ./...
       - run: go test -tags e2e ./...

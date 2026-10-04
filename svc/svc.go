@@ -10,6 +10,7 @@ import (
 	"hdf/config"
 	"hdf/daemon"
 	"hdf/eventlog"
+	"hdf/plugin"
 	"os"
 	"time"
 
@@ -24,9 +25,13 @@ const ServiceName = "com.moosetherebel.hdf"
 // the binary with ("hdf daemon run").
 const RunSubcommand = "run"
 
+// buildConfig describes the service. Executable is left empty — meaning the
+// running binary — except inside a GUI plugin, where the running binary is
+// the plugin and the service must run the hdf that launched it instead.
 func buildConfig() *kservice.Config {
 	return &kservice.Config{
 		Name:        ServiceName,
+		Executable:  plugin.HostExecutable(),
 		DisplayName: "hdf sync daemon",
 		Description: "Syncs dotfiles in the background",
 		Arguments:   []string{"daemon", RunSubcommand},
@@ -68,9 +73,11 @@ func runDaemonLoop(ctx context.Context, cfgPath string) {
 	if err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
 		msg := fmt.Sprintf("hdf daemon exited unexpectedly: %v", err)
 		fmt.Fprintf(os.Stderr, "%s\n", msg)
+
 		statePath := statePathFn()
 		_ = config.SetPendingCrash(statePath, msg)
 		_ = eventlog.Append(eventlog.PathFor(statePath), "daemon_crash", err.Error())
+
 		exitFn(1)
 	}
 }
@@ -79,11 +86,15 @@ func runDaemonLoop(ctx context.Context, cfgPath string) {
 func (p *program) Start(s kservice.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
+
 	p.done = make(chan struct{})
+
 	go func() {
 		defer close(p.done)
+
 		runDaemonLoop(ctx, p.cfgPath)
 	}()
+
 	return nil
 }
 
@@ -92,14 +103,17 @@ func (p *program) Stop(s kservice.Service) error {
 	if p.cancel != nil {
 		p.cancel()
 	}
+
 	if p.done != nil {
 		timer := time.NewTimer(5 * time.Second)
 		defer timer.Stop()
+
 		select {
 		case <-p.done:
 		case <-timer.C:
 		}
 	}
+
 	return nil
 }
 
@@ -120,6 +134,7 @@ func Run(cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("building service: %w", err)
 	}
+
 	return s.Run()
 }
 
@@ -130,12 +145,15 @@ func Install(cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("building service: %w", err)
 	}
+
 	if err := s.Install(); err != nil {
 		return fmt.Errorf("installing service: %w", err)
 	}
+
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("starting service: %w", err)
 	}
+
 	return nil
 }
 
@@ -147,10 +165,13 @@ func Uninstall(cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("building service: %w", err)
 	}
+
 	_ = s.Stop()
+
 	if err := s.Uninstall(); err != nil && !errors.Is(err, kservice.ErrNotInstalled) {
 		return fmt.Errorf("uninstalling service: %w", err)
 	}
+
 	return nil
 }
 
@@ -160,9 +181,11 @@ func Start(cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("building service: %w", err)
 	}
+
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("starting service: %w", err)
 	}
+
 	return nil
 }
 
@@ -172,9 +195,11 @@ func Stop(cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("building service: %w", err)
 	}
+
 	if err := s.Stop(); err != nil {
 		return fmt.Errorf("stopping service: %w", err)
 	}
+
 	return nil
 }
 
@@ -185,13 +210,16 @@ func Status(cfgPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("building service: %w", err)
 	}
+
 	status, err := s.Status()
 	if errors.Is(err, kservice.ErrNotInstalled) {
 		return "not installed", nil
 	}
+
 	if err != nil {
 		return "", fmt.Errorf("checking status: %w", err)
 	}
+
 	switch status {
 	case kservice.StatusRunning:
 		return "running", nil

@@ -3,13 +3,13 @@ package cli
 import (
 	"bufio"
 	crand "crypto/rand"
-	"embed"
 	"errors"
 	"fmt"
 	"hdf/config"
 	"hdf/daemon"
 	"hdf/eventlog"
 	"hdf/link"
+	"hdf/plugin"
 	"hdf/repo"
 	"hdf/report"
 	"hdf/svc"
@@ -21,15 +21,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
-
-// assets holds the embedded frontend, provided by package main via Execute.
-// The embed directive itself must stay next to frontend/ in the repository
-// root because embed paths cannot reference parent directories.
-var assets embed.FS
 
 var rootCmd = &cobra.Command{
 	Use:   "hdf",
@@ -37,10 +29,12 @@ var rootCmd = &cobra.Command{
 	Long:  `hdf manages dot files by symlinking them from $HOME into a git-backed repository.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
+
 		cfg, err := config.Load(cfgPath)
 		if err != nil {
 			return nil // no config yet (e.g. before hdf init), skip migration
 		}
+
 		if err := config.MigrateFilesToRegistry(cfgPath, cfg.LocalDotfilesDir); err != nil {
 			return err
 		}
@@ -50,10 +44,11 @@ var rootCmd = &cobra.Command{
 		if cmd == reportIssueCmd || cmd == daemonRunCmd {
 			return nil
 		}
+
 		return promptPendingCrash(config.DefaultStatePath(), bufio.NewReader(os.Stdin))
 	},
-	Run: func(cmd *cobra.Command, args []string) {
-		launchGUI([]string{})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return launchUI(cmd, guiName, plugin.Find, plugin.Launch)
 	},
 }
 
@@ -63,15 +58,20 @@ var configCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
 		fmt.Printf("Config file: %s\n\n", cfgPath)
+
 		info, err := computeConfigInfo(cfgPath)
 		if err != nil {
 			return err
 		}
+
 		if !info.Exists {
 			fmt.Println("No config found. Run 'hdf init' to get started.")
+
 			return nil
 		}
+
 		fmt.Print(info.Content)
+
 		return nil
 	},
 }
@@ -82,6 +82,7 @@ var initCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
 		statePath := config.DefaultStatePath()
+
 		return runInit(os.Stdin, cfgPath, statePath, "")
 	},
 }
@@ -89,6 +90,7 @@ var initCmd = &cobra.Command{
 // isYes reports whether s is an affirmative response.
 func isYes(s string) bool {
 	l := strings.ToLower(strings.TrimSpace(s))
+
 	return l == "y" || l == "yes"
 }
 
@@ -100,6 +102,7 @@ func localPathToFileURL(absPath string) string {
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
 	}
+
 	return "file://" + p
 }
 
@@ -114,8 +117,10 @@ func sanitizeBranchName(s string) string {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
 			return r
 		}
+
 		return '-'
 	}, s)
+
 	return strings.Trim(s, "-")
 }
 
@@ -128,19 +133,23 @@ func branchName() string {
 			return sanitized
 		}
 	}
+
 	h, err := os.Hostname()
 	if err == nil && h != "" {
 		if sanitized := sanitizeBranchName(h); sanitized != "" {
 			return sanitized
 		}
 	}
+
 	b := make([]byte, 4)
 	if _, err := crand.Read(b); err != nil {
 		return "host-unknown"
 	}
+
 	for i := range b {
 		b[i] = branchNameChars[int(b[i])%len(branchNameChars)]
 	}
+
 	return "host-" + string(b)
 }
 
@@ -162,19 +171,24 @@ func resolveAndConfirmPath(reader *bufio.Reader, raw string) (string, error) {
 	if filepath.IsAbs(expanded) {
 		return expanded, nil
 	}
+
 	abs, err := filepath.Abs(expanded)
 	if err != nil {
 		return "", fmt.Errorf("resolving path: %w", err)
 	}
+
 	fmt.Printf("  → Resolved to: %s\n", abs)
 	fmt.Print("  Confirm? [y/N]: ")
+
 	answer, err := reader.ReadString('\n')
 	if err != nil {
 		return "", fmt.Errorf("reading confirmation: %w", err)
 	}
+
 	if !isYes(strings.TrimSpace(answer)) {
-		return "", fmt.Errorf("aborted")
+		return "", errors.New("aborted")
 	}
+
 	return abs, nil
 }
 
@@ -182,24 +196,29 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 	home, _ := os.UserHomeDir()
 	defaultPath := filepath.Join(home, ".local", "share", "hdf", "repo")
 	fmt.Printf("Local repo path [%s]: ", defaultPath)
+
 	pathStr, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, "", "", fmt.Errorf("reading input: %w", err)
 	}
+
 	raw := strings.TrimSpace(pathStr)
 	if raw == "" {
 		raw = defaultPath
 	}
+
 	repoPath, err := resolveAndConfirmPath(reader, raw)
 	if err != nil {
 		return nil, "", "", err
 	}
 
 	fmt.Print("Push target path or remote URL (leave blank to skip): ")
+
 	pushStr, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, "", "", fmt.Errorf("reading push target: %w", err)
 	}
+
 	pushRaw := strings.TrimSpace(pushStr)
 
 	r, err := repo.InitOrOpen(repoPath)
@@ -211,46 +230,37 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 		return r, repoPath, "", nil
 	}
 
-	var gitURL string
-	if isRemoteURL(pushRaw) {
-		gitURL = pushRaw
-	} else {
+	gitURL := pushRaw
+	if !isRemoteURL(pushRaw) {
 		pushPath, err := resolveAndConfirmPath(reader, pushRaw)
 		if err != nil {
 			return nil, "", "", err
 		}
-		resolvedPush := pushPath
-		if rp, err := filepath.EvalSymlinks(pushPath); err == nil {
-			resolvedPush = rp
+
+		gitURL, err = localPushURL(repoPath, pushPath)
+		if err != nil {
+			return nil, "", "", err
 		}
-		resolvedRepo := repoPath
-		if rr, err := filepath.EvalSymlinks(repoPath); err == nil {
-			resolvedRepo = rr
-		}
-		if pushPath == repoPath || resolvedPush == resolvedRepo {
-			return nil, "", "", fmt.Errorf("push target and working copy must differ")
-		}
-		if _, _, err := repo.InitOrOpenBare(pushPath); err != nil {
-			return nil, "", "", fmt.Errorf("initialising bare repo at %s: %w", pushPath, err)
-		}
-		gitURL = localPathToFileURL(pushPath)
 	}
 
 	if err := r.AddRemote("origin", gitURL); err != nil {
 		return nil, "", "", fmt.Errorf("adding remote: %w", err)
 	}
+
 	return r, repoPath, gitURL, nil
 }
 
 func setupRemoteRepo(reader *bufio.Reader, cloneDir string) (*repo.Repo, string, string, error) {
 	fmt.Print("Remote repository URL: ")
+
 	urlStr, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, "", "", fmt.Errorf("reading input: %w", err)
 	}
+
 	gitURL := strings.TrimSpace(urlStr)
 	if gitURL == "" {
-		return nil, "", "", fmt.Errorf("remote git URL cannot be empty")
+		return nil, "", "", errors.New("remote git URL cannot be empty")
 	}
 
 	dest := cloneDir
@@ -258,11 +268,14 @@ func setupRemoteRepo(reader *bufio.Reader, cloneDir string) (*repo.Repo, string,
 		home, _ := os.UserHomeDir()
 		dest = filepath.Join(home, ".local", "share", "hdf", "repo")
 	}
+
 	fmt.Printf("Cloning %s into %s...\n", gitURL, dest)
+
 	r, err := repo.Clone(gitURL, dest)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("cloning %s: %w", gitURL, err)
 	}
+
 	return r, dest, gitURL, nil
 }
 
@@ -271,17 +284,21 @@ func ensureInitialCommit(r *repo.Repo, repoPath string) (string, error) {
 	if err == nil {
 		return headSHA, nil
 	}
+
 	keepFile := filepath.Join(repoPath, ".hdf", ".gitkeep")
 	if err := os.MkdirAll(filepath.Dir(keepFile), 0o755); err != nil {
 		return "", err
 	}
+
 	if err := os.WriteFile(keepFile, []byte(""), 0o644); err != nil {
 		return "", err
 	}
+
 	headSHA, err = r.CommitFile(".hdf/.gitkeep", "hdf: initial commit")
 	if err != nil {
 		return "", fmt.Errorf("creating initial commit: %w", err)
 	}
+
 	return headSHA, nil
 }
 
@@ -298,28 +315,35 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	fmt.Println("  1) Local directory  (create or open a git repo on this machine)")
 	fmt.Println("  2) Remote repository  (clone from GitHub, GitLab, etc.)")
 	fmt.Print("\nChoice [1]: ")
+
 	choiceStr, err := reader.ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("reading input: %w", err)
 	}
+
 	choice := strings.TrimSpace(choiceStr)
 	if choice == "" {
 		choice = "1"
+
 		fmt.Println("  No selection made — defaulting to option 1: Local directory.")
 	}
 
-	var r *repo.Repo
-	var repoPath, gitURL string
+	var (
+		r                *repo.Repo
+		repoPath, gitURL string
+	)
 
 	switch choice {
 	case "1":
 		var err error
+
 		r, repoPath, gitURL, err = setupLocalRepo(reader)
 		if err != nil {
 			return err
 		}
 	case "2":
 		var err error
+
 		r, repoPath, gitURL, err = setupRemoteRepo(reader, cloneDir)
 		if err != nil {
 			return err
@@ -347,12 +371,15 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	if err := config.Save(cfgPath, cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)
 	}
+
 	state := &config.State{LastCommit: headSHA, LastMainCommit: headSHA}
 	if err := config.SaveState(statePath, state); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
+
 	fmt.Printf("Config saved to %s\n", cfgPath)
 	fmt.Println("\nhdf initialized. Use 'hdf changes-push <path>' to start managing dot files.")
+
 	return nil
 }
 
@@ -362,20 +389,25 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 func setupMachineBranch(reader *bufio.Reader, r *repo.Repo, gitURL string) (string, error) {
 	hostname := branchName()
 	adopted := false
+
 	if gitURL != "" {
 		var err error
+
 		hostname, adopted, err = resolveBranchCollision(reader, r, hostname)
 		if err != nil {
 			return "", err
 		}
 	}
+
 	if !adopted {
-		if err := r.CreateAndCheckoutBranch(hostname); err != nil {
+		err := r.CreateAndCheckoutBranch(hostname)
+		if err != nil {
 			fmt.Printf("Branch %q already exists, continuing.\n", hostname)
 		} else {
 			fmt.Printf("Created and checked out branch: %s\n", hostname)
 		}
 	}
+
 	return hostname, nil
 }
 
@@ -387,33 +419,44 @@ func setupMachineBranch(reader *bufio.Reader, r *repo.Repo, gitURL string) (stri
 func resolveBranchCollision(reader *bufio.Reader, r *repo.Repo, branch string) (string, bool, error) {
 	if err := r.Fetch(); err != nil {
 		fmt.Printf("Warning: could not fetch from remote to check for an existing %q branch: %v\n", branch, err)
+
 		return branch, false, nil
 	}
+
 	has, err := r.RemoteHasBranch("origin", branch)
 	if err != nil {
 		return "", false, fmt.Errorf("checking remote for branch %q: %w", branch, err)
 	}
+
 	if !has {
 		return branch, false, nil
 	}
+
 	fmt.Printf("A branch named %q already exists on the remote.\n", branch)
 	fmt.Println("  1) Reuse it (this machine was previously initialized)")
 	fmt.Println("  2) Create a unique branch name (a different machine uses this name)")
 	fmt.Print("Choice [1]: ")
+
 	ans, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", false, fmt.Errorf("reading input: %w", err)
 	}
+
 	if strings.TrimSpace(ans) == "2" {
 		unique := branch + "-" + randomBranchSuffix()
 		fmt.Printf("Using unique branch name: %s\n", unique)
+
 		return unique, false, nil
 	}
+
 	if err := r.CheckoutTrackingBranch(branch, "origin"); err != nil {
 		fmt.Printf("Could not adopt remote branch %q (%v); creating it locally.\n", branch, err)
+
 		return branch, false, nil
 	}
+
 	fmt.Printf("Reusing existing remote branch: %s\n", branch)
+
 	return branch, true, nil
 }
 
@@ -424,9 +467,11 @@ func randomBranchSuffix() string {
 	if _, err := crand.Read(b); err != nil {
 		return "x"
 	}
+
 	for i := range b {
 		b[i] = branchNameChars[int(b[i])%len(branchNameChars)]
 	}
+
 	return string(b)
 }
 
@@ -440,11 +485,14 @@ func ensureOnMachineBranch(r *repo.Repo, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("determining current branch: %w", err)
 	}
+
 	if cur != cfg.Branch {
 		return fmt.Errorf(
 			"dotfiles repo has branch %q checked out, but this machine's branch is %q — run 'git -C %s checkout %s' first",
-			cur, cfg.Branch, cfg.LocalDotfilesDir, cfg.Branch)
+			cur, cfg.Branch, cfg.LocalDotfilesDir, cfg.Branch,
+		)
 	}
+
 	return nil
 }
 
@@ -456,6 +504,7 @@ func registryContains(reg *config.Registry, tildeFile, hash string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -465,9 +514,11 @@ func upsertRegistryEntry(reg *config.Registry, tildeFile, hash string) {
 	for i, f := range reg.Files {
 		if f.Path == tildeFile {
 			reg.Files[i].Hash = hash
+
 			return
 		}
 	}
+
 	reg.Files = append(reg.Files, config.ManagedFile{Path: tildeFile, Hash: hash})
 }
 
@@ -479,6 +530,7 @@ func updateMainRegistry(r *repo.Repo, tildeFile, filePath string) error {
 	if err != nil {
 		return fmt.Errorf("reading main registry: %w", err)
 	}
+
 	var mainReg *config.Registry
 	if len(mainRegBytes) > 0 {
 		mainReg, err = config.RegistryFromBytes(mainRegBytes)
@@ -495,11 +547,13 @@ func updateMainRegistry(r *repo.Repo, tildeFile, filePath string) error {
 	if err != nil {
 		return fmt.Errorf("serialising main registry: %w", err)
 	}
+
 	if _, err := r.CommitFilesToBranch("main", []repo.BranchFile{
 		{RepoRelPath: managedTOMLPath, Content: mainRegBytes},
 	}, fmt.Sprintf("hdf: register %s baseline", filePath)); err != nil {
 		return fmt.Errorf("registering main baseline: %w", err)
 	}
+
 	return nil
 }
 
@@ -514,31 +568,41 @@ func expandAndValidate(filePath, homeDir string) (expanded, tildeFile string, er
 		if err != nil {
 			return "", "", fmt.Errorf("resolving absolute path: %w", err)
 		}
+
 		expanded = abs
 	}
+
 	if _, err := os.Stat(expanded); err != nil {
 		if os.IsNotExist(err) {
 			return "", "", fmt.Errorf("file not found: %s", expanded)
 		}
+
 		return "", "", fmt.Errorf("cannot access %s: %w", expanded, err)
 	}
+
 	resolvedHome := homeDir
 	if rh, err := filepath.EvalSymlinks(homeDir); err == nil {
 		resolvedHome = rh
 	}
+
 	resolvedExpanded := expanded
+
 	dir, file := filepath.Split(expanded)
 	if rd, err := filepath.EvalSymlinks(dir); err == nil {
 		resolvedExpanded = filepath.Join(rd, file)
 	}
+
 	rel, err := filepath.Rel(resolvedHome, resolvedExpanded)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", "", fmt.Errorf("path %s is outside the home directory and cannot be managed", expanded)
 	}
+
 	if rel == "." {
 		return "", "", fmt.Errorf("path %s is the home directory itself and cannot be managed", expanded)
 	}
+
 	tildeFile = "~/" + filepath.ToSlash(rel)
+
 	return expanded, tildeFile, nil
 }
 
@@ -549,14 +613,18 @@ func ignoredPathsFromRemote(r *repo.Repo) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading shared settings from origin/main: %w", err)
 	}
+
 	if len(ssBytes) == 0 {
 		return config.DefaultIgnoredPaths, nil
 	}
+
 	ss, err := config.SharedSettingsFromBytes(ssBytes)
 	if err != nil {
 		return nil, fmt.Errorf("parsing shared settings: %w", err)
 	}
+
 	ss.ApplyDefaults()
+
 	return ss.IgnoredPaths, nil
 }
 
@@ -565,13 +633,16 @@ func stageAndCommit(r *repo.Repo, relName, filePath string) (string, error) {
 	if err := r.StageFile(relName); err != nil {
 		return "", fmt.Errorf("staging file: %w", err)
 	}
+
 	if err := r.StageFile(managedTOMLPath); err != nil {
 		return "", fmt.Errorf("staging registry: %w", err)
 	}
-	sha, err := r.CommitStaged(fmt.Sprintf("hdf: enroll %s", filePath))
+
+	sha, err := r.CommitStaged("hdf: enroll " + filePath)
 	if err != nil {
 		return "", fmt.Errorf("committing: %w", err)
 	}
+
 	return sha, nil
 }
 
@@ -595,26 +666,33 @@ func collectUnseenIncoming(r *repo.Repo, cfg *config.Config, homeDir string) ([]
 	if err != nil {
 		return nil, fmt.Errorf("reading remote registry: %w", err)
 	}
+
 	if len(regBytes) == 0 {
 		return nil, nil
 	}
+
 	reg, err := config.RegistryFromBytes(regBytes)
 	if err != nil {
 		return nil, fmt.Errorf("parsing remote registry: %w", err)
 	}
+
 	if reg == nil {
 		return nil, nil
 	}
+
 	var pending []unseenIncoming
+
 	for _, f := range reg.Files {
 		item, err := unseenIncomingForFile(r, cfg, homeDir, f)
 		if err != nil {
 			return nil, err
 		}
+
 		if item != nil {
 			pending = append(pending, *item)
 		}
 	}
+
 	return pending, nil
 }
 
@@ -626,27 +704,34 @@ func unseenIncomingForFile(r *repo.Repo, cfg *config.Config, homeDir string, f c
 	if !ok {
 		return nil, nil
 	}
+
 	mainBytes, err := r.ReadFileFromRemoteBranch("origin", "main", relSlash)
 	if err != nil {
 		return nil, fmt.Errorf("reading remote file %s: %w", relSlash, err)
 	}
+
 	if mainBytes == nil {
 		return nil, nil // enrolled but not yet promoted by any machine
 	}
+
 	branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relSlash)
 	if err != nil {
 		return nil, fmt.Errorf("reading local file %s: %w", relSlash, err)
 	}
+
 	if branchBytes != nil && string(branchBytes) == string(mainBytes) {
 		return nil, nil // synced
 	}
+
 	seen, err := r.BranchHistoryHasFileContent(cfg.Branch, relSlash, mainBytes)
 	if err != nil {
 		return nil, fmt.Errorf("checking branch history for %s: %w", relSlash, err)
 	}
+
 	if seen {
 		return nil, nil // main holds content this machine produced or accepted before
 	}
+
 	return &unseenIncoming{
 		tildePath:   f.Path,
 		relPath:     relSlash,
@@ -660,20 +745,26 @@ func unseenIncomingForFile(r *repo.Repo, cfg *config.Config, homeDir string, f c
 // ok is false when the entry does not resolve to a path for this machine.
 func repoRelPathForManagedFile(cfg *config.Config, homeDir string, f config.ManagedFile) (string, bool) {
 	expanded := config.ExpandPathIn(f.Path, homeDir)
-	var repoPath string
-	var err error
+
+	var (
+		repoPath string
+		err      error
+	)
 	if len(f.Variants) > 0 {
 		repoPath, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir)
 	} else {
 		repoPath, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 	}
+
 	if err != nil || repoPath == "" {
 		return "", false
 	}
+
 	rel, err := filepath.Rel(cfg.LocalDotfilesDir, repoPath)
 	if err != nil {
 		return "", false
 	}
+
 	return filepath.ToSlash(rel), true
 }
 
@@ -687,31 +778,39 @@ func registryUnionMerger(ours, theirs []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing our registry: %w", err)
 	}
+
 	theirsReg, err := config.RegistryFromBytes(theirs)
 	if err != nil {
 		return nil, fmt.Errorf("parsing main's registry: %w", err)
 	}
+
 	byPath := make(map[string]config.ManagedFile)
+
 	if theirsReg != nil {
 		for _, f := range theirsReg.Files {
 			byPath[f.Path] = f
 		}
 	}
+
 	if oursReg != nil {
 		for _, f := range oursReg.Files {
 			if existing, ok := byPath[f.Path]; ok {
 				f.Variants = unionVariants(f.Variants, existing.Variants)
 			}
+
 			byPath[f.Path] = f
 		}
 	}
+
 	merged := &config.Registry{Files: make([]config.ManagedFile, 0, len(byPath))}
 	for _, f := range byPath {
 		merged.Files = append(merged.Files, f)
 	}
+
 	sort.Slice(merged.Files, func(i, j int) bool {
 		return merged.Files[i].Path < merged.Files[j].Path
 	})
+
 	return config.RegistryToBytes(merged)
 }
 
@@ -722,21 +821,25 @@ func unionVariants(ours, theirs []config.Variant) []config.Variant {
 	for _, v := range theirs {
 		byBranch[v.Branch] = v
 	}
+
 	for _, v := range ours {
 		byBranch[v.Branch] = v
 	}
+
 	merged := make([]config.Variant, 0, len(byBranch))
 	for _, v := range byBranch {
 		merged = append(merged, v)
 	}
+
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Branch < merged[j].Branch })
+
 	return merged
 }
 
 // errPromoteUnreviewed is the refusal returned when promote cannot get an
 // explicit answer about unseen incoming content (closed stdin or decline).
 func errPromoteUnreviewed() error {
-	return fmt.Errorf("cannot promote: main has changes you haven't reviewed — run 'hdf changes-pull' first")
+	return errors.New("cannot promote: main has changes you haven't reviewed — run 'hdf changes-pull' first")
 }
 
 // reviewUnseenIncoming walks the user through every unseen incoming file and
@@ -746,8 +849,11 @@ func errPromoteUnreviewed() error {
 func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader, statePath string) (map[string]bool, error) {
 	preferTheirs := make(map[string]bool)
 
-	var preserved []unseenIncoming
-	var diverged []unseenIncoming
+	var (
+		preserved []unseenIncoming
+		diverged  []unseenIncoming
+	)
+
 	for _, p := range pending {
 		if p.branchBytes == nil {
 			preserved = append(preserved, p)
@@ -758,10 +864,13 @@ func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader, stateP
 
 	if len(preserved) > 0 {
 		fmt.Println("main has file(s) promoted by other machines that you haven't pulled:")
+
 		for _, p := range preserved {
 			fmt.Printf("  - %s (will be preserved by promote)\n", p.tildePath)
 		}
+
 		fmt.Print("Continue promoting? [y/N]: ")
+
 		ans, err := readPromptAnswer(reader)
 		if err != nil || !isYes(ans) {
 			return nil, errPromoteUnreviewed()
@@ -772,6 +881,7 @@ func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader, stateP
 	if err != nil {
 		state = &config.State{}
 	}
+
 	for _, p := range diverged {
 		mainHash := link.HashBytes(p.mainBytes)
 		if state.DeclinedOverwrites[p.relPath] == mainHash {
@@ -779,27 +889,37 @@ func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader, stateP
 			// keep it — honor that decision without re-prompting.
 			preferTheirs[p.relPath] = true
 			fmt.Printf("Keeping main's version of %s (previously declined overwrite).\n", p.tildePath)
+
 			continue
 		}
+
 		fmt.Printf("\nmain has a newer version of %s that this machine has never had:\n", p.tildePath)
 		printDiff(daemon.GenerateUnifiedDiff(string(p.branchBytes), string(p.mainBytes)))
 		fmt.Printf("Overwrite main's newer version of %s with yours? [y/N]: ", p.tildePath)
+
 		ans, err := readPromptAnswer(reader)
 		if err != nil {
 			return nil, errPromoteUnreviewed()
 		}
+
 		if isYes(ans) {
-			if updateErr := recordDecline(statePath, p.relPath, "", false); updateErr != nil {
+			updateErr := recordDecline(statePath, p.relPath, "", false)
+			if updateErr != nil {
 				fmt.Printf("Warning: could not update state file: %v\n", updateErr)
 			}
+
 			continue
 		}
+
 		preferTheirs[p.relPath] = true
 		fmt.Printf("Keeping main's version of %s.\n", p.tildePath)
-		if updateErr := recordDecline(statePath, p.relPath, mainHash, true); updateErr != nil {
+
+		updateErr := recordDecline(statePath, p.relPath, mainHash, true)
+		if updateErr != nil {
 			fmt.Printf("Warning: could not update state file: %v\n", updateErr)
 		}
 	}
+
 	return preferTheirs, nil
 }
 
@@ -809,12 +929,16 @@ func recordDecline(statePath, relPath, mainHash string, add bool) error {
 	return config.UpdateState(statePath, func(s *config.State) error {
 		if !add {
 			delete(s.DeclinedOverwrites, relPath)
+
 			return nil
 		}
+
 		if s.DeclinedOverwrites == nil {
 			s.DeclinedOverwrites = make(map[string]string)
 		}
+
 		s.DeclinedOverwrites[relPath] = mainHash
+
 		return nil
 	})
 }
@@ -826,10 +950,12 @@ func readPromptAnswer(reader *bufio.Reader) (string, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", fmt.Errorf("reading user input: %w", err)
 	}
+
 	ans = strings.TrimSpace(ans)
 	if errors.Is(err, io.EOF) && ans == "" {
-		return "", fmt.Errorf("stdin closed")
+		return "", errors.New("stdin closed")
 	}
+
 	return ans, nil
 }
 
@@ -842,17 +968,23 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 	if cfg.GitPushTarget == "" {
 		return nil
 	}
-	if err := r.Push(cfg.Branch); err != nil {
+
+	err := r.Push(cfg.Branch)
+	if err != nil {
 		return fmt.Errorf("pushing hostname branch: %w", err)
 	}
-	if err := r.Push("main"); err != nil {
+
+	err = r.Push("main")
+	if err != nil {
 		if !errors.Is(err, repo.ErrNonFastForwardUpdate) {
 			return fmt.Errorf("pushing main: %w", err)
 		}
+
 		fmt.Println("Note: main has moved on the remote (another machine promoted); " +
 			"this enrollment will be registered on main when you next run 'hdf promote' " +
 			"(run 'hdf changes-pull' first to review the incoming changes).")
 	}
+
 	return nil
 }
 
@@ -862,23 +994,31 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 func showEnrollDiff(committed, disk []byte, filePath string, reader *bufio.Reader, yes bool) error {
 	if committed == nil {
 		fmt.Printf("new file: %s\n", filePath)
+
 		return nil
 	}
+
 	diff := daemon.GenerateUnifiedDiff(string(committed), string(disk))
 	if diff == "" {
 		return nil
 	}
+
 	fmt.Printf("changes to %s:\n", filePath)
 	printDiff(diff)
+
 	if yes {
 		return nil
 	}
+
 	fmt.Print("Enroll these changes? [Y/n]: ")
+
 	answer, _ := reader.ReadString('\n')
+
 	answer = strings.TrimSpace(answer)
 	if answer != "" && !isYes(answer) {
-		return fmt.Errorf("aborted")
+		return errors.New("aborted")
 	}
+
 	return nil
 }
 
@@ -889,35 +1029,47 @@ func applyEnroll(r *repo.Repo, expanded, tildeFile, relName, filePath, homeDir s
 	if err != nil {
 		return fmt.Errorf("enrolling %s: %w", filePath, err)
 	}
+
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
 	}
+
 	if registryContains(reg, tildeFile, hash) {
 		fmt.Printf("%s is already managed and unchanged\n", filePath)
+
 		return nil
 	}
+
 	upsertRegistryEntry(reg, tildeFile, hash)
+
 	if err := config.SaveRegistry(cfg.LocalDotfilesDir, reg); err != nil {
 		return fmt.Errorf("saving registry: %w", err)
 	}
+
 	sha, err := stageAndCommit(r, relName, filePath)
 	if err != nil {
 		return err
 	}
+
 	if err := updateMainRegistry(r, tildeFile, filePath); err != nil {
 		return err
 	}
+
 	if err := pushBranches(r, cfg); err != nil {
 		return err
 	}
+
 	if err := config.UpdateState(statePath, func(s *config.State) error {
 		s.LastCommit = sha
+
 		return nil
 	}); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
+
 	fmt.Printf("Enrolled %s (commit %s)\n", filePath, sha[:8])
+
 	return nil
 }
 
@@ -926,6 +1078,7 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, s
 	if err != nil {
 		return err
 	}
+
 	if fi, err := os.Stat(expanded); err == nil && fi.IsDir() {
 		return fmt.Errorf("%s is a directory; hdf only supports managing individual files", filePath)
 	}
@@ -941,13 +1094,16 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, s
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
 	}
+
 	if err := ensureOnMachineBranch(r, cfg); err != nil {
 		return err
 	}
+
 	ignoredPaths, err := ignoredPathsFromRemote(r)
 	if err != nil {
 		return err
 	}
+
 	if config.IsIgnored(tildeFile, ignoredPaths) {
 		return fmt.Errorf("%s matches an ignored path — edit %s on the main branch to override",
 			filePath, config.SharedSettingsFile)
@@ -959,21 +1115,26 @@ func runEnroll(filePath, homeDir string, cfg *config.Config, statePath string, s
 	if err != nil {
 		return fmt.Errorf("computing repo path: %w", err)
 	}
+
 	relName, err := filepath.Rel(cfg.LocalDotfilesDir, repoFilePath)
 	if err != nil {
 		return fmt.Errorf("computing relative path: %w", err)
 	}
+
 	committedBytes, err := r.ReadFileFromBranch(cfg.Branch, filepath.ToSlash(relName))
 	if err != nil {
 		return fmt.Errorf("reading committed version of %s: %w", relName, err)
 	}
+
 	diskBytes, err := os.ReadFile(expanded)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", expanded, err)
 	}
+
 	if err := showEnrollDiff(committedBytes, diskBytes, filePath, reader, yes); err != nil {
 		return err
 	}
+
 	return applyEnroll(r, expanded, tildeFile, relName, filePath, homeDir, cfg, statePath)
 }
 
@@ -990,10 +1151,12 @@ Does not merge into main — that is a deliberate step done via hdf changes-pull
 		if err != nil {
 			return fmt.Errorf("loading config (run 'hdf init' first): %w", err)
 		}
+
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
+
 		return runEnroll(args[0], homeDir, cfg, config.DefaultStatePath(), os.Stdin, enrollYes)
 	},
 }
@@ -1006,22 +1169,57 @@ func remoteRegistry(r *repo.Repo, fallback *config.Registry) (*config.Registry, 
 	if err != nil {
 		return nil, fmt.Errorf("reading remote registry: %w", err)
 	}
+
 	if len(b) == 0 {
 		return fallback, nil
 	}
+
 	reg, err := config.RegistryFromBytes(b)
 	if err != nil {
 		return nil, fmt.Errorf("parsing remote registry: %w", err)
 	}
+
 	if reg == nil || len(reg.Files) == 0 {
 		return fallback, nil
 	}
+
 	return reg, nil
 }
 
 // fetchAndShowIncoming fetches from remote, prints a colored diff for every
 // managed file that differs between origin/main and the current branch, and
 // returns true when at least one file has incoming changes.
+// fetchForLink fetches from the remote, if there is one, and reviews any
+// incoming files with the user, returning reg — reloaded if anything came
+// in.
+func fetchForLink(r *repo.Repo, cfg *config.Config, reg *config.Registry, homeDir string, reader *bufio.Reader) (*config.Registry, error) {
+	if r.RemoteURL() == "" {
+		fmt.Println("No remote configured; skipping fetch.")
+
+		return reg, nil
+	}
+
+	fmt.Println("Fetching from remote...")
+
+	anyIncoming, err := fetchAndShowIncoming(r, cfg, reg, homeDir, reader)
+	if err != nil {
+		return nil, err
+	}
+
+	if !anyIncoming {
+		fmt.Println("Already up to date.")
+
+		return reg, nil
+	}
+
+	reloaded, err := config.LoadRegistry(cfg.LocalDotfilesDir)
+	if err != nil {
+		return nil, fmt.Errorf("reloading registry: %w", err)
+	}
+
+	return reloaded, nil
+}
+
 func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry, homeDir string, reader *bufio.Reader) (bool, error) {
 	if err := r.Fetch(); err != nil {
 		return false, fmt.Errorf("fetching from remote: %w", err)
@@ -1034,6 +1232,7 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 	if err != nil {
 		return false, fmt.Errorf("checking incoming commits: %w", err)
 	}
+
 	if !hasIncoming {
 		return false, nil
 	}
@@ -1043,23 +1242,30 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 	if err != nil {
 		return false, err
 	}
+
 	anyIncoming := false
+
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
+
 		var repoFile string
 		if len(f.Variants) > 0 {
 			repoFile, _ = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir)
 		} else {
 			repoFile, _ = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 		}
+
 		if repoFile == "" {
 			continue
 		}
+
 		relPath, err := filepath.Rel(cfg.LocalDotfilesDir, repoFile)
 		if err != nil {
 			continue
 		}
+
 		relPath = filepath.ToSlash(relPath)
+
 		mainBytes, err := r.ReadFileFromRemoteBranch("origin", "main", relPath)
 		if err != nil {
 			return false, fmt.Errorf("reading %s from origin/main: %w", relPath, err)
@@ -1069,18 +1275,22 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 		if mainBytes == nil {
 			continue
 		}
+
 		branchBytes, err := r.ReadFileFromBranch(cfg.Branch, relPath)
 		if err != nil {
 			return false, fmt.Errorf("reading %s from branch %s: %w", relPath, cfg.Branch, err)
 		}
+
 		if branchBytes != nil && string(mainBytes) == string(branchBytes) {
 			continue
 		}
+
 		anyIncoming = true
 		if err := promptAndMaybeAccept(r, cfg, f, relPath, mainBytes, branchBytes, reader); err != nil {
 			return anyIncoming, err
 		}
 	}
+
 	return anyIncoming, nil
 }
 
@@ -1091,21 +1301,27 @@ func promptAndMaybeAccept(r *repo.Repo, cfg *config.Config, f config.ManagedFile
 	fmt.Printf("\n--- %s ---\n", f.Path)
 	printDiff(daemon.GenerateUnifiedDiff(string(branchBytes), string(mainBytes)))
 	fmt.Printf("Accept main's version of %s? [y/N]: ", f.Path)
+
 	ans, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("reading user input: %w", err)
 	}
+
 	if errors.Is(err, io.EOF) && strings.TrimSpace(ans) == "" {
-		return fmt.Errorf("stdin closed: aborting pull")
+		return errors.New("stdin closed: aborting pull")
 	}
+
 	if isYes(strings.TrimSpace(ans)) {
-		if err := acceptPromotedFile(r, cfg, relPath, mainBytes, f.Path); err != nil {
+		err := acceptPromotedFile(r, cfg, relPath, mainBytes, f.Path)
+		if err != nil {
 			return fmt.Errorf("accepting %s: %w", f.Path, err)
 		}
+
 		fmt.Printf("Accepted %s from main.\n", f.Path)
 	} else {
 		fmt.Printf("Skipped %s — keeping local version.\n", f.Path)
 	}
+
 	return nil
 }
 
@@ -1114,8 +1330,9 @@ func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBy
 	if err != nil {
 		return fmt.Errorf("checking staged changes: %w", err)
 	}
+
 	if staged {
-		return fmt.Errorf("index has staged changes unrelated to this accept — commit or unstage them first")
+		return errors.New("index has staged changes unrelated to this accept — commit or unstage them first")
 	}
 
 	fullPath := filepath.Join(cfg.LocalDotfilesDir, filepath.FromSlash(relPath))
@@ -1124,27 +1341,33 @@ func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBy
 	// Snapshot disk state so we can roll back if any later step fails.
 	origFile, origFileErr := os.ReadFile(fullPath)
 	origReg, origRegErr := os.ReadFile(regPath)
+
 	defer func() {
 		if retErr == nil {
 			return
 		}
+
 		if origFileErr == nil {
 			_ = os.WriteFile(fullPath, origFile, 0o644) //nolint:gosec
 		} else if os.IsNotExist(origFileErr) {
 			_ = os.Remove(fullPath)
 		}
+
 		if origRegErr == nil {
 			_ = os.WriteFile(regPath, origReg, 0o644) //nolint:gosec
 		}
+
 		_ = r.UnstageAll()
 	}()
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
+
 	if err := os.WriteFile(fullPath, mainBytes, 0o644); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
+
 	localReg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
@@ -1152,18 +1375,23 @@ func acceptPromotedFile(r *repo.Repo, cfg *config.Config, relPath string, mainBy
 	// Hash the accepted bytes rather than trusting main's registry entry,
 	// which may carry a stale or empty stub hash from the enrolling machine.
 	upsertRegistryEntry(localReg, tildePath, link.HashBytes(mainBytes))
+
 	if err := config.SaveRegistry(cfg.LocalDotfilesDir, localReg); err != nil {
 		return fmt.Errorf("saving registry: %w", err)
 	}
+
 	if err := r.StageFile(relPath); err != nil {
 		return fmt.Errorf("staging file: %w", err)
 	}
+
 	if err := r.StageFile(managedTOMLPath); err != nil {
 		return fmt.Errorf("staging registry: %w", err)
 	}
+
 	if _, err := r.CommitStaged(fmt.Sprintf("hdf: accept %s from main", relPath)); err != nil {
 		return fmt.Errorf("committing: %w", err)
 	}
+
 	return nil
 }
 
@@ -1184,79 +1412,84 @@ func runLink(homeDir string, cfg *config.Config, noFetch bool, stdin io.Reader, 
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
 	}
+
 	if err := ensureOnMachineBranch(r, cfg); err != nil {
 		return err
 	}
+
 	reg, err := config.LoadRegistry(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
 	}
+
 	if !noFetch {
-		if r.RemoteURL() == "" {
-			fmt.Println("No remote configured; skipping fetch.")
-		} else {
-			fmt.Println("Fetching from remote...")
-			anyIncoming, err := fetchAndShowIncoming(r, cfg, reg, homeDir, reader)
-			if err != nil {
-				return err
-			}
-			if anyIncoming {
-				reloaded, err := config.LoadRegistry(cfg.LocalDotfilesDir)
-				if err != nil {
-					return fmt.Errorf("reloading registry: %w", err)
-				}
-				reg = reloaded
-			} else {
-				fmt.Println("Already up to date.")
-			}
+		reg, err = fetchForLink(r, cfg, reg, homeDir, reader)
+		if err != nil {
+			return err
 		}
 	}
 
 	for _, f := range reg.Files {
 		expanded := config.ExpandPathIn(f.Path, homeDir)
-		var repoFile string
-		var err error
+
+		var (
+			repoFile string
+			err      error
+		)
 		if len(f.Variants) > 0 {
 			repoFile, err = resolveRepoPath(f, cfg.Branch, cfg.LocalDotfilesDir)
 		} else {
 			repoFile, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, homeDir)
 		}
+
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
+
 			continue
 		}
+
 		if repoFile == "" {
 			fmt.Fprintf(os.Stderr, "link %s: no variant for branch %q — skipping (add a variant for this branch to %s to manage the file here)\n",
 				f.Path, cfg.Branch, managedTOMLPath)
+
 			continue
 		}
+
 		if err := link.Link(expanded, repoFile); err != nil {
 			fmt.Fprintf(os.Stderr, "link %s: %v\n", f.Path, err)
+
 			continue
 		}
+
 		fmt.Printf("linked %s\n", f.Path)
 	}
+
 	return nil
 }
 
 func runPromote(cfg *config.Config, homeDir string, stdin io.Reader, statePath string) error {
 	if cfg.GitPushTarget == "" {
-		return fmt.Errorf("cannot promote: no remote configured — promotion has no effect without a shared repository")
+		return errors.New("cannot promote: no remote configured — promotion has no effect without a shared repository")
 	}
+
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
 		return fmt.Errorf("opening repo: %w", err)
 	}
+
 	if err := ensureOnMachineBranch(r, cfg); err != nil {
 		return err
 	}
+
 	clean, err := r.IsCleanForPromote()
 	if err != nil {
 		return fmt.Errorf("checking status: %w", err)
 	}
+
 	if !clean {
-		return fmt.Errorf("uncommitted changes in the dotfiles repository — run 'hdf changes-push <file>' first")
+		return errors.New("uncommitted changes in the dotfiles repository — run 'hdf changes-push <file>' first")
 	}
+
 	if err := r.Fetch(); err != nil {
 		return fmt.Errorf("fetching before promote: %w", err)
 	}
@@ -1267,6 +1500,7 @@ func runPromote(cfg *config.Config, homeDir string, stdin io.Reader, statePath s
 	if err != nil {
 		return fmt.Errorf("checking incoming: %w", err)
 	}
+
 	preferTheirs, err := reviewUnseenIncoming(pending, bufio.NewReader(stdin), statePath)
 	if err != nil {
 		return err
@@ -1277,7 +1511,9 @@ func runPromote(cfg *config.Config, homeDir string, stdin io.Reader, statePath s
 	if err := r.SyncLocalMain("origin"); err != nil {
 		return fmt.Errorf("syncing local main to origin: %w", err)
 	}
+
 	fmt.Printf("Merging %s into main...\n", cfg.Branch)
+
 	mergeOpts := &repo.MergeOpts{
 		PreferTheirs:   preferTheirs,
 		ContentMergers: map[string]repo.ContentMerger{managedTOMLPath: registryUnionMerger},
@@ -1285,6 +1521,7 @@ func runPromote(cfg *config.Config, homeDir string, stdin io.Reader, statePath s
 	if err := r.MergeIntoBranch("main", mergeOpts); err != nil {
 		return fmt.Errorf("promoting: %w", err)
 	}
+
 	return pushPromoted(r, cfg, statePath)
 }
 
@@ -1293,31 +1530,39 @@ func runPromote(cfg *config.Config, homeDir string, stdin io.Reader, statePath s
 // records the new main SHA so the daemon does not notify this machine about
 // its own promote.
 func pushPromoted(r *repo.Repo, cfg *config.Config, statePath string) error {
-	if err := r.Push(cfg.Branch); err != nil {
+	err := r.Push(cfg.Branch)
+	if err != nil {
 		return fmt.Errorf("pushing %s: %w", cfg.Branch, err)
 	}
 	// TODO(future): make this atomic — push the merge commit object directly to
 	// origin/main using a compare-and-swap refspec so local main is never
 	// advanced until the remote accepts. See design doc 2026-07-05.
-	if err := r.Push("main"); err != nil {
+	err = r.Push("main")
+	if err != nil {
 		if errors.Is(err, repo.ErrNonFastForwardUpdate) {
 			// Guard 3: another machine promoted between Guard 2's fetch and now.
 			// Reset local main back to origin/main (MergeIntoBranch only moves a
 			// ref, so no working-tree changes need to be undone).
-			if rollbackErr := r.ResetBranchToRemote("main", "origin"); rollbackErr != nil {
+			rollbackErr := r.ResetBranchToRemote("main", "origin")
+			if rollbackErr != nil {
 				return fmt.Errorf("promote failed and rollback of local main failed: %w (original: %w)", rollbackErr, err)
 			}
-			return fmt.Errorf("cannot promote: another machine promoted while you were working — run 'hdf changes-pull' and try again")
+
+			return errors.New("cannot promote: another machine promoted while you were working — run 'hdf changes-pull' and try again")
 		}
+
 		return fmt.Errorf("pushing main: %w", err)
 	}
 	// Best-effort: a failure here only costs one redundant notification.
 	if mainSHA, shaErr := r.BranchSHA("main"); shaErr == nil {
-		if stateErr := recordMainCommit(statePath, mainSHA); stateErr != nil {
+		stateErr := recordMainCommit(statePath, mainSHA)
+		if stateErr != nil {
 			fmt.Printf("Warning: could not update state file: %v\n", stateErr)
 		}
 	}
+
 	fmt.Printf("Promoted %s → main and pushed to origin.\n", cfg.Branch)
+
 	return nil
 }
 
@@ -1326,6 +1571,7 @@ func pushPromoted(r *repo.Repo, cfg *config.Config, statePath string) error {
 func recordMainCommit(statePath, mainSHA string) error {
 	return config.UpdateState(statePath, func(state *config.State) error {
 		state.LastMainCommit = mainSHA
+
 		return nil
 	})
 }
@@ -1339,14 +1585,17 @@ pulled, or a newer version of a file you both changed) is shown first and needs
 explicit consent. Run 'hdf changes-pull' to review incoming changes in full.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
+
 		cfg, err := config.Load(cfgPath)
 		if err != nil {
 			return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
 		}
+
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
+
 		return runPromote(cfg, homeDir, os.Stdin, config.DefaultStatePath())
 	},
 }
@@ -1362,14 +1611,17 @@ Skipping is an accepted workflow — run hdf changes-pull again when ready.`,
 	Aliases: []string{"link"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := config.DefaultPath()
+
 		cfg, err := config.Load(cfgPath)
 		if err != nil {
 			return fmt.Errorf("loading config (run 'hdf init' first): %w", err)
 		}
+
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
+
 		return runLink(homeDir, cfg, linkNoFetch, os.Stdin, config.DefaultStatePath())
 	},
 }
@@ -1385,6 +1637,7 @@ var reportOutDir = func() string {
 	if err != nil {
 		return "."
 	}
+
 	return dir
 }
 
@@ -1409,9 +1662,12 @@ func runReportIssue(opts report.BuildOptions) error {
 		if errors.Is(err, report.ErrRepoTooLarge) {
 			return fmt.Errorf("dotfiles repo is too large to include in a report (compressed size over %d bytes) — prune history or contact your admin another way", report.MaxRepoZipBytes)
 		}
+
 		return fmt.Errorf("building report: %w", err)
 	}
+
 	fmt.Printf("Report written to %s\n", path)
+
 	return nil
 }
 
@@ -1420,9 +1676,13 @@ var reportIssueCmd = &cobra.Command{
 	Short: "Package diagnostics into a .zip for sharing with an admin",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, reportIssueWarning)
+
 		reader := bufio.NewReader(os.Stdin)
+
 		fmt.Print("What was expected? What actually happened? (optional, press Enter to skip)\n> ")
+
 		text, _ := reader.ReadString('\n')
+
 		return runReportIssue(report.BuildOptions{
 			CfgPath:   config.DefaultPath(),
 			StatePath: config.DefaultStatePath(),
@@ -1441,6 +1701,7 @@ var statusCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("getting home directory: %w", err)
 		}
+
 		info, err := computeStatus(config.DefaultPath(), config.DefaultStatePath(), homeDir)
 		if err != nil {
 			return err
@@ -1453,9 +1714,11 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("Last sync:   %s\n", info.LastSync)
 
 		fmt.Printf("\nManaged files (%d):\n", len(info.Files))
+
 		for _, f := range info.Files {
 			fmt.Printf("  %-40s %s\n", f.Path, f.Status)
 		}
+
 		return nil
 	},
 }
@@ -1489,6 +1752,7 @@ var runDaemon = func(cfgPath string, run func(string) error) error {
 	if _, err := config.Load(cfgPath); err != nil {
 		return fmt.Errorf("hdf is not initialized — run 'hdf init' first (%w)", err)
 	}
+
 	return run(cfgPath)
 }
 
@@ -1552,7 +1816,9 @@ var daemonStatusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), status)
+
 		return err
 	},
 }
@@ -1570,7 +1836,8 @@ func printDiff(content string) {
 		green = "\033[32m"
 		cyan  = "\033[36m"
 	)
-	for _, line := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
+
+	for line := range strings.SplitSeq(strings.TrimSuffix(content, "\n"), "\n") {
 		switch {
 		case strings.HasPrefix(line, "diff "),
 			strings.HasPrefix(line, "index "),
@@ -1599,18 +1866,24 @@ func promptPendingWarnings(statePath string, reader *bufio.Reader) error {
 	if err != nil {
 		return fmt.Errorf("reading pending warnings: %w", err)
 	}
+
 	if len(warnings) == 0 {
 		return nil
 	}
+
 	fmt.Fprintln(os.Stderr, "Warning: The hdf daemon has recorded the following warnings:")
+
 	for _, w := range warnings {
 		fmt.Fprintf(os.Stderr, "   * %s\n", w)
 	}
+
 	fmt.Fprint(os.Stderr, "Continue anyway? [y/N]: ")
+
 	answer, _ := reader.ReadString('\n')
 	if !isYes(strings.TrimSpace(answer)) {
-		return fmt.Errorf("aborted — address the warnings above before continuing")
+		return errors.New("aborted — address the warnings above before continuing")
 	}
+
 	return nil
 }
 
@@ -1625,20 +1898,25 @@ func promptPendingCrash(statePath string, reader *bufio.Reader) error {
 	if err != nil {
 		return fmt.Errorf("reading pending crash report: %w", err)
 	}
+
 	if msg == "" {
 		return nil
 	}
+
 	fmt.Fprintln(os.Stderr, "Warning: an error occurred in hdf.")
 	fmt.Fprintln(os.Stderr, reportIssueWarning)
 	fmt.Fprint(os.Stderr, "Would you like to report an issue? [y/N]: ")
+
 	answer, _ := reader.ReadString('\n')
 	if !isYes(strings.TrimSpace(answer)) {
 		return nil
 	}
+
 	trigger := report.TriggerDaemonCrash
 	if strings.HasPrefix(msg, "panic:") {
 		trigger = report.TriggerPanic
 	}
+
 	if err := runReportIssue(report.BuildOptions{
 		CfgPath:     config.DefaultPath(),
 		StatePath:   statePath,
@@ -1650,8 +1928,10 @@ func promptPendingCrash(statePath string, reader *bufio.Reader) error {
 		// large) — restore the marker so the next invocation prompts again
 		// instead of losing the crash detail forever.
 		_ = config.SetPendingCrash(statePath, msg)
+
 		return err
 	}
+
 	return nil
 }
 
@@ -1669,35 +1949,15 @@ func resolveRepoPath(f config.ManagedFile, branch, localDotfilesDir string) (str
 	if filepath.IsAbs(v.RepoPath) {
 		return "", fmt.Errorf("variant repo path for %s must be relative, got %q", f.Path, v.RepoPath)
 	}
+
 	resolved := filepath.Join(localDotfilesDir, v.RepoPath)
+
 	rel, err := filepath.Rel(localDotfilesDir, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("variant repo path for %s escapes the dotfiles repo: %q", f.Path, v.RepoPath)
 	}
+
 	return resolved, nil
-}
-
-func launchGUI(diffURLs []string) {
-	app := NewApp()
-	app.diffURLs = diffURLs
-
-	err := wails.Run(&options.App{
-		Title:  "home-dawt-files",
-		Width:  1024,
-		Height: 768,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        app.startup,
-		Bind: []interface{}{
-			app,
-		},
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
 }
 
 // version is the release version shown by `hdf --version`. It is injected at
@@ -1718,6 +1978,7 @@ func handlePanic(rec any, statePath string) string {
 	msg := fmt.Sprintf("panic: %v\n%s", rec, debug.Stack())
 	_ = config.SetPendingCrash(statePath, msg)
 	_ = eventlog.Append(eventlog.PathFor(statePath), "panic", fmt.Sprintf("%v", rec))
+
 	return msg
 }
 
@@ -1733,13 +1994,14 @@ func recoverPanic() {
 	}
 }
 
-// Execute runs the hdf CLI. frontendAssets is the embedded frontend bundle,
-// passed in by package main. Exits the process with status 1 on error.
-func Execute(frontendAssets embed.FS) {
-	assets = frontendAssets
+// Execute runs the hdf CLI. Exits the process with status 1 on error.
+func Execute() {
 	rootCmd.Version = version
+
 	defer recoverPanic()
-	if err := rootCmd.Execute(); err != nil {
+
+	err := rootCmd.Execute()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		cliExitFn(1)
 	}
@@ -1748,6 +2010,7 @@ func Execute(frontendAssets embed.FS) {
 var (
 	enrollYes   bool
 	linkNoFetch bool
+	guiName     string
 )
 
 func init() {
@@ -1755,6 +2018,8 @@ func init() {
 	// control the format ourselves and avoid duplicate output.
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
+
+	rootCmd.Flags().StringVar(&guiName, "gui", "", "GUI to launch: "+strings.Join(plugin.GUIs, " or ")+" (default: the first one installed)")
 
 	enrollCmd.Flags().BoolVarP(&enrollYes, "yes", "y", false, "Skip the diff confirmation prompt")
 	linkCmd.Flags().BoolVar(&linkNoFetch, "no-fetch", false, "Skip fetch and merge from remote; only re-create symlinks")

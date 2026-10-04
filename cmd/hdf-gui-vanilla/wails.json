@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "hdf-gui-vanilla",
+  "outputfilename": "hdf-gui-vanilla",
+  "build:dir": "../../build",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "b-long",
+    "email": "b-long@users.noreply.github.com"
+  }
+}

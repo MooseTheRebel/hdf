@@ -28,24 +28,29 @@ func EnumerateHosts(r *repo.Repo, currentBranch string) ([]HostInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	remote, err := r.RemoteTrackingBranches("origin")
 	if err != nil {
 		return nil, err
 	}
 
 	shas := make(map[string]string)
+
 	for _, b := range remote {
 		if !strings.HasPrefix(b, hostBranchPrefix) {
 			continue
 		}
+
 		if sha, err := r.RemoteBranchSHA("origin", b); err == nil {
 			shas[b] = sha
 		}
 	}
+
 	for _, b := range local {
 		if !strings.HasPrefix(b, hostBranchPrefix) {
 			continue
 		}
+
 		if sha, err := r.BranchSHA(b); err == nil {
 			shas[b] = sha
 		}
@@ -55,11 +60,13 @@ func EnumerateHosts(r *repo.Repo, currentBranch string) ([]HostInfo, error) {
 	for b := range shas {
 		names = append(names, b)
 	}
+
 	sort.Strings(names)
 
 	hosts := make([]HostInfo, 0, len(names))
 	for _, b := range names {
 		hosts = append(hosts, HostInfo{Branch: b, SHA: shas[b], IsCurrent: b == currentBranch})
 	}
+
 	return hosts, nil
 }

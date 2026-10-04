@@ -44,7 +44,7 @@ func (defaultNotifier) Send(title, message string) error {
 // criticalNotifier uses beeep.Alert — a more prominent OS alert
 // (NSAlert on macOS, MessageBox on Windows) that is visually distinct
 // from the wails window and works even when the GUI is closed.
-// TODO: Linux desktop support
+// TODO: Linux desktop support.
 type criticalNotifier struct{}
 
 func (criticalNotifier) Send(title, message string) error {
@@ -69,8 +69,10 @@ func SendCritical(title, message string) error { return Critical.Send(title, mes
 //   - LevelCritical     → log + Critical OS alert independent of the wails window
 func LogAndNotify(level NotifyLevel, title, message string) {
 	log.Printf("[%s] %s: %s", level, title, message)
+
 	if level == LevelCritical {
-		if err := SendCritical(title, message); err != nil {
+		err := SendCritical(title, message)
+		if err != nil {
 			log.Printf("[CRITICAL] failed to send OS notification: %v", err)
 		}
 	}

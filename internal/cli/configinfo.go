@@ -22,7 +22,9 @@ func computeConfigInfo(cfgPath string) (*ConfigInfo, error) {
 		if os.IsNotExist(err) {
 			return &ConfigInfo{Path: cfgPath, Exists: false}, nil
 		}
+
 		return nil, err
 	}
+
 	return &ConfigInfo{Path: cfgPath, Exists: true, Content: string(data)}, nil
 }

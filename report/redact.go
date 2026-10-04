@@ -15,7 +15,9 @@ func redactURL(rawURL string) string {
 	if err != nil || u.User == nil {
 		return rawURL
 	}
+
 	u.User = nil
+
 	return u.String()
 }
 
@@ -45,8 +47,10 @@ func redactGitConfigBytes(data []byte) []byte {
 		if idx == -1 {
 			continue
 		}
+
 		key := strings.ToLower(strings.TrimSpace(line[:idx]))
 		prefix := line[:idx+1]
+
 		switch key {
 		case "url", "pushurl":
 			value := strings.TrimSpace(line[idx+1:])
@@ -55,5 +59,6 @@ func redactGitConfigBytes(data []byte) []byte {
 			lines[i] = prefix + " " + redactedPlaceholder
 		}
 	}
+
 	return []byte(strings.Join(lines, "\n"))
 }

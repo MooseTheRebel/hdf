@@ -35,6 +35,7 @@ func (w *limitWriter) Write(p []byte) (int, error) {
 	if w.buf.Len()+len(p) > w.limit {
 		return 0, ErrRepoTooLarge
 	}
+
 	return w.buf.Write(p)
 }
 
@@ -45,20 +46,25 @@ func (w *limitWriter) Write(p []byte) (int, error) {
 // is rejected without first being fully buffered into memory.
 func CompressRepo(repoPath string) ([]byte, error) {
 	gitDir := filepath.Join(repoPath, ".git")
+
 	var buf bytes.Buffer
+
 	zw := zip.NewWriter(&limitWriter{buf: &buf, limit: MaxRepoZipBytes})
 
 	err := filepath.Walk(gitDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+
 		if info.IsDir() {
 			return nil
 		}
+
 		rel, err := filepath.Rel(gitDir, path)
 		if err != nil {
 			return err
 		}
+
 		w, err := zw.Create(filepath.ToSlash(rel))
 		if err != nil {
 			return err
@@ -68,6 +74,7 @@ func CompressRepo(repoPath string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
+
 		defer func() { _ = f.Close() }()
 
 		if filepath.ToSlash(rel) == "config" {
@@ -75,11 +82,14 @@ func CompressRepo(repoPath string) ([]byte, error) {
 			if readErr != nil {
 				return readErr
 			}
+
 			_, err = w.Write(redactGitConfigBytes(data))
+
 			return err
 		}
 
 		_, err = io.Copy(w, f)
+
 		return err
 	})
 	if err != nil {
@@ -91,5 +101,6 @@ func CompressRepo(repoPath string) ([]byte, error) {
 	if err := zw.Close(); err != nil {
 		return nil, err
 	}
+
 	return buf.Bytes(), nil
 }

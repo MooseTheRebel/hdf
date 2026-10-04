@@ -62,11 +62,13 @@ func (f ManagedFile) ResolveVariant(branch string) (Variant, VariantResolution) 
 	if len(f.Variants) == 0 {
 		return Variant{}, VariantNone
 	}
+
 	for _, v := range f.Variants {
 		if v.Branch == branch {
 			return v, VariantMatch
 		}
 	}
+
 	return Variant{}, VariantNoBranchMatch
 }
 
@@ -99,8 +101,10 @@ func ExpandPath(path string) string {
 		if err != nil {
 			return path
 		}
+
 		return filepath.Join(home, path[2:])
 	}
+
 	return path
 }
 
@@ -110,6 +114,7 @@ func ExpandPathIn(path, homeDir string) string {
 	if strings.HasPrefix(path, "~/") {
 		return filepath.Join(homeDir, path[2:])
 	}
+
 	return path
 }
 
@@ -120,19 +125,25 @@ func NormalizePath(path, homeDir string) string {
 	if strings.HasPrefix(path, "~/") || !filepath.IsAbs(path) {
 		return path
 	}
+
 	resolvedHome := homeDir
 	if rh, err := filepath.EvalSymlinks(homeDir); err == nil {
 		resolvedHome = rh
 	}
+
 	resolvedPath := path
+
 	dir, file := filepath.Split(path)
+
 	if rd, err := filepath.EvalSymlinks(dir); err == nil {
 		resolvedPath = filepath.Join(rd, file)
 	}
+
 	rel, err := filepath.Rel(resolvedHome, resolvedPath)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return path
 	}
+
 	return "~/" + filepath.ToSlash(rel)
 }
 
@@ -142,6 +153,7 @@ func Load(path string) (*Config, error) {
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, err
 	}
+
 	return &cfg, nil
 }
 
@@ -151,20 +163,27 @@ func Save(path string, cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+
 	tmp := path + ".tmp"
+
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
+
 	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
+
 		return err
 	}
+
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
+
 		return err
 	}
+
 	return os.Rename(tmp, path)
 }
 
@@ -172,13 +191,17 @@ func Save(path string, cfg *Config) error {
 // Returns an empty Registry if the file does not exist yet.
 func LoadRegistry(repoDir string) (*Registry, error) {
 	path := filepath.Join(repoDir, managedFileName)
+
 	var reg Registry
+
 	if _, err := toml.DecodeFile(path, &reg); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return &Registry{}, nil
 		}
+
 		return nil, err
 	}
+
 	return &reg, nil
 }
 
@@ -188,20 +211,27 @@ func SaveRegistry(repoDir string, reg *Registry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+
 	tmp := path + ".tmp"
+
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
+
 	if err := toml.NewEncoder(f).Encode(reg); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
+
 		return err
 	}
+
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
+
 		return err
 	}
+
 	return os.Rename(tmp, path)
 }
 
@@ -211,15 +241,18 @@ func RegistryFromBytes(data []byte) (*Registry, error) {
 	if _, err := toml.Decode(string(data), &reg); err != nil {
 		return nil, err
 	}
+
 	return &reg, nil
 }
 
 // RegistryToBytes serialises reg to TOML bytes.
 func RegistryToBytes(reg *Registry) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(reg); err != nil {
+	err := toml.NewEncoder(&buf).Encode(reg)
+	if err != nil {
 		return nil, err
 	}
+
 	return buf.Bytes(), nil
 }
 
@@ -231,20 +264,26 @@ func MigrateFilesToRegistry(cfgPath, repoDir string) error {
 	if _, err := os.Stat(managedPath); err == nil {
 		return nil // managed.toml already exists
 	}
+
 	var legacy legacyConfig
 	if _, err := toml.DecodeFile(cfgPath, &legacy); err != nil {
 		return err
 	}
+
 	if len(legacy.Files) == 0 {
 		return nil
 	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("getting home directory for migration: %w", err)
 	}
+
 	for i := range legacy.Files {
 		legacy.Files[i].Path = NormalizePath(legacy.Files[i].Path, home)
 	}
+
 	reg := &Registry{Files: legacy.Files}
+
 	return SaveRegistry(repoDir, reg)
 }
