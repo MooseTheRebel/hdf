@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/MooseTheRebel/hdf/compare/v0.3.1...v0.3.2) (2026-10-04)
+
+
+### Bug Fixes
+
+* ship standalone GUI apps & Linux packages ([#79](https://github.com/MooseTheRebel/hdf/issues/79)) ([28ea83e](https://github.com/MooseTheRebel/hdf/commit/28ea83e9400c04b5598364b5856ad78c97da26d2))
+
 ## [0.3.1](https://github.com/MooseTheRebel/hdf/compare/v0.3.0...v0.3.1) (2026-10-04)
 
 
