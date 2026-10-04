@@ -19,6 +19,10 @@ Download the latest release for your platform from the
 [GitHub releases page](https://github.com/MooseTheRebel/hdf/releases), extract
 it, and put the `hdf` binary somewhere on your `PATH`.
 
+For the GUI (Linux amd64 releases only, for now), also download
+`hdf-gui-vanilla_…` or `hdf-gui-vuejs_…` and extract it into the same
+directory as `hdf`; running `hdf` with no command then opens it.
+
 The examples below use `hdf` directly. If you're building from source instead
 of using a release, see [Development](#development) for how to set `HDF_CLI`
 in place of `hdf`.

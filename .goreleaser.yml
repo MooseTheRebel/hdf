@@ -37,7 +37,7 @@ builds:
 
   # The GUI plugins. Wails needs cgo, which rules out cross-compiling, so
   # they're built only for the release runner's own platform (ubuntu-latest,
-  # linux/amd64) and land in that archive next to hdf, where hdf finds them.
+  # linux/amd64), each into its own archive (see archives below).
   # The tags are what `wails build` passes to `go build`; webkit2_41 selects
   # the WebKitGTK 4.1 API that Ubuntu 24.04 ships.
   - id: hdf-gui-vanilla
@@ -68,13 +68,30 @@ builds:
     ldflags:
       - -s -w
 
+# One archive per build, so each holds a single binary on every platform:
+# hdf for all four targets, plus a separate download per GUI plugin (Linux
+# amd64 only, see above). To add a GUI, extract its archive next to hdf,
+# where hdf looks for it.
 archives:
-  - formats: [tar.gz]
+  - &archive
+    id: hdf
+    ids: [hdf]
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
       - docs/*.md
+
+  - <<: *archive
+    id: hdf-gui-vanilla
+    ids: [hdf-gui-vanilla]
+    name_template: "hdf-gui-vanilla_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - <<: *archive
+    id: hdf-gui-vuejs
+    ids: [hdf-gui-vuejs]
+    name_template: "hdf-gui-vuejs_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt

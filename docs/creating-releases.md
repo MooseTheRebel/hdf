@@ -6,11 +6,16 @@ you just push a git tag, and GitHub does the rest.
 ## What happens when you push a version tag
 
 1. GitHub Actions notices the tag (any tag starting with `v`).
-2. It builds the frontend, then builds the `hdf` binary for:
+2. It builds the frontends, then builds the `hdf` binary for:
    - macOS (Intel and Apple Silicon)
    - Linux (amd64 and arm64)
+
+   and the two GUI plugins, `hdf-gui-vanilla` and `hdf-gui-vuejs`, for
+   Linux amd64 only (they need cgo, so they're built only on the release
+   runner's own platform).
 3. It creates a GitHub release for the tag and attaches:
-   - one `.tar.gz` archive per platform (binary + README + docs)
+   - one `.tar.gz` archive per platform for `hdf`, plus one per GUI plugin
+     (each: binary + README + docs)
    - a `checksums.txt` file so downloads can be verified
    - an automatic changelog built from the commit messages
 
