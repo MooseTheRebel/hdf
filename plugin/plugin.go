@@ -30,8 +30,9 @@ import (
 var GUIs = []string{"vanilla", "vuejs"}
 
 // GUIPlatforms are the "os/arch" platforms hdf's releases include GUI
-// builds for. Keep it in sync with the hdf-gui-* builds in .goreleaser.yml.
-var GUIPlatforms = []string{"linux/amd64"}
+// builds for. Keep it in sync with the hdf-gui-* builds in .goreleaser.yml
+// (Linux) and .github/scripts/build-macos-apps.sh (macOS, universal apps).
+var GUIPlatforms = []string{"linux/amd64", "darwin/amd64", "darwin/arm64"}
 
 // GUIAvailableFor reports whether hdf's releases include GUI builds for
 // goos/goarch.
@@ -94,7 +95,7 @@ func Serve(impl UI) {
 	// routine chatter out of it: its own logger defaults to Trace, and its
 	// net/rpc server logs "[DEBUG] ... use of closed network connection"
 	// through the standard logger on every normal shutdown.
-	log.SetOutput(dropDebugLines{w: os.Stderr})
+	log.SetOutput(dropPluginNoise{w: os.Stderr})
 	logger := hclog.New(&hclog.LoggerOptions{Name: "plugin", Level: hclog.Warn, Output: os.Stderr})
 
 	reqs := make(chan launchRequest)
@@ -110,15 +111,20 @@ func Serve(impl UI) {
 	runLaunches(impl, reqs)
 }
 
-// dropDebugLines passes standard-logger output through except "[DEBUG]"
-// and "[TRACE]" lines (hashicorp's level-prefix convention). The standard
-// logger writes each message in a single Write call.
-type dropDebugLines struct {
+// dropPluginNoise passes standard-logger output through except go-plugin's
+// routine chatter: "[DEBUG]" and "[TRACE]" lines (hashicorp's level-prefix
+// convention), and the "[ERR] plugin: stream copy '...' error: stream
+// closed" its stdout/stderr forwarding logs when hdf closes the connection
+// at a normal shutdown. The standard logger writes each message in a single
+// Write call.
+type dropPluginNoise struct {
 	w io.Writer
 }
 
-func (d dropDebugLines) Write(p []byte) (int, error) {
-	if bytes.Contains(p, []byte("[DEBUG] ")) || bytes.Contains(p, []byte("[TRACE] ")) {
+func (d dropPluginNoise) Write(p []byte) (int, error) {
+	routine := bytes.Contains(p, []byte("[DEBUG] ")) || bytes.Contains(p, []byte("[TRACE] ")) ||
+		(bytes.Contains(p, []byte("plugin: stream copy '")) && bytes.Contains(p, []byte("stream closed")))
+	if routine {
 		return len(p), nil
 	}
 

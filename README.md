@@ -15,7 +15,29 @@ managing a user's `$HOME` directory (dot files).
 
 ## Installation
 
-Download the latest release for your platform from the
+### macOS: the hdf app
+
+Download `hdf-gui-vanilla_<version>_darwin_universal.zip` (or the
+`hdf-gui-vuejs` one; install only one) from the
+[GitHub releases page](https://github.com/MooseTheRebel/hdf/releases), unzip
+it, move the app to **Applications**, and open it. It runs on Intel and
+Apple Silicon Macs.
+
+The app isn't signed with an Apple Developer ID yet, so the first time you
+open it macOS says it can't verify the app. Click **Done**, then open
+**System Settings → Privacy & Security**, scroll down, and click **Open
+Anyway** next to the message about hdf. You only need to do this once.
+
+The app is a complete hdf, so it also gives you the `hdf` command. To use
+it from a terminal:
+
+```bash
+sudo ln -s /Applications/hdf-gui-vanilla.app/Contents/MacOS/hdf-gui-vanilla /usr/local/bin/hdf
+```
+
+### Command line only (macOS and Linux)
+
+Download the `hdf_<version>_<os>_<arch>.tar.gz` for your platform from the
 [GitHub releases page](https://github.com/MooseTheRebel/hdf/releases), extract
 it, and put the `hdf` binary somewhere on your `PATH`.
 
@@ -27,7 +49,7 @@ sudo apt install ./hdf_<version>_amd64.deb          # Debian/Ubuntu
 sudo dnf install ./hdf-<version>-1.x86_64.rpm       # Fedora
 ```
 
-### GUI (Linux amd64 only, for now)
+### Linux GUI (amd64)
 
 Install **one** of the two GUI variants: `hdf-gui-vanilla` or
 `hdf-gui-vuejs` (only one GUI can be installed at a time). Each GUI package

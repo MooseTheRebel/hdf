@@ -55,3 +55,31 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The macOS apps. Wails needs cgo, so they can't be cross-compiled in the
+  # Linux job above; build them on macOS and attach them to the release that
+  # job just published.
+  publish-macos:
+    needs: [release-please, publish]
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # The wails CLI matching the Wails version in go.mod.
+      - run: go install "github.com/wailsapp/wails/v2/cmd/wails@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
+      - run: .github/scripts/build-macos-apps.sh "${TAG#v}" dist-macos
+      - run: gh release upload "$TAG" dist-macos/* --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
