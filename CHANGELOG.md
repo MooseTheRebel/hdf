@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/MooseTheRebel/hdf/compare/v0.3.0...v0.3.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* add Dependabot updates for pre-commit hooks ([#76](https://github.com/MooseTheRebel/hdf/issues/76)) ([ac8b3b4](https://github.com/MooseTheRebel/hdf/commit/ac8b3b4460bf1ec81d85173a7769949d74c06648))
+
 ## [0.3.0](https://github.com/MooseTheRebel/hdf/compare/v0.2.1...v0.3.0) (2026-10-04)
 
 
