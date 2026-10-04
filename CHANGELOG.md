@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/MooseTheRebel/hdf/compare/v0.3.2...v0.3.3) (2026-10-04)
+
+
+### Bug Fixes
+
+* macOS hdf app, plus quieter plugin shutdown ([#82](https://github.com/MooseTheRebel/hdf/issues/82)) ([0052424](https://github.com/MooseTheRebel/hdf/commit/0052424e5f548f09d6f7bdc37d6f850f8340a6e8))
+
 ## [0.3.2](https://github.com/MooseTheRebel/hdf/compare/v0.3.1...v0.3.2) (2026-10-04)
 
 
