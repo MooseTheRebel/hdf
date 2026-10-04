@@ -1,4 +1,4 @@
-exclude: "^frontend(-vuejs)?/wailsjs/runtime/|^frontend/src/assets/fonts/|^frontend(-vuejs)?/package\\.json(\\.md5)?$"
+exclude: "^cmd/hdf-gui-[^/]+/frontend/(wailsjs/runtime/|src/assets/fonts/|package\\.json(\\.md5)?$)"
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks

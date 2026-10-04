@@ -10,13 +10,12 @@ project_name: hdf
 
 before:
   hooks:
-    # The GUIs embed frontend/dist and frontend-vuejs/dist (see each
-    # directory's assets.go), so the frontends must be built before Go
-    # compilation.
-    - npm --prefix frontend ci
-    - npm --prefix frontend run build
-    - npm --prefix frontend-vuejs ci
-    - npm --prefix frontend-vuejs run build
+    # Each GUI embeds its frontend's dist/ (see cmd/hdf-gui-*/main.go), so
+    # the frontends must be built before Go compilation.
+    - npm --prefix cmd/hdf-gui-vanilla/frontend ci
+    - npm --prefix cmd/hdf-gui-vanilla/frontend run build
+    - npm --prefix cmd/hdf-gui-vuejs/frontend ci
+    - npm --prefix cmd/hdf-gui-vuejs/frontend run build
 
 builds:
   - id: hdf

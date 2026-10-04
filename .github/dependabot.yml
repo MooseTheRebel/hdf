@@ -18,12 +18,12 @@ updates:
       interval: weekly
 
   - package-ecosystem: npm
-    directory: /frontend
+    directory: /cmd/hdf-gui-vanilla/frontend
     schedule:
       interval: weekly
 
   - package-ecosystem: npm
-    directory: /frontend-vuejs
+    directory: /cmd/hdf-gui-vuejs/frontend
     schedule:
       interval: weekly
     ignore:
