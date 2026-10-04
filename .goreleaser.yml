@@ -37,7 +37,9 @@ builds:
 
   # The GUI plugins. Wails needs cgo, which rules out cross-compiling, so
   # they're built only for the release runner's own platform (ubuntu-latest,
-  # linux/amd64), each into its own archive (see archives below).
+  # linux/amd64), each into its own archive (see archives below). hdf tells
+  # users on other platforms there's no GUI yet: keep plugin.GUIPlatforms in
+  # sync with goos/goarch here.
   # The tags are what `wails build` passes to `go build`; webkit2_41 selects
   # the WebKitGTK 4.1 API that Ubuntu 24.04 ships.
   - id: hdf-gui-vanilla
@@ -53,6 +55,7 @@ builds:
       - amd64
     ldflags:
       - -s -w
+      - -X hdf/internal/cli.version={{.Version}}
 
   - id: hdf-gui-vuejs
     main: ./cmd/hdf-gui-vuejs
@@ -67,6 +70,7 @@ builds:
       - amd64
     ldflags:
       - -s -w
+      - -X hdf/internal/cli.version={{.Version}}
 
 # One archive per build, so each holds a single binary on every platform:
 # hdf for all four targets, plus a separate download per GUI plugin (Linux
@@ -92,6 +96,67 @@ archives:
     id: hdf-gui-vuejs
     ids: [hdf-gui-vuejs]
     name_template: "hdf-gui-vuejs_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+# Linux packages: hdf (command line only) for amd64 and arm64, and each GUI
+# (amd64 only, see builds) as its own package. A GUI package is a complete
+# hdf (see gui.Main) with an app-menu entry, and installs /usr/bin/hdf as a
+# symlink to its GUI binary, so it takes over from the hdf package (conflicts
+# + replaces it; RPM turns replaces into Obsoletes). Only one GUI may be
+# installed at a time, so the GUI packages conflict with each other. They
+# depend on WebKitGTK 4.1, which brings in everything else the GUI links
+# (GTK 3, libsoup 3).
+nfpms:
+  - &package
+    id: hdf
+    ids: [hdf]
+    package_name: hdf
+    file_name_template: "{{ .ConventionalFileName }}"
+    formats: [deb, rpm]
+    vendor: MooseTheRebel
+    homepage: https://github.com/MooseTheRebel/hdf
+    maintainer: b-long <b-long@users.noreply.github.com>
+    description: Manage your dotfiles in git, synced across your machines.
+    license: MIT
+    bindir: /usr/bin
+
+  - <<: *package
+    id: hdf-gui-vanilla
+    ids: [hdf-gui-vanilla]
+    package_name: hdf-gui-vanilla
+    description: hdf with its GUI (vanilla TypeScript variant). Includes the hdf command-line tool.
+    conflicts: [hdf, hdf-gui-vuejs]
+    replaces: [hdf]
+    overrides: &gui-deps
+      deb:
+        dependencies: [libwebkit2gtk-4.1-0]
+      rpm:
+        dependencies: [webkit2gtk4.1]
+    contents:
+      - src: hdf-gui-vanilla
+        dst: /usr/bin/hdf
+        type: symlink
+      - src: cmd/hdf-gui-vanilla/linux/hdf-gui-vanilla.desktop
+        dst: /usr/share/applications/hdf-gui-vanilla.desktop
+      # The hdf logo: "hdf" in Nunito, white on the GUI's dark navy.
+      - src: cmd/hdf-gui-vanilla/linux/hdf.png
+        dst: /usr/share/pixmaps/hdf.png
+
+  - <<: *package
+    id: hdf-gui-vuejs
+    ids: [hdf-gui-vuejs]
+    package_name: hdf-gui-vuejs
+    description: hdf with its GUI (Vue.js variant). Includes the hdf command-line tool.
+    conflicts: [hdf, hdf-gui-vanilla]
+    replaces: [hdf]
+    overrides: *gui-deps
+    contents:
+      - src: hdf-gui-vuejs
+        dst: /usr/bin/hdf
+        type: symlink
+      - src: cmd/hdf-gui-vuejs/linux/hdf-gui-vuejs.desktop
+        dst: /usr/share/applications/hdf-gui-vuejs.desktop
+      - src: cmd/hdf-gui-vanilla/linux/hdf.png
+        dst: /usr/share/pixmaps/hdf.png
 
 checksum:
   name_template: checksums.txt

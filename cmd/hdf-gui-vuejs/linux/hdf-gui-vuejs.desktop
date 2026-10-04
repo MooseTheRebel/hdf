@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=hdf
+GenericName=Dotfile Manager
+Comment=Sync your dotfiles across your machines
+Exec=hdf-gui-vuejs
+Icon=hdf
+Terminal=false
+Categories=Utility;
+Keywords=dotfiles;git;config;

@@ -1,7 +1,7 @@
-// Command hdf-gui-vanilla is hdf's vanilla-TypeScript GUI (./frontend),
-// shipped as a plugin: bare `hdf` finds this binary (see plugin.Find) and
-// launches it. Installing hdf without any GUI plugin gives a headless,
-// CLI-only install.
+// Command hdf-gui-vanilla is hdf's vanilla-TypeScript GUI (./frontend), an
+// alternative to hdf-gui-vuejs (only one may be installed). Next to hdf,
+// it's the GUI plugin `hdf` opens; run directly, it's a complete hdf with
+// this GUI built in (see gui.Main).
 package main
 
 import (
@@ -13,5 +13,5 @@ import (
 var assets embed.FS
 
 func main() {
-	gui.Main(assets)
+	gui.Main("vanilla", assets)
 }

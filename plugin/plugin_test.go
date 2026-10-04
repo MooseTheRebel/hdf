@@ -186,3 +186,19 @@ func TestDropDebugLines(t *testing.T) {
 		t.Errorf("output = %q, want %q", out.String(), want)
 	}
 }
+
+func TestGUIAvailableFor(t *testing.T) {
+	tests := []struct {
+		goos, goarch string
+		want         bool
+	}{
+		{"linux", "amd64", true},
+		{"linux", "arm64", false},
+		{"darwin", "arm64", false},
+	}
+	for _, tt := range tests {
+		if got := GUIAvailableFor(tt.goos, tt.goarch); got != tt.want {
+			t.Errorf("GUIAvailableFor(%q, %q) = %v, want %v", tt.goos, tt.goarch, got, tt.want)
+		}
+	}
+}

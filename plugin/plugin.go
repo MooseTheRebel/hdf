@@ -17,16 +17,27 @@ import (
 	"net/rpc"
 	"os"
 	"os/exec"
+	"slices"
 
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
 )
 
-// GUIs are the GUI plugins hdf knows, in the order bare `hdf` tries them:
-// "vanilla" is hdf-gui-vanilla (cmd/hdf-gui-vanilla, vanilla TypeScript),
-// "vuejs" is hdf-gui-vuejs (cmd/hdf-gui-vuejs, planned). With none
-// installed, hdf is a headless, CLI-only tool.
+// GUIs are the GUI plugins hdf knows: "vanilla" is hdf-gui-vanilla
+// (cmd/hdf-gui-vanilla, vanilla TypeScript) and "vuejs" is hdf-gui-vuejs
+// (cmd/hdf-gui-vuejs, Vue.js). Only one may be installed at a time. With
+// none installed, hdf is a headless, CLI-only tool.
 var GUIs = []string{"vanilla", "vuejs"}
+
+// GUIPlatforms are the "os/arch" platforms hdf's releases include GUI
+// builds for. Keep it in sync with the hdf-gui-* builds in .goreleaser.yml.
+var GUIPlatforms = []string{"linux/amd64"}
+
+// GUIAvailableFor reports whether hdf's releases include GUI builds for
+// goos/goarch.
+func GUIAvailableFor(goos, goarch string) bool {
+	return slices.Contains(GUIPlatforms, goos+"/"+goarch)
+}
 
 // UIName is the name every GUI plugin serves its UI under over RPC. It's
 // the same for all GUIs; which GUI runs is decided by which binary hdf

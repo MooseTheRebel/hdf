@@ -12,6 +12,7 @@ import (
 	"hdf/eventlog"
 	"hdf/plugin"
 	"os"
+	"os/exec"
 	"time"
 
 	kservice "github.com/kardianos/service"
@@ -25,13 +26,11 @@ const ServiceName = "com.moosetherebel.hdf"
 // the binary with ("hdf daemon run").
 const RunSubcommand = "run"
 
-// buildConfig describes the service. Executable is left empty — meaning the
-// running binary — except inside a GUI plugin, where the running binary is
-// the plugin and the service must run the hdf that launched it instead.
+// buildConfig describes the service.
 func buildConfig() *kservice.Config {
 	return &kservice.Config{
 		Name:        ServiceName,
-		Executable:  plugin.HostExecutable(),
+		Executable:  serviceExecutable(),
 		DisplayName: "hdf sync daemon",
 		Description: "Syncs dotfiles in the background",
 		Arguments:   []string{"daemon", RunSubcommand},
@@ -40,6 +39,51 @@ func buildConfig() *kservice.Config {
 			"RunAtLoad":   true,
 		},
 	}
+}
+
+// executableFn and lookPathFn are seams over os.Executable and
+// exec.LookPath for tests.
+var (
+	executableFn = os.Executable
+	lookPathFn   = exec.LookPath
+)
+
+// serviceExecutable is the binary the service runs `daemon run` with. ""
+// means the running binary (hdf, or a GUI binary run directly, which is a
+// complete hdf too). Two cases record a steadier path, so the service
+// survives the user swapping one GUI for another:
+//   - inside a GUI plugin started by hdf: the hdf that launched it;
+//   - when the hdf on $PATH is the running binary under another name — a
+//     Linux GUI package's /usr/bin/hdf symlinks to its GUI binary, and
+//     os.Executable resolves the link — that hdf.
+func serviceExecutable() string {
+	if host := plugin.HostExecutable(); host != "" {
+		return host
+	}
+
+	self, err := executableFn()
+	if err != nil {
+		return ""
+	}
+
+	onPath, err := lookPathFn("hdf")
+	if err != nil || !sameFile(onPath, self) {
+		return ""
+	}
+
+	return onPath
+}
+
+// sameFile reports whether a and b (following symlinks) are the same file.
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+
+	bi, err := os.Stat(b)
+
+	return err == nil && os.SameFile(ai, bi)
 }
 
 // program adapts daemon.Run to kservice.Interface.

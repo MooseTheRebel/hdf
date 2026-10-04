@@ -6,6 +6,8 @@ import (
 	"hdf/config"
 	"hdf/eventlog"
 	"hdf/plugin"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -114,26 +116,54 @@ func TestBuildConfig_Fields(t *testing.T) {
 	}
 }
 
-// TestBuildConfig_Executable verifies the service runs the hdf that
-// launched a GUI plugin when built inside one, and otherwise the running
-// binary (an empty Executable).
+// TestBuildConfig_Executable verifies which binary the service runs.
 func TestBuildConfig_Executable(t *testing.T) {
+	dir := t.TempDir()
+	gui := filepath.Join(dir, "hdf-gui-vanilla")
+	other := filepath.Join(dir, "other-hdf")
+	link := filepath.Join(dir, "hdf")
+
+	for _, f := range []string{gui, other} {
+		if err := os.WriteFile(f, []byte(f), 0o755); err != nil { //nolint:gosec // test fixture executable
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.Symlink(gui, link); err != nil {
+		t.Fatal(err)
+	}
+
+	notFound := func(string) (string, error) { return "", exec.ErrNotFound }
+	found := func(path string) func(string) (string, error) {
+		return func(string) (string, error) { return path, nil }
+	}
+
 	const hdf = "/usr/local/bin/hdf"
 
 	cases := []struct {
-		name   string
-		cookie string
-		host   string
-		want   string
+		name     string
+		cookie   string
+		host     string
+		self     string
+		lookPath func(string) (string, error)
+		want     string
 	}{
-		{name: "hdf itself", want: ""},
-		{name: "inside a GUI plugin", cookie: plugin.Handshake.MagicCookieValue, host: hdf, want: hdf},
-		{name: "host path without the plugin handshake is ignored", host: hdf, want: ""},
+		{name: "hdf not on PATH: the running binary", self: gui, lookPath: notFound, want: ""},
+		{name: "inside a GUI plugin: the hdf that launched it", cookie: plugin.Handshake.MagicCookieValue, host: hdf, self: gui, lookPath: notFound, want: hdf},
+		{name: "host path without the plugin handshake is ignored", host: hdf, self: gui, lookPath: notFound, want: ""},
+		{name: "hdf on PATH links to the running GUI binary: that hdf", self: gui, lookPath: found(link), want: link},
+		{name: "hdf on PATH is a different binary: the running binary", self: gui, lookPath: found(other), want: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(plugin.Handshake.MagicCookieKey, tc.cookie)
 			t.Setenv(plugin.HostExecutableEnv, tc.host)
+
+			origExe, origLook := executableFn, lookPathFn
+			defer func() { executableFn, lookPathFn = origExe, origLook }()
+
+			executableFn = func() (string, error) { return tc.self, nil }
+			lookPathFn = tc.lookPath
 
 			if got := buildConfig().Executable; got != tc.want {
 				t.Errorf("Executable = %q, want %q", got, tc.want)

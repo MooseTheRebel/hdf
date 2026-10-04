@@ -19,9 +19,30 @@ Download the latest release for your platform from the
 [GitHub releases page](https://github.com/MooseTheRebel/hdf/releases), extract
 it, and put the `hdf` binary somewhere on your `PATH`.
 
-For the GUI (Linux amd64 releases only, for now), also download
-`hdf-gui-vanilla_…` or `hdf-gui-vuejs_…` and extract it into the same
-directory as `hdf`; running `hdf` with no command then opens it.
+On Debian/Ubuntu or Fedora you can install a package instead, which puts
+`hdf` on your `PATH` for you:
+
+```bash
+sudo apt install ./hdf_<version>_amd64.deb          # Debian/Ubuntu
+sudo dnf install ./hdf-<version>-1.x86_64.rpm       # Fedora
+```
+
+### GUI (Linux amd64 only, for now)
+
+Install **one** of the two GUI variants: `hdf-gui-vanilla` or
+`hdf-gui-vuejs` (only one GUI can be installed at a time). Each GUI package
+is a complete hdf: it installs the `hdf` command too (replacing the `hdf`
+package if you had it), adds hdf to your app menu, and pulls in the
+WebKitGTK library it needs:
+
+```bash
+sudo apt install ./hdf-gui-vanilla_<version>_amd64.deb      # Debian/Ubuntu
+sudo dnf install ./hdf-gui-vanilla-<version>-1.x86_64.rpm   # Fedora
+```
+
+Or download its `.tar.gz` and extract it next to `hdf`; running `hdf` with
+no command then opens it. A GUI binary also works on its own: it's a
+complete `hdf` with that GUI built in (e.g. `hdf-gui-vanilla status`).
 
 The examples below use `hdf` directly. If you're building from source instead
 of using a release, see [Development](#development) for how to set `HDF_CLI`
@@ -137,9 +158,9 @@ The GUI is a separate plugin binary, in two interchangeable variants:
 `hdf-gui-vanilla` (`cmd/hdf-gui-vanilla`, vanilla TypeScript) and
 `hdf-gui-vuejs` (`cmd/hdf-gui-vuejs`, Vue.js; build it with
 `just build-gui-vuejs`). Each lives entirely in its directory: Go entry
-point, `wails.json`, and `frontend/`. Running `hdf` with no subcommand launches
-the first GUI installed next to `hdf` or on `$PATH`, preferring vanilla;
-`hdf --gui vuejs` picks one. With none, `hdf` prints help. Both GUIs take
+point, `wails.json`, and `frontend/`. Running `hdf` with no subcommand opens
+the GUI installed next to `hdf` or on `$PATH` (only one may be installed);
+with none, `hdf` prints a short welcome with next steps. Both GUIs take
 all their text from `locales/en.json`, the single place to edit (and,
 later, translate) GUI wording. For a
 headless, CLI-only install (e.g. a server), build `hdf` alone:

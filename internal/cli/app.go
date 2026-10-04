@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hdf/config"
 	"hdf/daemon"
-	"hdf/plugin"
 	"hdf/report"
 	"io"
 	"log"
@@ -97,19 +96,11 @@ func (a *App) GetDaemonStatus() (string, error) {
 	return svcStatus(config.DefaultPath())
 }
 
-// hostExecutableFn is a seam over plugin.HostExecutable for tests.
-var hostExecutableFn = plugin.HostExecutable
-
 // InstallDaemon installs and starts the hdf sync daemon as a per-user
-// background service — the GUI's equivalent of `hdf daemon install`.
+// background service — the GUI's equivalent of `hdf daemon install`. The
+// service runs the hdf that launched this GUI, or — for a GUI binary run
+// directly, which is a complete hdf itself — this binary (see svc).
 func (a *App) InstallDaemon() error {
-	// The service re-runs hdf, so it must point at the hdf that launched
-	// this GUI plugin; without one (the GUI started directly, e.g. by
-	// `wails dev`) it would point at the plugin binary instead.
-	if hostExecutableFn() == "" {
-		return errors.New("this GUI wasn't started by hdf, so it can't install the daemon; run `hdf daemon install` instead")
-	}
-
 	return runDaemon(config.DefaultPath(), svcInstall)
 }
 

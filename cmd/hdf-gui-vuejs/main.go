@@ -1,6 +1,7 @@
-// Command hdf-gui-vuejs is hdf's Vue.js GUI (./frontend), shipped as a
-// plugin alongside or instead of hdf-gui-vanilla: bare `hdf` launches it
-// when it's the only GUI installed, or when run as `hdf --gui vuejs`.
+// Command hdf-gui-vuejs is hdf's Vue.js GUI (./frontend), an alternative to
+// hdf-gui-vanilla (only one may be installed). Next to hdf, it's the GUI
+// plugin `hdf` opens; run directly, it's a complete hdf with this GUI built
+// in (see gui.Main).
 package main
 
 import (
@@ -12,5 +13,5 @@ import (
 var assets embed.FS
 
 func main() {
-	gui.Main(assets)
+	gui.Main("vuejs", assets)
 }

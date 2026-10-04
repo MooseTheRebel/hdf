@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var rootCmd = &cobra.Command{
@@ -45,10 +46,10 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
-		return promptPendingCrash(config.DefaultStatePath(), bufio.NewReader(os.Stdin))
+		return promptPendingCrashIfInteractive(config.DefaultStatePath(), stdinIsTerminalFn(), os.Stdin)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return launchUI(cmd, guiName, plugin.Find, plugin.Launch)
+		return launchUI(cmd.OutOrStdout(), builtIn, plugin.Find, plugin.Launch)
 	},
 }
 
@@ -1893,6 +1894,24 @@ func promptPendingWarnings(statePath string, reader *bufio.Reader) error {
 // take-and-clear pattern so a crash is only ever surfaced once. Unlike
 // promptPendingWarnings, declining is not itself an error — an old crash
 // shouldn't block every future command from running.
+// stdinIsTerminalFn reports whether stdin is a terminal; a seam for tests.
+var stdinIsTerminalFn = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// promptPendingCrashIfInteractive offers to report a pending crash, but
+// only when someone can answer: without a terminal (hdf opened from a
+// desktop launcher, or run by a service manager) the prompt would be
+// invisible, and taking the pending crash would lose it, so it's left for
+// the next interactive run.
+func promptPendingCrashIfInteractive(statePath string, interactive bool, stdin io.Reader) error {
+	if !interactive {
+		return nil
+	}
+
+	return promptPendingCrash(statePath, bufio.NewReader(stdin))
+}
+
 func promptPendingCrash(statePath string, reader *bufio.Reader) error {
 	msg, err := config.TakePendingCrash(statePath)
 	if err != nil {
@@ -1995,7 +2014,17 @@ func recoverPanic() {
 }
 
 // Execute runs the hdf CLI. Exits the process with status 1 on error.
-func Execute() {
+func Execute(opts ...Option) {
+	for _, opt := range opts {
+		opt()
+	}
+
+	if builtIn != nil {
+		// A GUI binary acting as a complete hdf: show its own name in
+		// usage text, e.g. "hdf-gui-vanilla status".
+		rootCmd.Use = filepath.Base(os.Args[0])
+	}
+
 	rootCmd.Version = version
 
 	defer recoverPanic()
@@ -2010,7 +2039,6 @@ func Execute() {
 var (
 	enrollYes   bool
 	linkNoFetch bool
-	guiName     string
 )
 
 func init() {
@@ -2018,8 +2046,6 @@ func init() {
 	// control the format ourselves and avoid duplicate output.
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
-
-	rootCmd.Flags().StringVar(&guiName, "gui", "", "GUI to launch: "+strings.Join(plugin.GUIs, " or ")+" (default: the first one installed)")
 
 	enrollCmd.Flags().BoolVarP(&enrollYes, "yes", "y", false, "Skip the diff confirmation prompt")
 	linkCmd.Flags().BoolVar(&linkNoFetch, "no-fetch", false, "Skip fetch and merge from remote; only re-create symlinks")
