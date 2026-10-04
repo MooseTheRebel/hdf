@@ -10,6 +10,7 @@ import (
 	"hdf/config"
 	"hdf/daemon"
 	"hdf/eventlog"
+	"hdf/plugin"
 	"os"
 	"time"
 
@@ -24,9 +25,13 @@ const ServiceName = "com.moosetherebel.hdf"
 // the binary with ("hdf daemon run").
 const RunSubcommand = "run"
 
+// buildConfig describes the service. Executable is left empty — meaning the
+// running binary — except inside a GUI plugin, where the running binary is
+// the plugin and the service must run the hdf that launched it instead.
 func buildConfig() *kservice.Config {
 	return &kservice.Config{
 		Name:        ServiceName,
+		Executable:  plugin.HostExecutable(),
 		DisplayName: "hdf sync daemon",
 		Description: "Syncs dotfiles in the background",
 		Arguments:   []string{"daemon", RunSubcommand},

@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"errors"
 	"os/exec"
 	"path/filepath"
@@ -148,5 +149,25 @@ func TestLaunchOverRPCReturnsPluginError(t *testing.T) {
 	err := ui.Launch(nil)
 	if err == nil || err.Error() != "no display" {
 		t.Errorf("Launch error = %v, want %q", err, "no display")
+	}
+}
+
+func TestDropDebugLines(t *testing.T) {
+	var out bytes.Buffer
+	w := dropDebugLines{w: &out}
+	for _, line := range []string{
+		"2026/10/03 21:42:14 [DEBUG] plugin: plugin server: accept unix /tmp/x: use of closed network connection\n",
+		"2026/10/03 21:42:14 [TRACE] noise\n",
+		"2026/10/03 21:42:14 [WARN] fetchDiff: HTTP 500 from https://example.com\n",
+		"2026/10/03 21:42:14 [ERR] plugin: plugin server: accept failed\n",
+	} {
+		if n, err := w.Write([]byte(line)); n != len(line) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", line, n, err)
+		}
+	}
+	want := "2026/10/03 21:42:14 [WARN] fetchDiff: HTTP 500 from https://example.com\n" +
+		"2026/10/03 21:42:14 [ERR] plugin: plugin server: accept failed\n"
+	if out.String() != want {
+		t.Errorf("output = %q, want %q", out.String(), want)
 	}
 }

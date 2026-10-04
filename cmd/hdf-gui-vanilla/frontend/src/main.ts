@@ -364,7 +364,7 @@ function runEnrollConfirmStep() {
 
     ConfirmEnroll().then((result) => {
         if (contentEl) contentEl.innerHTML = renderEnrollResult(result);
-        if (controlsEl) controlsEl.innerHTML = '<button id="enroll-done-back-btn" class="control-btn">${html(msg.common.back)}</button>';
+        if (controlsEl) controlsEl.innerHTML = `<button id="enroll-done-back-btn" class="control-btn">${html(msg.common.back)}</button>`;
         document.getElementById('enroll-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
         showEnrollError(fmt(msg.enroll.error, {error: String(err)}));
@@ -375,7 +375,7 @@ function showEnrollError(message: string) {
     const contentEl = document.getElementById('enroll-step-content');
     const controlsEl = document.getElementById('enroll-controls');
     if (contentEl) contentEl.textContent = message;
-    if (controlsEl) controlsEl.innerHTML = '<button id="enroll-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
+    if (controlsEl) controlsEl.innerHTML = `<button id="enroll-error-back-btn" class="control-btn">${html(msg.common.back)}</button>`;
     document.getElementById('enroll-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
@@ -531,7 +531,7 @@ function runFinishInit() {
 
     FinishInit().then((result) => {
         if (contentEl) contentEl.innerHTML = renderInitResult(result);
-        if (controlsEl) controlsEl.innerHTML = '<button id="init-done-continue-btn" class="control-btn">${html(msg.common.continue)}</button>';
+        if (controlsEl) controlsEl.innerHTML = `<button id="init-done-continue-btn" class="control-btn">${html(msg.common.continue)}</button>`;
         document.getElementById('init-done-continue-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
         showInitError(fmt(msg.init.finishError, {error: String(err)}));
@@ -542,7 +542,7 @@ function showInitError(message: string) {
     const contentEl = document.getElementById('init-step-content');
     const controlsEl = document.getElementById('init-controls');
     if (contentEl) contentEl.textContent = message;
-    if (controlsEl) controlsEl.innerHTML = '<button id="init-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
+    if (controlsEl) controlsEl.innerHTML = `<button id="init-error-back-btn" class="control-btn">${html(msg.common.back)}</button>`;
     document.getElementById('init-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
@@ -580,11 +580,11 @@ function runSubmitReportIssue(text: string) {
 
     SubmitReportIssue(text).then((result) => {
         if (contentEl) contentEl.innerHTML = renderReportIssueResult(result);
-        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-done-back-btn" class="control-btn">${html(msg.common.back)}</button>';
+        if (controlsEl) controlsEl.innerHTML = `<button id="report-issue-done-back-btn" class="control-btn">${html(msg.common.back)}</button>`;
         document.getElementById('report-issue-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
         if (contentEl) contentEl.textContent = fmt(msg.reportIssue.error, {error: String(err)});
-        if (controlsEl) controlsEl.innerHTML = '<button id="report-issue-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
+        if (controlsEl) controlsEl.innerHTML = `<button id="report-issue-error-back-btn" class="control-btn">${html(msg.common.back)}</button>`;
         document.getElementById('report-issue-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
     });
 }
@@ -675,7 +675,7 @@ function runFinishPromote() {
 
     FinishPromote().then((result) => {
         if (contentEl) contentEl.innerHTML = renderPromoteResult(result);
-        if (controlsEl) controlsEl.innerHTML = '<button id="promote-done-continue-btn" class="control-btn">${html(msg.common.continue)}</button>';
+        if (controlsEl) controlsEl.innerHTML = `<button id="promote-done-continue-btn" class="control-btn">${html(msg.common.continue)}</button>`;
         document.getElementById('promote-done-continue-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
         showPromoteError(fmt(msg.promote.error, {error: String(err)}));
@@ -686,7 +686,7 @@ function showPromoteError(message: string) {
     const contentEl = document.getElementById('promote-step-content');
     const controlsEl = document.getElementById('promote-controls');
     if (contentEl) contentEl.textContent = message;
-    if (controlsEl) controlsEl.innerHTML = '<button id="promote-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
+    if (controlsEl) controlsEl.innerHTML = `<button id="promote-error-back-btn" class="control-btn">${html(msg.common.back)}</button>`;
     document.getElementById('promote-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 
@@ -806,7 +806,7 @@ function runLinkFinishStep(message: string) {
 
     FinishLink().then((results) => {
         if (contentEl) contentEl.innerHTML = renderLinkResults(message, results);
-        if (controlsEl) controlsEl.innerHTML = '<button id="link-done-back-btn" class="control-btn">${html(msg.common.back)}</button>';
+        if (controlsEl) controlsEl.innerHTML = `<button id="link-done-back-btn" class="control-btn">${html(msg.common.back)}</button>`;
         document.getElementById('link-done-back-btn')?.addEventListener('click', () => displayHomeScreen());
     }).catch((err) => {
         showLinkError(fmt(msg.link.finishError, {error: String(err)}));
@@ -817,7 +817,7 @@ function showLinkError(message: string) {
     const contentEl = document.getElementById('link-step-content');
     const controlsEl = document.getElementById('link-controls');
     if (contentEl) contentEl.textContent = message;
-    if (controlsEl) controlsEl.innerHTML = '<button id="link-error-back-btn" class="control-btn">${html(msg.common.back)}</button>';
+    if (controlsEl) controlsEl.innerHTML = `<button id="link-error-back-btn" class="control-btn">${html(msg.common.back)}</button>`;
     document.getElementById('link-error-back-btn')?.addEventListener('click', () => displayHomeScreen());
 }
 

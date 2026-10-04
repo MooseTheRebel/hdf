@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hdf/config"
 	"hdf/eventlog"
+	"hdf/plugin"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -99,6 +100,32 @@ func TestBuildConfig_Fields(t *testing.T) {
 	}
 	if runAtLoad, _ := cfg.Option["RunAtLoad"].(bool); !runAtLoad {
 		t.Errorf("Option[RunAtLoad] = %v, want true", cfg.Option["RunAtLoad"])
+	}
+}
+
+// TestBuildConfig_Executable verifies the service runs the hdf that
+// launched a GUI plugin when built inside one, and otherwise the running
+// binary (an empty Executable).
+func TestBuildConfig_Executable(t *testing.T) {
+	const hdf = "/usr/local/bin/hdf"
+	cases := []struct {
+		name   string
+		cookie string
+		host   string
+		want   string
+	}{
+		{name: "hdf itself", want: ""},
+		{name: "inside a GUI plugin", cookie: plugin.Handshake.MagicCookieValue, host: hdf, want: hdf},
+		{name: "host path without the plugin handshake is ignored", host: hdf, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(plugin.Handshake.MagicCookieKey, tc.cookie)
+			t.Setenv(plugin.HostExecutableEnv, tc.host)
+			if got := buildConfig().Executable; got != tc.want {
+				t.Errorf("Executable = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
