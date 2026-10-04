@@ -165,13 +165,14 @@ func TestLaunchOverRPCReturnsPluginError(t *testing.T) {
 	}
 }
 
-func TestDropDebugLines(t *testing.T) {
+func TestDropPluginNoise(t *testing.T) {
 	var out bytes.Buffer
 
-	w := dropDebugLines{w: &out}
+	w := dropPluginNoise{w: &out}
 	for _, line := range []string{
 		"2026/10/03 21:42:14 [DEBUG] plugin: plugin server: accept unix /tmp/x: use of closed network connection\n",
 		"2026/10/03 21:42:14 [TRACE] noise\n",
+		"2026/10/04 17:07:27 [ERR] plugin: stream copy 'stderr' error: stream closed\n",
 		"2026/10/03 21:42:14 [WARN] fetchDiff: HTTP 500 from https://example.com\n",
 		"2026/10/03 21:42:14 [ERR] plugin: plugin server: accept failed\n",
 	} {
@@ -188,13 +189,17 @@ func TestDropDebugLines(t *testing.T) {
 }
 
 func TestGUIAvailableFor(t *testing.T) {
+	const linux, darwin, amd64, arm64 = "linux", "darwin", "amd64", "arm64"
+
 	tests := []struct {
 		goos, goarch string
 		want         bool
 	}{
-		{"linux", "amd64", true},
-		{"linux", "arm64", false},
-		{"darwin", "arm64", false},
+		{linux, amd64, true},
+		{linux, arm64, false},
+		{darwin, arm64, true},
+		{darwin, amd64, true},
+		{"windows", amd64, false},
 	}
 	for _, tt := range tests {
 		if got := GUIAvailableFor(tt.goos, tt.goarch); got != tt.want {

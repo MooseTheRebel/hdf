@@ -10,5 +10,10 @@
   "author": {
     "name": "b-long",
     "email": "b-long@users.noreply.github.com"
+  },
+  "info": {
+    "productName": "hdf",
+    "comments": "Manage your dotfiles in git, synced across your machines.",
+    "copyright": "Copyright 2026-present MooseTheRebel"
   }
 }

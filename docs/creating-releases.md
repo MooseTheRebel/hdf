@@ -21,6 +21,11 @@ you just push a git tag, and GitHub does the rest.
      only one GUI may be installed at a time, and install an app-menu entry
    - a `checksums.txt` file so downloads can be verified
    - an automatic changelog built from the commit messages
+4. A second job, on a macOS runner (`publish-macos`), builds each GUI as a
+   universal macOS app (`.github/scripts/build-macos-apps.sh`) and attaches
+   `hdf-gui-<name>_<version>_darwin_universal.zip` files, plus their
+   `checksums-macos.txt`, to the same release. The apps are ad-hoc signed
+   only (no Apple Developer ID), so macOS asks users to approve them once.
 
 You can watch it run under the repository's **Actions** tab ("Release"
 workflow). It usually takes a few minutes.

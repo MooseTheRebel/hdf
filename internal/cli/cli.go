@@ -2023,6 +2023,7 @@ func Execute(opts ...Option) {
 		// A GUI binary acting as a complete hdf: show its own name in
 		// usage text, e.g. "hdf-gui-vanilla status".
 		rootCmd.Use = filepath.Base(os.Args[0])
+		rootCmd.SetArgs(withoutPSN(os.Args[1:]))
 	}
 
 	rootCmd.Version = version

@@ -130,13 +130,29 @@ func TestWelcomeText(t *testing.T) {
 		}
 	}
 
-	mac := welcomeText("darwin", "arm64")
-	if !strings.Contains(mac, "hdf's GUI isn't available for macOS yet.") {
-		t.Errorf("darwin/arm64 welcome should say there's no GUI yet:\n%s", mac)
+	for _, arch := range []string{"arm64", "amd64"} {
+		mac := welcomeText("darwin", arch)
+		for _, want := range []string{"download the hdf app", "hdf-gui-vanilla or hdf-gui-vuejs, only one", "unzip it, and open it", "releases/tag/v0.3.1"} {
+			if !strings.Contains(mac, want) {
+				t.Errorf("darwin/%s welcome missing %q:\n%s", arch, want, mac)
+			}
+		}
+
+		if strings.Contains(mac, "next to hdf") {
+			t.Errorf("darwin/%s welcome must not suggest extracting next to hdf (the app is standalone):\n%s", arch, mac)
+		}
 	}
 
-	if strings.Contains(mac, "download") {
-		t.Errorf("darwin/arm64 welcome must not suggest a download that won't run:\n%s", mac)
+	arm := welcomeText("linux", "arm64")
+	if !strings.Contains(arm, "hdf's GUI isn't available for Linux yet.") || strings.Contains(arm, "download") {
+		t.Errorf("linux/arm64 welcome should say there's no GUI yet, without a download:\n%s", arm)
+	}
+}
+
+func TestWithoutPSN(t *testing.T) {
+	got := withoutPSN([]string{"-psn_0_12345", "status", "--verbose"})
+	if strings.Join(got, " ") != "status --verbose" {
+		t.Errorf("withoutPSN = %q", got)
 	}
 }
 

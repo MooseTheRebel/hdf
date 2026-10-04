@@ -104,19 +104,46 @@ func welcomeText(goos, goarch string) string {
 	b.WriteString("  Get started:   hdf init\n")
 	b.WriteString("  All commands:  hdf --help\n\n")
 
-	if plugin.GUIAvailableFor(goos, goarch) {
-		names := make([]string, len(plugin.GUIs))
-		for i, name := range plugin.GUIs {
-			names[i] = plugin.BinaryName(name)
-		}
-
-		fmt.Fprintf(&b, "To add a GUI, download one of %s (only one)\nfrom %s and extract it next to hdf.\n",
-			strings.Join(names, " or "), releasesURL())
-	} else {
-		fmt.Fprintf(&b, "hdf's GUI isn't available for %s yet.\n", platformName(goos))
-	}
+	b.WriteString(guiDownloadHint(goos, goarch))
 
 	return b.String()
+}
+
+// guiDownloadHint tells a user on goos/goarch how to get a GUI.
+func guiDownloadHint(goos, goarch string) string {
+	if !plugin.GUIAvailableFor(goos, goarch) {
+		return fmt.Sprintf("hdf's GUI isn't available for %s yet.\n", platformName(goos))
+	}
+
+	names := make([]string, len(plugin.GUIs))
+	for i, name := range plugin.GUIs {
+		names[i] = plugin.BinaryName(name)
+	}
+
+	variants := strings.Join(names, " or ")
+
+	if goos == "darwin" {
+		// The macOS GUIs are apps, each a complete hdf on its own.
+		return fmt.Sprintf("For the GUI, download the hdf app (%s, only one)\nfrom %s, unzip it, and open it.\n",
+			variants, releasesURL())
+	}
+
+	return fmt.Sprintf("To add a GUI, download one of %s (only one)\nfrom %s and extract it next to hdf.\n",
+		variants, releasesURL())
+}
+
+// withoutPSN drops "-psn_..." process-serial-number arguments, which macOS
+// has passed to apps opened from Finder (e.g. on first launch from a
+// quarantined location); cobra would reject them as unknown flags.
+func withoutPSN(args []string) []string {
+	kept := make([]string, 0, len(args))
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-psn_") {
+			kept = append(kept, arg)
+		}
+	}
+
+	return kept
 }
 
 // releasesURL is this version's release page, where its GUIs can be
