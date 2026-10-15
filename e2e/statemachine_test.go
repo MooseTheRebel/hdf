@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"hdf/config"
 	"hdf/link"
@@ -131,13 +132,42 @@ func runHDFNode(t *testing.T, node Node, stdin string, args ...string) (stdout, 
 	return outBuf.String(), errBuf.String(), 0
 }
 
+// gitTempDir is t.TempDir for a bare repo that nodes push to: its cleanup
+// retries until the directory is gone instead of failing. Pushing to the
+// repo over file:// runs the system git-receive-pack, which starts
+// `git maintenance run --auto --detach`; that background housekeeping (e.g.
+// a geometric repack) can still be writing when the test ends. Node homes
+// stay on t.TempDir, so a process hdf itself leaves behind is still caught.
+func gitTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "hdf-git-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			err := os.RemoveAll(dir)
+			if err == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Errorf("remove git temp dir %s: %v", dir, err)
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+	return dir
+}
+
 // setupCluster creates n nodes all sharing one bare repo.
 // Node 0 uses local init (creates the bare repo); nodes 1+ clone from it.
 // Each node gets a unique branch name "node-N" via HDF_BRANCH.
 // Returns the nodes and the file:// URL of the shared bare repo.
 func setupCluster(t *testing.T, n int) ([]Node, string) {
 	t.Helper()
-	bareDir := t.TempDir()
+	bareDir := gitTempDir(t)
 	bareURL := "file://" + bareDir
 
 	nodes := make([]Node, n)
