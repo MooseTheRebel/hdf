@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.4](https://github.com/MooseTheRebel/hdf/compare/v0.3.3...v0.3.4) (2026-10-22)
+
+
+### Bug Fixes
+
+* avoid cleanup race with background git repack ([#95](https://github.com/MooseTheRebel/hdf/issues/95)) ([28bd9eb](https://github.com/MooseTheRebel/hdf/commit/28bd9eb5b0d001d4681f186651c66e64fb26ac16))
+
+
+### Build System
+
+* **deps-dev:** Bump @vitejs/plugin-vue in /cmd/hdf-gui-vuejs/frontend ([#90](https://github.com/MooseTheRebel/hdf/issues/90)) ([8c04c74](https://github.com/MooseTheRebel/hdf/commit/8c04c74730949b38c16a02dafbc8ef3f476467d0))
+* **deps-dev:** Bump happy-dom in /cmd/hdf-gui-vuejs/frontend ([#89](https://github.com/MooseTheRebel/hdf/issues/89)) ([5a3f2b6](https://github.com/MooseTheRebel/hdf/commit/5a3f2b6775e5987fad3b02765885aa279db47569))
+* **deps-dev:** Bump vite in /cmd/hdf-gui-vanilla/frontend ([#85](https://github.com/MooseTheRebel/hdf/issues/85)) ([3ab13b8](https://github.com/MooseTheRebel/hdf/commit/3ab13b8b6ec7b4c67714f4f8d11e777ae24458fe))
+* **deps-dev:** Bump vite in /cmd/hdf-gui-vanilla/frontend ([#91](https://github.com/MooseTheRebel/hdf/issues/91)) ([7eb3e29](https://github.com/MooseTheRebel/hdf/commit/7eb3e293353328b25f5dc2d0caf533138b6bc567))
+* **deps-dev:** Bump vite in /cmd/hdf-gui-vuejs/frontend ([#92](https://github.com/MooseTheRebel/hdf/issues/92)) ([edf7b69](https://github.com/MooseTheRebel/hdf/commit/edf7b69037b3fd60f58d0d4487ced20bdccb0582))
+* **deps-dev:** Bump vue-tsc in /cmd/hdf-gui-vuejs/frontend ([#93](https://github.com/MooseTheRebel/hdf/issues/93)) ([d780abc](https://github.com/MooseTheRebel/hdf/commit/d780abc4ee904ed4f118b695cfb5e509a836bb25))
+* **deps:** Bump github.com/go-git/go-git/v5 ([#84](https://github.com/MooseTheRebel/hdf/issues/84)) ([c312507](https://github.com/MooseTheRebel/hdf/commit/c312507f11e488c73058b73b91b30bb42abdadcc))
+* **deps:** Bump the go-dependencies group with 2 updates ([#88](https://github.com/MooseTheRebel/hdf/issues/88)) ([67567bf](https://github.com/MooseTheRebel/hdf/commit/67567bf1be511d2816cd5920aa819b91411127c3))
+
 ## [0.3.3](https://github.com/MooseTheRebel/hdf/compare/v0.3.2...v0.3.3) (2026-10-04)
 
 
