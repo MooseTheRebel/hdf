@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.4](https://github.com/MooseTheRebel/hdf/compare/v0.3.3...v0.3.4) (2026-10-28)
+
+
+### Bug Fixes
+
+* avoid cleanup race with background git repack ([#95](https://github.com/MooseTheRebel/hdf/issues/95)) ([28bd9eb](https://github.com/MooseTheRebel/hdf/commit/28bd9eb5b0d001d4681f186651c66e64fb26ac16))
+
+
+### Build System
+
+* **deps-dev:** Bump @vitejs/plugin-vue in /cmd/hdf-gui-vuejs/frontend ([#90](https://github.com/MooseTheRebel/hdf/issues/90)) ([8c04c74](https://github.com/MooseTheRebel/hdf/commit/8c04c74730949b38c16a02dafbc8ef3f476467d0))
+* **deps-dev:** Bump happy-dom in /cmd/hdf-gui-vuejs/frontend ([#100](https://github.com/MooseTheRebel/hdf/issues/100)) ([158665d](https://github.com/MooseTheRebel/hdf/commit/158665d40bb7a87343b9c0d42b09c46810065596))
+* **deps-dev:** Bump happy-dom in /cmd/hdf-gui-vuejs/frontend ([#89](https://github.com/MooseTheRebel/hdf/issues/89)) ([5a3f2b6](https://github.com/MooseTheRebel/hdf/commit/5a3f2b6775e5987fad3b02765885aa279db47569))
+* **deps-dev:** Bump vite in /cmd/hdf-gui-vanilla/frontend ([#85](https://github.com/MooseTheRebel/hdf/issues/85)) ([3ab13b8](https://github.com/MooseTheRebel/hdf/commit/3ab13b8b6ec7b4c67714f4f8d11e777ae24458fe))
+* **deps-dev:** Bump vite in /cmd/hdf-gui-vanilla/frontend ([#91](https://github.com/MooseTheRebel/hdf/issues/91)) ([7eb3e29](https://github.com/MooseTheRebel/hdf/commit/7eb3e293353328b25f5dc2d0caf533138b6bc567))
+* **deps-dev:** Bump vite in /cmd/hdf-gui-vuejs/frontend ([#92](https://github.com/MooseTheRebel/hdf/issues/92)) ([edf7b69](https://github.com/MooseTheRebel/hdf/commit/edf7b69037b3fd60f58d0d4487ced20bdccb0582))
+* **deps-dev:** Bump vue-tsc in /cmd/hdf-gui-vuejs/frontend ([#93](https://github.com/MooseTheRebel/hdf/issues/93)) ([d780abc](https://github.com/MooseTheRebel/hdf/commit/d780abc4ee904ed4f118b695cfb5e509a836bb25))
+* **deps:** Bump github.com/gen2brain/beeep ([#103](https://github.com/MooseTheRebel/hdf/issues/103)) ([584a5cd](https://github.com/MooseTheRebel/hdf/commit/584a5cd9432b641b60f5ef35b03e73d9c62124c9))
+* **deps:** Bump github.com/go-git/go-git/v5 ([#84](https://github.com/MooseTheRebel/hdf/issues/84)) ([c312507](https://github.com/MooseTheRebel/hdf/commit/c312507f11e488c73058b73b91b30bb42abdadcc))
+* **deps:** Bump github.com/wailsapp/wails/v2 ([#96](https://github.com/MooseTheRebel/hdf/issues/96)) ([9bec1b5](https://github.com/MooseTheRebel/hdf/commit/9bec1b596492a56753872fff2298eecc0c8e5933))
+* **deps:** Bump https://github.com/golangci/golangci-lint ([#104](https://github.com/MooseTheRebel/hdf/issues/104)) ([1b0d3b1](https://github.com/MooseTheRebel/hdf/commit/1b0d3b1b75e04c20bb48136d8dc67d283de647b4))
+* **deps:** Bump the go-dependencies group with 2 updates ([#88](https://github.com/MooseTheRebel/hdf/issues/88)) ([67567bf](https://github.com/MooseTheRebel/hdf/commit/67567bf1be511d2816cd5920aa819b91411127c3))
+* **deps:** Bump the npm-dependencies group across 2 directories with 4 updates ([#105](https://github.com/MooseTheRebel/hdf/issues/105)) ([2a08b6d](https://github.com/MooseTheRebel/hdf/commit/2a08b6d600952860eab454a90c805e59e874282a))
+
 ## [0.3.3](https://github.com/MooseTheRebel/hdf/compare/v0.3.2...v0.3.3) (2026-10-04)
 
 
