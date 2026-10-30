@@ -58,6 +58,34 @@ diff url="":
 test:
     go test ./...
 
+# Run the plain-language multi-machine scenarios in e2e/features (tags="@bug"
+# or tags="~@wip" picks a subset; a subset skips the unwalked-edge check)
+bdd tags="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{tags}}" ]; then export HDF_BDD_TAGS="{{tags}}"; fi
+    go test -tags e2e ./e2e -run TestFeatures -count=1 -v
+
+# Measure code coverage across unit, e2e and BDD tests (hdf processes the
+# e2e tests start included) and write build/coverage/: coverage.html,
+# coverage.out, and state-graph.md (which state transitions were walked)
+cover:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="$PWD/build/coverage"
+    rm -rf "$out"
+    mkdir -p "$out/unit" "$out/e2e" "$out/merged"
+    go test -cover -coverpkg=hdf/... ./... -args -test.gocoverdir="$out/unit"
+    HDF_E2E_COVERDIR="$out/e2e" go test -tags e2e ./e2e -count=1
+    go tool covdata merge -i="$out/unit,$out/e2e" -o "$out/merged"
+    go tool covdata textfmt -i="$out/unit" -o "$out/unit.out"
+    go tool covdata textfmt -i="$out/merged" -o "$out/coverage.out"
+    go tool cover -html="$out/coverage.out" -o "$out/coverage.html"
+    echo "Unit tests only:   $(go tool cover -func="$out/unit.out" | tail -1 | awk '{print $NF}')"
+    echo "Unit + e2e + BDD:  $(go tool cover -func="$out/coverage.out" | tail -1 | awk '{print $NF}')"
+    echo "Report: $out/coverage.html"
+    echo "State graph: $out/state-graph.md"
+
 # Run the config command
 config:
     {{bin}} config

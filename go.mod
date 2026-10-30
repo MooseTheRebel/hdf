@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/cucumber/godog v0.15.1
 	github.com/gen2brain/beeep v0.11.3
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/hashicorp/go-hclog v1.6.3
@@ -24,6 +25,8 @@ require (
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
+	github.com/cucumber/gherkin/go/v26 v26.2.0 // indirect
+	github.com/cucumber/messages/go/v21 v21.0.1 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
@@ -33,10 +36,14 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
+	github.com/gofrs/uuid v4.3.1+incompatible // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
+	github.com/hashicorp/go-memdb v1.3.4 // indirect
+	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect

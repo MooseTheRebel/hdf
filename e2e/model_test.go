@@ -1,0 +1,237 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+)
+
+// Roles in an edge: the machine I acted on, or one of my other machines
+// seeing the effect of that action.
+const (
+	me        = "me"
+	elsewhere = "elsewhere"
+)
+
+// edge is one transition of a managed file's state on one machine, caused by
+// an action I took on some machine.
+type edge struct {
+	From   FileState
+	Action string
+	Role   string
+	To     FileState
+}
+
+func (e edge) String() string {
+	return fmt.Sprintf("%s --%s [%s]--> %s", e.From, e.Action, e.Role, e.To)
+}
+
+func (e edge) selfLoop() bool { return e.From == e.To }
+
+// model is the state graph hdf is designed to follow: every transition a
+// scenario causes must be listed here, and every edge here must be walked by
+// at least one scenario (see TestFeatures). Self-loops ("nothing changed for
+// this file") are always allowed; list one only when staying put is the
+// point of the action (e.g. skipping an incoming change), so that it must be
+// walked.
+//
+// Actions taken while the acting machine is offline get an " (offline)"
+// suffix.
+var model = []edge{
+	// Adding a file and getting it to main.
+	{Untracked, "push", me, Enrolled},
+	{Untracked, "push", elsewhere, RegistryOnly},
+	{Enrolled, "promote", me, Synced},
+	{RegistryOnly, "promote", elsewhere, Promoted},
+	// A file enrolled on another machine that I enroll here too.
+	{RegistryOnly, "push", me, Enrolled},
+	// When main has moved on since this machine last pulled, push can't
+	// register the file on main; the entry rides along on the next promote,
+	// so until then the file is still Untracked as far as the remote knows.
+	{Untracked, "promote", me, Synced},
+	{Untracked, "promote", elsewhere, Promoted},
+	// Merging a machine's branch into main on GitHub instead of promoting.
+	{Enrolled, "pr-merge", me, Synced},
+	{RegistryOnly, "pr-merge", elsewhere, Promoted},
+
+	// Reviewing what other machines promoted.
+	{Promoted, "pull-accept", me, Synced},
+	{Promoted, "pull-skip", me, Promoted},
+	{Diverged, "pull-accept", me, Synced},
+	{Diverged, "pull-skip", me, Diverged},
+
+	// Changing a file that's already everywhere.
+	{Synced, "push", me, Diverged},
+	{Diverged, "promote", me, Synced},
+	{Synced, "promote", elsewhere, Diverged},
+	// I started the same file on two machines; the other one promoted first.
+	{Enrolled, "promote", elsewhere, Diverged},
+
+	// Reinstalling a machine: reusing its branch keeps what I'd pushed from
+	// it; a fresh branch leaves that work behind on the old branch.
+	{Enrolled, "reinstall-reuse", me, Enrolled},
+	{Enrolled, "reinstall-rename", me, RegistryOnly},
+
+	// Pulling while offline changes nothing.
+	{Promoted, "pull-accept (offline)", me, Promoted},
+}
+
+// recorder collects the edges scenarios walk. Scenarios run concurrently, so
+// it's shared and locked.
+type recorder struct {
+	mu       sync.Mutex
+	hits     map[edge]map[string]int    // edge → scenario → count
+	journeys map[string][][]journeyStep // scenario → one journey per run (outlines run several)
+}
+
+func newRecorder() *recorder {
+	return &recorder{hits: map[edge]map[string]int{}, journeys: map[string][][]journeyStep{}}
+}
+
+func (r *recorder) observe(e edge, scenario string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hits[e] == nil {
+		r.hits[e] = map[string]int{}
+	}
+	r.hits[e][scenario]++
+}
+
+func (r *recorder) journey(scenario string, steps []journeyStep) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.journeys[scenario] = append(r.journeys[scenario], steps)
+}
+
+func inModel(e edge) bool {
+	for _, m := range model {
+		if m == e {
+			return true
+		}
+	}
+	return false
+}
+
+// unexpected is every walked transition the model doesn't allow: hdf did
+// something nobody designed.
+func (r *recorder) unexpected() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for e, by := range r.hits {
+		if e.selfLoop() || inModel(e) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s (in: %s)", e, strings.Join(sortedKeys(by), "; ")))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unwalked is every model edge no scenario walked.
+func (r *recorder) unwalked() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, e := range model {
+		if len(r.hits[e]) == 0 {
+			out = append(out, e.String())
+		}
+	}
+	return out
+}
+
+func sortedKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// report writes the state-graph coverage report: each model edge with how
+// often and where it was walked, unexpected edges, a Mermaid diagram, and the
+// cross-machine action pairs scenarios exercised.
+func (r *recorder) report(path string) error {
+	unwalked := map[string]bool{}
+	for _, e := range r.unwalked() {
+		unwalked[e] = true
+	}
+	unexpected := r.unexpected()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var b strings.Builder
+	b.WriteString("# hdf state-graph coverage\n\n")
+	b.WriteString("Generated by `go test -tags e2e ./e2e -run TestFeatures`. The model is `e2e/model_test.go`.\n\n")
+	fmt.Fprintf(&b, "%d of %d model edges walked.\n\n", len(model)-len(unwalked), len(model))
+
+	b.WriteString("## Edges\n\n| From | Action | Role | To | Hits | Scenarios |\n|---|---|---|---|---|---|\n")
+	for _, e := range model {
+		by := r.hits[e]
+		total := 0
+		for _, n := range by {
+			total += n
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %s |\n", e.From, e.Action, e.Role, e.To, total, strings.Join(sortedKeys(by), "<br>"))
+	}
+	if len(unexpected) > 0 {
+		b.WriteString("\n## Unexpected transitions (not in the model)\n\n")
+		for _, u := range unexpected {
+			fmt.Fprintf(&b, "- %s\n", u)
+		}
+	}
+
+	b.WriteString("\n## Diagram\n\nDashed edges were not walked by any scenario.\n\n```mermaid\nflowchart LR\n")
+	for _, e := range model {
+		arrow := "-->"
+		if unwalked[e.String()] {
+			arrow = "-.->"
+		}
+		fmt.Fprintf(&b, "  %s %s|\"%s [%s]\"| %s\n", e.From, arrow, e.Action, e.Role, e.To)
+	}
+	b.WriteString("```\n")
+
+	// Cross-machine interleavings: an action on one machine followed by an
+	// action on a different machine.
+	pairs := map[string]map[string]int{}
+	for sc, runs := range r.journeys {
+		for _, steps := range runs {
+			for i := 1; i < len(steps); i++ {
+				a, c := steps[i-1], steps[i]
+				if a.machine == c.machine {
+					continue
+				}
+				k := fmt.Sprintf("%s on %s → %s on %s", a.action, a.machine, c.action, c.machine)
+				if pairs[k] == nil {
+					pairs[k] = map[string]int{}
+				}
+				pairs[k][sc]++
+			}
+		}
+	}
+	b.WriteString("\n## Cross-machine action pairs\n\n| Then | Scenarios |\n|---|---|\n")
+	for _, k := range sortedPairKeys(pairs) {
+		fmt.Fprintf(&b, "| %s | %s |\n", k, strings.Join(sortedKeys(pairs[k]), "<br>"))
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func sortedPairKeys(m map[string]map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
