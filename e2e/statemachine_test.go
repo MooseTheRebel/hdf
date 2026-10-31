@@ -347,31 +347,58 @@ func fileStateOf(node Node, tildeFile string) (FileState, error) {
 // remote) and from node's origin/main tracking ref otherwise. Reading the bare
 // repo lets an observer's state be checked without fetching on its behalf.
 func fileStateAgainst(node Node, tildeFile string, remote *repo.Repo) (FileState, error) {
+	mv, err := loadMachineView(node)
+	if err != nil {
+		return 0, err
+	}
+	readMain := func(rel string) ([]byte, error) {
+		return mv.local.ReadFileFromRemoteBranch("origin", "main", rel)
+	}
+	if remote != nil {
+		readMain = func(rel string) ([]byte, error) { return remote.ReadFileFromBranch("main", rel) }
+	}
+	return mv.stateOf(newMainView(readMain), tildeFile)
+}
+
+// mainView is main's registry, read once, and a way to read main's files.
+type mainView struct {
+	reg  *config.Registry // nil when main has none
+	read func(rel string) ([]byte, error)
+}
+
+func newMainView(read func(rel string) ([]byte, error)) mainView {
+	regBytes, _ := read(".hdf/managed.toml")
+	reg, _ := config.RegistryFromBytes(regBytes)
+	return mainView{reg: reg, read: read}
+}
+
+// machineView is what deriving states needs from one machine, loaded once.
+type machineView struct {
+	home  string
+	cfg   *config.Config
+	local *repo.Repo
+}
+
+func loadMachineView(node Node) (machineView, error) {
 	cfg, err := loadNodeConfig(node)
 	if err != nil {
-		return 0, fmt.Errorf("load config: %w", err)
+		return machineView{}, fmt.Errorf("load config: %w", err)
 	}
-
 	r, err := repo.Open(cfg.LocalDotfilesDir)
 	if err != nil {
-		return 0, fmt.Errorf("open repo: %w", err)
+		return machineView{}, fmt.Errorf("open repo: %w", err)
 	}
+	return machineView{home: node.home, cfg: cfg, local: r}, nil
+}
 
-	readMain := func(rel string) ([]byte, error) {
-		if remote != nil {
-			return remote.ReadFileFromBranch("main", rel)
-		}
-		return r.ReadFileFromRemoteBranch("origin", "main", rel)
-	}
-
-	// Check registry on origin/main.
-	regBytes, _ := readMain(".hdf/managed.toml")
-	reg, _ := config.RegistryFromBytes(regBytes)
+// stateOf derives tildeFile's state on mv's machine against main.
+func (mv machineView) stateOf(main mainView, tildeFile string) (FileState, error) {
+	cfg := mv.cfg
 	var registeredFile *config.ManagedFile
-	if reg != nil {
-		for i, f := range reg.Files {
+	if main.reg != nil {
+		for i, f := range main.reg.Files {
 			if f.Path == tildeFile {
-				registeredFile = &reg.Files[i]
+				registeredFile = &main.reg.Files[i]
 				break
 			}
 		}
@@ -382,15 +409,16 @@ func fileStateAgainst(node Node, tildeFile string, remote *repo.Repo) (FileState
 
 	// Derive the repo-relative path, using variant-aware resolution so that
 	// variant files are checked at their branch-specific path, not the canonical one.
-	expanded := config.ExpandPathIn(tildeFile, node.home)
+	expanded := config.ExpandPathIn(tildeFile, mv.home)
 	var repoPath string
+	var err error
 	if len(registeredFile.Variants) > 0 {
 		repoPath = variantRepoPathFor(*registeredFile, cfg.Branch, cfg.LocalDotfilesDir)
 		if repoPath == "" {
 			return Untracked, nil
 		}
 	} else {
-		repoPath, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, node.home)
+		repoPath, err = link.RepoPathForHome(expanded, cfg.LocalDotfilesDir, mv.home)
 		if err != nil {
 			return 0, fmt.Errorf("RepoPathForHome: %w", err)
 		}
@@ -401,8 +429,8 @@ func fileStateAgainst(node Node, tildeFile string, remote *repo.Repo) (FileState
 	}
 	relSlash := filepath.ToSlash(rel)
 
-	mainBytes, _ := readMain(relSlash)
-	branchBytes, _ := r.ReadFileFromBranch(cfg.Branch, relSlash)
+	mainBytes, _ := main.read(relSlash)
+	branchBytes, _ := mv.local.ReadFileFromBranch(cfg.Branch, relSlash)
 
 	// Use nil checks (not len) so that legitimately empty files are not treated
 	// as absent — mirrors the fix applied to hasUnreviewedPromotions.

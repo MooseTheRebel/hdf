@@ -6,8 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/cucumber/godog"
@@ -108,7 +111,7 @@ func interactive(w *world, m *machine, gui, noTTY string, respond responder) (re
 			return nil, fmt.Errorf("%s is a headless server: there's no GUI there", m.name)
 		}
 		if !w.tags["@gui-pending"] {
-			return nil, fmt.Errorf("GUI steps aren't driven through the GUI yet; tag the scenario @gui-pending to run them over the CLI (tags: %v)", w.sortedTags())
+			return nil, fmt.Errorf("GUI steps aren't driven through the GUI yet; tag the scenario @gui-pending to run them over the CLI (tags: %v)", slices.Sorted(maps.Keys(w.tags)))
 		}
 	}
 	if noTTY != "" {
@@ -131,10 +134,25 @@ func expect(m *machine, trying string) error {
 
 func nothing(string) (string, bool) { return "", false }
 
+// iEdit changes or creates a file on a machine. It refuses to create a file
+// hdf already tracks but hasn't put on this machine yet: that leaves a stray
+// copy where the next pull wants to link the file, which is never what an
+// edit step means (use "has a file" to set up such a clash on purpose).
 func iEdit(ctx context.Context, file, name, content string) error {
 	w := worldFrom(ctx)
 	w.track(file)
-	return w.act(name, "edit", nil, func(m *machine) error { return writeDotfile(m, file, content) })
+	return w.act(name, "edit", nil, func(m *machine) error {
+		if _, err := os.Lstat(config.ExpandPathIn(file, m.node.home)); errors.Is(err, os.ErrNotExist) {
+			state, err := w.stateOf(m, file)
+			if err != nil {
+				return err
+			}
+			if state != Untracked {
+				return fmt.Errorf("%s is %s on %s but not there yet; pull it before editing it", file, state, name)
+			}
+		}
+		return writeDotfile(m, file, content)
+	})
 }
 
 func iPush(ctx context.Context, trying, file, name, gui, noTTY string) error {
@@ -334,19 +352,29 @@ func fileContains(ctx context.Context, file, name, content string) error {
 	return nil
 }
 
+// remoteFile is file's content on the remote's main, or nil when main lacks
+// it. It reads the canonical path (file's path under $HOME), which is the same
+// on every machine, so it needs no machine's config. A file with per-machine
+// variants has no single content on main, so it's an error to ask.
 func remoteFile(w *world, file string) ([]byte, error) {
-	if len(w.order) == 0 {
-		return nil, errors.New("no machines")
-	}
-	rel, err := repoRelPath(w.machines[w.order[0]], file)
-	if err != nil {
-		return nil, err
-	}
 	r, err := w.remote()
 	if err != nil {
 		return nil, err
 	}
-	return r.ReadFileFromBranch("main", rel)
+	regBytes, _ := r.ReadFileFromBranch("main", ".hdf/managed.toml")
+	if reg, _ := config.RegistryFromBytes(regBytes); reg != nil {
+		for _, f := range reg.Files {
+			if f.Path == file && len(f.Variants) > 0 {
+				return nil, fmt.Errorf("%s has per-machine variants on the remote main; check it on a machine instead", file)
+			}
+		}
+	}
+	const home = "/home"
+	rel, err := filepath.Rel(home, config.ExpandPathIn(file, home))
+	if err != nil {
+		return nil, err
+	}
+	return r.ReadFileFromBranch("main", filepath.ToSlash(rel))
 }
 
 func remoteHas(ctx context.Context, file, content string) error {
@@ -428,9 +456,31 @@ func branchOnRemote(ctx context.Context, name, relation string) error {
 			return fmt.Errorf("the remote's %s is %q, local is %q", cfg.Branch, remoteSHA, localSHA)
 		}
 	case "is behind":
-		if !missing && remoteSHA == localSHA {
-			return fmt.Errorf("the remote's %s is up to date with %s", cfg.Branch, name)
+		if err := remoteIsBehind(cfg.LocalDotfilesDir, localSHA, remoteSHA); err != nil {
+			return fmt.Errorf("the remote's %s on %s: %w", cfg.Branch, name, err)
 		}
+	}
+	return nil
+}
+
+// remoteIsBehind reports whether remoteSHA ("" when the remote lacks the
+// branch) is behind localSHA in the repo at localDir.
+func remoteIsBehind(localDir, localSHA, remoteSHA string) error {
+	switch {
+	case remoteSHA == "":
+		return errors.New("is missing")
+	case remoteSHA == localSHA:
+		return errors.New("is up to date")
+	}
+	// Exit 1 means not an ancestor; 128 means the commit isn't in the local
+	// repo at all, i.e. the remote has commits local never had. Both mean the
+	// remote is ahead or has diverged.
+	if err := exec.Command("git", "-C", localDir, "merge-base", "--is-ancestor", remoteSHA, localSHA).Run(); err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			return err
+		}
+		return fmt.Errorf("is %s, not an ancestor of local %s", remoteSHA, localSHA)
 	}
 	return nil
 }

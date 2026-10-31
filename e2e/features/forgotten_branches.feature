@@ -12,7 +12,9 @@ Feature: Machines and branches I forget about
 
   @known-gap
   Scenario: I retire a machine before promoting what I pushed from it
-    # docs/state-machine.md: no command leaves RegistryOnly yet.
+    # docs/state-machine.md: once the enrolling machine's branch is abandoned,
+    # nothing clears a RegistryOnly entry. This pins down today's behavior; an
+    # unenroll command would change it.
     Given "desktop" has a file "~/.inputrc" containing "set editing-mode vi"
     When I push "~/.inputrc" from "desktop"
     And I retire "desktop"
@@ -64,7 +66,6 @@ Feature: Machines and branches I forget about
     And I edit "~/.bashrc" on "laptop" to contain "v2"
     And I push "~/.bashrc" from "laptop"
     And I promote from "laptop"
-    And I edit "~/.bashrc" on "desktop" to contain "v3"
     And I review incoming changes on "desktop" and accept everything
     And I edit "~/.bashrc" on "desktop" to contain "v3"
     And I push "~/.bashrc" from "desktop"

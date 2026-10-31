@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cucumber/godog"
@@ -22,22 +23,17 @@ const defaultTags = "~@wip && ~@bug"
 //
 // Environment:
 //
-//	HDF_BDD_TAGS    tag expression to run a subset (disables the unwalked-edge check)
+//	HDF_BDD_TAGS    tag expression to run a subset (disables the unwalked-edge
+//	                check); defaultTags' exclusions still apply unless named
 //	HDF_BDD_FORMAT  godog formatter (default "pretty")
-//	HDF_BDD_REPORT  where to write the state-graph report
-//	                (default ../build/coverage/state-graph.md)
+//	HDF_BDD_REPORT  where to write the state-graph report (default
+//	                ../build/coverage/state-graph.md; a subset writes none
+//	                unless this is set)
 func TestFeatures(t *testing.T) {
-	tags, subset := os.LookupEnv("HDF_BDD_TAGS")
-	if !subset {
-		tags = defaultTags
-	}
+	tags, subset, reportPath := bddOptions(os.LookupEnv)
 	format := os.Getenv("HDF_BDD_FORMAT")
 	if format == "" {
 		format = "pretty"
-	}
-	reportPath := os.Getenv("HDF_BDD_REPORT")
-	if reportPath == "" {
-		reportPath = filepath.Join("..", "build", "coverage", "state-graph.md")
 	}
 
 	rec := newRecorder()
@@ -78,10 +74,12 @@ func TestFeatures(t *testing.T) {
 		t.Error("some scenarios failed")
 	}
 
-	if err := rec.report(reportPath); err != nil {
-		t.Errorf("writing state-graph report: %v", err)
-	} else {
-		t.Logf("state-graph report: %s", reportPath)
+	if reportPath != "" {
+		if err := rec.report(reportPath); err != nil {
+			t.Errorf("writing state-graph report: %v", err)
+		} else {
+			t.Logf("state-graph report: %s", reportPath)
+		}
 	}
 	for _, u := range rec.unexpected() {
 		t.Errorf("transition not in the model (e2e/model_test.go): %s", u)
@@ -92,4 +90,35 @@ func TestFeatures(t *testing.T) {
 	for _, e := range rec.unwalked() {
 		t.Errorf("model edge no scenario walks: %s", e)
 	}
+}
+
+// bddOptions reads TestFeatures' settings from the environment via lookup:
+// the tag expression to run, whether that's a subset, and where to write the
+// state-graph report ("" for none).
+//
+// A subset keeps each of defaultTags' exclusions unless it names that tag
+// itself, so "~@wip" still skips @bug while "@bug" runs it. A subset writes a
+// report only to an explicit HDF_BDD_REPORT, never over the full run's.
+func bddOptions(lookup func(string) (string, bool)) (tags string, subset bool, report string) {
+	report, _ = lookup("HDF_BDD_REPORT")
+	tags, _ = lookup("HDF_BDD_TAGS")
+	if tags == "" {
+		if report == "" {
+			report = filepath.Join("..", "build", "coverage", "state-graph.md")
+		}
+		return defaultTags, false, report
+	}
+	named := map[string]bool{}
+	for _, and := range strings.Split(tags, "&&") {
+		for _, tag := range strings.Split(and, ",") {
+			named[strings.TrimPrefix(strings.TrimSpace(tag), "~")] = true
+		}
+	}
+	for _, exclude := range strings.Split(defaultTags, "&&") {
+		exclude = strings.TrimSpace(exclude)
+		if !named[strings.TrimPrefix(exclude, "~")] {
+			tags += " && " + exclude
+		}
+	}
+	return tags, true, report
 }

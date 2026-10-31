@@ -4,8 +4,10 @@ package e2e
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -127,7 +129,7 @@ func (r *recorder) unexpected() []string {
 		if e.selfLoop() || inModel(e) {
 			continue
 		}
-		out = append(out, fmt.Sprintf("%s (in: %s)", e, strings.Join(sortedKeys(by), "; ")))
+		out = append(out, fmt.Sprintf("%s (in: %s)", e, strings.Join(slices.Sorted(maps.Keys(by)), "; ")))
 	}
 	sort.Strings(out)
 	return out
@@ -143,15 +145,6 @@ func (r *recorder) unwalked() []string {
 			out = append(out, e.String())
 		}
 	}
-	return out
-}
-
-func sortedKeys(m map[string]int) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
 	return out
 }
 
@@ -179,7 +172,7 @@ func (r *recorder) report(path string) error {
 		for _, n := range by {
 			total += n
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %s |\n", e.From, e.Action, e.Role, e.To, total, strings.Join(sortedKeys(by), "<br>"))
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %s |\n", e.From, e.Action, e.Role, e.To, total, strings.Join(slices.Sorted(maps.Keys(by)), "<br>"))
 	}
 	if len(unexpected) > 0 {
 		b.WriteString("\n## Unexpected transitions (not in the model)\n\n")
@@ -217,21 +210,12 @@ func (r *recorder) report(path string) error {
 		}
 	}
 	b.WriteString("\n## Cross-machine action pairs\n\n| Then | Scenarios |\n|---|---|\n")
-	for _, k := range sortedPairKeys(pairs) {
-		fmt.Fprintf(&b, "| %s | %s |\n", k, strings.Join(sortedKeys(pairs[k]), "<br>"))
+	for _, k := range slices.Sorted(maps.Keys(pairs)) {
+		fmt.Fprintf(&b, "| %s | %s |\n", k, strings.Join(slices.Sorted(maps.Keys(pairs[k])), "<br>"))
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
-}
-
-func sortedPairKeys(m map[string]map[string]int) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

@@ -73,11 +73,8 @@ func runActor(node Node, extraEnv []string, respond responder, args ...string) (
 		run actorRun
 		wg  sync.WaitGroup
 	)
-	// answer is called with a stream's unfinished last line whenever it grows.
+	// answer is called with each prompt watchPrompts finds.
 	answer := func(line string) bool {
-		if !promptRe.MatchString(line) {
-			return false
-		}
 		mu.Lock()
 		defer mu.Unlock()
 		prompt := strings.TrimSpace(line)
@@ -96,28 +93,11 @@ func runActor(node Node, extraEnv []string, respond responder, args ...string) (
 	}
 	watch := func(r io.Reader, into *strings.Builder) {
 		defer wg.Done()
-		buf := make([]byte, 64*1024)
-		var line strings.Builder
-		for {
-			n, err := r.Read(buf)
-			if n > 0 {
-				chunk := string(buf[:n])
-				mu.Lock()
-				into.WriteString(chunk)
-				mu.Unlock()
-				if i := strings.LastIndexByte(chunk, '\n'); i >= 0 {
-					line.Reset()
-					chunk = chunk[i+1:]
-				}
-				line.WriteString(chunk)
-				if line.Len() > 0 && answer(line.String()) {
-					line.Reset()
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
+		watchPrompts(r, func(chunk string) {
+			mu.Lock()
+			into.WriteString(chunk)
+			mu.Unlock()
+		}, answer)
 	}
 	var stdoutBuf, stderrBuf strings.Builder
 	wg.Add(2)
@@ -144,6 +124,61 @@ func runActor(node Node, extraEnv []string, respond responder, args ...string) (
 		return run, fmt.Errorf("hdf %s asked something I wasn't expecting: %q\n%s", strings.Join(args, " "), run.unexpected, run.output())
 	}
 	return run, nil
+}
+
+// promptQuiet is how long a stream must stay silent after a line ending in
+// promptRe before that line counts as a prompt.
+const promptQuiet = 100 * time.Millisecond
+
+// watchPrompts copies r to out chunk by chunk and calls answer with the
+// stream's unfinished last line once it looks like a prompt: it ends in
+// promptRe and nothing more arrives for promptQuiet, since hdf writes each
+// prompt whole and then waits on stdin. A line that merely broke after a
+// colon ("Warning: ...") keeps coming and is never answered. answer returns
+// true when it took the line as a prompt. watchPrompts returns once r ends
+// and any answer in progress has finished.
+func watchPrompts(r io.Reader, out func(chunk string), answer func(line string) bool) {
+	var (
+		mu   sync.Mutex
+		line strings.Builder
+		gen  int // bumped on every read, so a stale quiet-timer knows it's stale
+		done bool
+	)
+	buf := make([]byte, 64*1024)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			chunk := string(buf[:n])
+			out(chunk)
+			mu.Lock()
+			if i := strings.LastIndexByte(chunk, '\n'); i >= 0 {
+				line.Reset()
+				chunk = chunk[i+1:]
+			}
+			line.WriteString(chunk)
+			gen++
+			if promptRe.MatchString(line.String()) {
+				g := gen
+				time.AfterFunc(promptQuiet, func() {
+					mu.Lock()
+					defer mu.Unlock()
+					if done || g != gen {
+						return
+					}
+					if answer(line.String()) {
+						line.Reset()
+					}
+				})
+			}
+			mu.Unlock()
+		}
+		if err != nil {
+			mu.Lock()
+			done = true
+			mu.Unlock()
+			return
+		}
+	}
 }
 
 // nodeEnv is the environment hdf runs with on node: the test's own, with HOME

@@ -17,9 +17,11 @@ linking) the symlink on disk.
 | RegistryOnly | yes            | none                | none                   |
 
 `Promoted` is an observer state: another machine promoted a file this machine
-has never pulled. `RegistryOnly` is reachable (a file enrolled elsewhere,
-promoted nowhere) but no command currently produces outgoing transitions from
-it; an `unenroll` command would need to add them.
+has never pulled. `RegistryOnly` is a file enrolled elsewhere and promoted
+nowhere. It's left by enrolling the file here too, or once the enrolling
+machine's branch reaches main. If that branch is abandoned (the machine is
+retired, or reinstalled on a fresh branch), nothing clears the entry —
+pulling leaves it RegistryOnly. An `unenroll` command would add that edge.
 
 ## Transitions
 
@@ -39,6 +41,7 @@ it; an `unenroll` command would need to add them.
 | RegistryOnly | another machine promotes        | Promoted |
 | Enrolled  | another machine promotes the same file | Diverged |
 | Enrolled  | branch merged into main on GitHub   | Synced   |
+| RegistryOnly | another machine's branch merged into main on GitHub | Promoted |
 | Untracked | `promote`, when `changes-push` couldn't register the file on main | Synced |
 | Enrolled  | reinstall, reusing the old branch   | Enrolled |
 | Enrolled  | reinstall, taking a fresh branch    | RegistryOnly |

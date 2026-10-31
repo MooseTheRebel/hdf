@@ -11,12 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
-	"hdf/config"
-	"hdf/link"
 	"hdf/repo"
 )
 
@@ -70,13 +67,15 @@ type worldKey struct{}
 func worldFrom(ctx context.Context) *world { return ctx.Value(worldKey{}).(*world) }
 
 func newWorld(scenario string, tags []string, rec *recorder) (*world, error) {
-	root, err := os.MkdirTemp("", "hdf-bdd-")
+	// Resolve symlinks (macOS /var → /private/var) so paths hdf prints and
+	// paths we compare against agree. Resolving the parent before creating
+	// root means nothing can fail once root exists, so it can't be left behind.
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
 	if err != nil {
 		return nil, err
 	}
-	// Resolve symlinks (macOS /var → /private/var) so paths hdf prints and
-	// paths we compare against agree.
-	if root, err = filepath.EvalSymlinks(root); err != nil {
+	root, err := os.MkdirTemp(tmp, "hdf-bdd-")
+	if err != nil {
 		return nil, err
 	}
 	w := &world{
@@ -289,24 +288,17 @@ func (w *world) stateOf(m *machine, file string) (FileState, error) {
 	return fileStateAgainst(m.node, file, remote)
 }
 
-// repoRelPath is where file lives in the dotfiles repo, as m lays it out.
-func repoRelPath(m *machine, file string) (string, error) {
-	cfg, err := loadNodeConfig(m.node)
-	if err != nil {
-		return "", err
-	}
-	p, err := link.RepoPathForHome(config.ExpandPathIn(file, m.node.home), cfg.LocalDotfilesDir, m.node.home)
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(cfg.LocalDotfilesDir, p)
-	return filepath.ToSlash(rel), err
-}
-
 // snapshot is every tracked file's state on every machine still in use.
 type snapshot map[string]map[string]FileState // machine → file → state
 
+// It reads the remote's main and each machine's config and repo once, not
+// once per file.
 func (w *world) snapshot() (snapshot, error) {
+	remote, err := w.remote()
+	if err != nil {
+		return nil, err
+	}
+	main := newMainView(func(rel string) ([]byte, error) { return remote.ReadFileFromBranch("main", rel) })
 	s := snapshot{}
 	for _, name := range w.order {
 		m := w.machines[name]
@@ -314,8 +306,15 @@ func (w *world) snapshot() (snapshot, error) {
 			continue
 		}
 		s[name] = map[string]FileState{}
+		if len(w.files) == 0 {
+			continue
+		}
+		mv, err := loadMachineView(m.node)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", name, err)
+		}
 		for _, f := range w.files {
-			st, err := w.stateOf(m, f)
+			st, err := mv.stateOf(main, f)
 			if err != nil {
 				return nil, fmt.Errorf("state of %s on %s: %w", f, name, err)
 			}
@@ -370,14 +369,4 @@ func (w *world) act(name, action string, actionFor func(file string) string, fn 
 		}
 	}
 	return nil
-}
-
-// sortedTags is for error messages.
-func (w *world) sortedTags() []string {
-	var out []string
-	for t := range w.tags {
-		out = append(out, t)
-	}
-	sort.Strings(out)
-	return out
 }

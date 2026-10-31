@@ -58,8 +58,9 @@ diff url="":
 test:
     go test ./...
 
-# Run the plain-language multi-machine scenarios in e2e/features (tags="@bug"
-# or tags="~@wip" picks a subset; a subset skips the unwalked-edge check)
+# Run the plain-language multi-machine scenarios in e2e/features. `just bdd
+# @bug` picks a subset; @wip and @bug stay skipped unless the tags name them. A subset
+# skips the unwalked-edge check and doesn't overwrite state-graph.md.
 bdd tags="":
     #!/usr/bin/env bash
     set -euo pipefail
