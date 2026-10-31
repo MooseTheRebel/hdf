@@ -17,9 +17,11 @@ linking) the symlink on disk.
 | RegistryOnly | yes            | none                | none                   |
 
 `Promoted` is an observer state: another machine promoted a file this machine
-has never pulled. `RegistryOnly` is reachable (a file enrolled elsewhere,
-promoted nowhere) but no command currently produces outgoing transitions from
-it; an `unenroll` command would need to add them.
+has never pulled. `RegistryOnly` is a file enrolled elsewhere and promoted
+nowhere. It's left by enrolling the file here too, or once the enrolling
+machine's branch reaches main. If that branch is abandoned (the machine is
+retired, or reinstalled on a fresh branch), nothing clears the entry —
+pulling leaves it RegistryOnly. An `unenroll` command would add that edge.
 
 ## Transitions
 
@@ -34,10 +36,23 @@ it; an `unenroll` command would need to add them.
 | Diverged  | `changes-pull` → accept            | Synced   |
 | Untracked | another machine promotes           | Promoted |
 | Synced    | another machine re-promotes        | Diverged |
+| Untracked | another machine enrolls (`changes-push`) | RegistryOnly |
+| RegistryOnly | `changes-push` (enroll here too) | Enrolled |
+| RegistryOnly | another machine promotes        | Promoted |
+| Enrolled  | another machine promotes the same file | Diverged |
+| Enrolled  | branch merged into main on GitHub   | Synced   |
+| RegistryOnly | another machine's branch merged into main on GitHub | Promoted |
+| Untracked | `promote`, when `changes-push` couldn't register the file on main | Synced |
+| Enrolled  | reinstall, reusing the old branch   | Enrolled |
+| Enrolled  | reinstall, taking a fresh branch    | RegistryOnly |
 
-The contract table lives in `e2e_transitions_test.go` (`validTransitions`) and
-every entry is exercised by `TestTransitionContractCoverage` or
-`TestExternalTransitions`.
+The contract is the `model` graph in `e2e/model_test.go`. The plain-language
+scenarios in `e2e/features/` walk it (`go test -tags e2e ./e2e -run
+TestFeatures`, or `just bdd`): every transition a scenario causes must be in
+the model, and every edge in the model must be walked by some scenario, or the
+suite fails. Each run writes `build/coverage/state-graph.md` with the edges'
+hit counts, a diagram marking unwalked edges, and the cross-machine action
+pairs the scenarios exercised.
 
 ## How enrollment and promotion move content
 
