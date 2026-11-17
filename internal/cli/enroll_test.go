@@ -2,6 +2,7 @@ package cli
 
 import (
 	"hdf/config"
+	"hdf/repo"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,6 +171,146 @@ func TestComputeApplyEnroll_AlreadyManagedAndUnchanged(t *testing.T) {
 
 	if !strings.Contains(result.Message, "already managed and unchanged") {
 		t.Errorf("Message = %q, want it to mention already managed and unchanged", result.Message)
+	}
+}
+
+func TestComputeApplyEnroll_RetryPushesUnpushedMain(t *testing.T) {
+	cfgPath, statePath, homeDir := enrollPushingOnlyBranch(t)
+
+	_, pending, err := computeEnrollStart(cfgPath, homeDir, filepath.Join(homeDir, ".testrc"))
+	if err != nil {
+		t.Fatalf("computeEnrollStart: %v", err)
+	}
+
+	if _, err := computeApplyEnroll(cfgPath, homeDir, statePath, *pending); err != nil {
+		t.Fatalf("computeApplyEnroll: %v", err)
+	}
+
+	assertMainPushed(t, mustLoadConfig(t, cfgPath))
+}
+
+func TestComputeApplyEnroll_RetryRecordsLastCommit(t *testing.T) {
+	cfgPath, statePath, homeDir := enrollWithFailedPush(t)
+
+	_, pending, err := computeEnrollStart(cfgPath, homeDir, filepath.Join(homeDir, ".testrc"))
+	if err != nil {
+		t.Fatalf("computeEnrollStart: %v", err)
+	}
+
+	if _, err := computeApplyEnroll(cfgPath, homeDir, statePath, *pending); err != nil {
+		t.Fatalf("computeApplyEnroll: %v", err)
+	}
+
+	assertLastCommitIsBranchHead(t, mustLoadConfig(t, cfgPath), statePath)
+}
+
+// enrollPushingOnlyBranch enrolls ~/.testrc and pushes only the machine
+// branch, leaving main's registry commit local — what a main push that fails
+// after the machine-branch push leaves behind.
+func enrollPushingOnlyBranch(t *testing.T) (cfgPath, statePath, homeDir string) {
+	t.Helper()
+
+	cfgPath, statePath, homeDir = setupEnrollTestConfig(t)
+	cfg := mustLoadConfig(t, cfgPath)
+
+	if err := os.WriteFile(filepath.Join(homeDir, ".testrc"), []byte("export PS1='$ '\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	offline := *cfg
+	offline.GitPushTarget = ""
+
+	if err := runEnroll(tildeTestRC, homeDir, &offline, statePath, strings.NewReader(""), true); err != nil {
+		t.Fatalf("runEnroll (offline): %v", err)
+	}
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.Push(cfg.Branch); err != nil {
+		t.Fatalf("pushing machine branch: %v", err)
+	}
+
+	return cfgPath, statePath, homeDir
+}
+
+// enrollWithFailedPush enrolls ~/.testrc while the push target is
+// unreachable, so the commit is made but never pushed, then makes the push
+// target reachable again.
+func enrollWithFailedPush(t *testing.T) (cfgPath, statePath, homeDir string) {
+	t.Helper()
+
+	cfgPath, statePath, homeDir = setupEnrollTestConfig(t)
+	cfg := mustLoadConfig(t, cfgPath)
+
+	if err := os.WriteFile(filepath.Join(homeDir, ".testrc"), []byte("export PS1='$ '\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bare := strings.TrimPrefix(cfg.GitPushTarget, "file://")
+	if err := os.Rename(bare, bare+".offline"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true); err == nil {
+		t.Fatal("runEnroll with unreachable push target succeeded")
+	}
+
+	if err := os.Rename(bare+".offline", bare); err != nil {
+		t.Fatal(err)
+	}
+
+	return cfgPath, statePath, homeDir
+}
+
+// assertLastCommitIsBranchHead fails unless state.LastCommit is the machine
+// branch's head.
+func assertLastCommitIsBranchHead(t *testing.T, cfg *config.Config, statePath string) {
+	t.Helper()
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := r.BranchSHA(cfg.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s.LastCommit != want {
+		t.Errorf("LastCommit = %q, want machine branch head %q", s.LastCommit, want)
+	}
+}
+
+// assertMainPushed fails unless the push target's main matches local main.
+func assertMainPushed(t *testing.T, cfg *config.Config) {
+	t.Helper()
+
+	local, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := local.BranchSHA("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bare, err := repo.Open(strings.TrimPrefix(cfg.GitPushTarget, "file://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := bare.BranchSHA("main"); got != want {
+		t.Errorf("remote main = %q, want local main %q", got, want)
 	}
 }
 

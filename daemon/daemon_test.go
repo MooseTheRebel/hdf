@@ -1062,6 +1062,69 @@ func TestMergeSyncResultsPreservesConcurrentWrites(t *testing.T) {
 	}
 }
 
+// TestCheckMainProgressNotification covers a CLI push that lands while a sync
+// cycle is running: the cycle loaded state before the push, so it must check
+// the state file before reporting the push as someone else's commit.
+func TestCheckMainProgressNotification(t *testing.T) {
+	bareDir := t.TempDir()
+	if _, _, err := repo.InitOrOpenBare(bareDir); err != nil {
+		t.Fatal(err)
+	}
+
+	seedDir := t.TempDir()
+
+	seed, err := repo.Init(seedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(seedDir, ".gitkeep"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mainSHA, err := seed.CommitFile(".gitkeep", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := seed.AddRemote("origin", "file://"+bareDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := seed.Push("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := repo.Clone("file://"+bareDir, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		onDisk     string
+		wantNotify bool
+	}{
+		{"another machine pushed main", "pre-cycle-sha", true},
+		{"this machine recorded its own push mid-cycle", mainSHA, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statePath := filepath.Join(t.TempDir(), "state.toml")
+			if err := config.SaveState(statePath, &config.State{LastMainCommit: tt.onDisk}); err != nil {
+				t.Fatal(err)
+			}
+
+			n := &fakeNotifier{}
+			checkMainProgress(&config.State{LastMainCommit: "pre-cycle-sha"}, r, n, statePath)
+
+			if got := len(n.msgs) > 0; got != tt.wantNotify {
+				t.Errorf("notified = %v (%q), want %v", got, n.msgs, tt.wantNotify)
+			}
+		})
+	}
+}
+
 // TestMergeSyncResultsWritesOwnFieldsWhenUncontended verifies the normal case:
 // nothing else wrote during the cycle, so the daemon's computed values land.
 func TestMergeSyncResultsWritesOwnFieldsWhenUncontended(t *testing.T) {

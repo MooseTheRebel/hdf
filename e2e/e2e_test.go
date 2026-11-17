@@ -23,7 +23,24 @@ func TestMain(m *testing.M) {
 	bin := filepath.Join(dir, "hdf")
 	// Build the root package by module path so this works from the e2e
 	// subdirectory (and anywhere else inside the module).
-	if out, err := exec.Command("go", "build", "-o", bin, "hdf").CombinedOutput(); err != nil {
+	args := []string{"build", "-o", bin}
+	// With HDF_E2E_COVERDIR set, build a coverage-instrumented binary and have
+	// every hdf process the tests start write its coverage data there (it
+	// inherits GOCOVERDIR from this process). `just cover` merges it with
+	// the unit tests' coverage.
+	if coverDir := os.Getenv("HDF_E2E_COVERDIR"); coverDir != "" {
+		abs, err := filepath.Abs(coverDir)
+		if err == nil {
+			err = os.MkdirAll(abs, 0o755)
+		}
+		if err != nil {
+			os.RemoveAll(dir)
+			panic("HDF_E2E_COVERDIR: " + err.Error())
+		}
+		args = append(args, "-cover", "-coverpkg=hdf/...")
+		os.Setenv("GOCOVERDIR", abs) //nolint:errcheck,gosec // only fails on an invalid key
+	}
+	if out, err := exec.Command("go", append(args, "hdf")...).CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
 		panic("go build failed:\n" + string(out))
 	}

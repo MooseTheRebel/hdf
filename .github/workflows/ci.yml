@@ -14,5 +14,23 @@ jobs:
         with:
           go-version-file: go.mod
       - run: for d in cmd/hdf-gui-*/frontend; do mkdir -p "$d/dist" && touch "$d/dist/.gitkeep"; done
-      - run: go test ./...
-      - run: go test -tags e2e ./...
+      # Same as `just cover`: unit tests, then the e2e/BDD suite with a
+      # coverage-instrumented hdf, merged into one report.
+      - run: mkdir -p build/coverage/unit build/coverage/e2e build/coverage/merged
+      - run: go test -cover -coverpkg=hdf/... ./... -args -test.gocoverdir="$PWD/build/coverage/unit"
+      - run: go test -tags e2e ./e2e
+        env:
+          HDF_E2E_COVERDIR: ${{ github.workspace }}/build/coverage/e2e
+      - name: Coverage summary
+        if: always()
+        run: |
+          go tool covdata merge -i=build/coverage/unit,build/coverage/e2e -o build/coverage/merged
+          go tool covdata textfmt -i=build/coverage/merged -o build/coverage/coverage.out
+          go tool cover -html=build/coverage/coverage.out -o build/coverage/coverage.html
+          echo "Total coverage (unit + e2e + BDD): $(go tool cover -func=build/coverage/coverage.out | tail -1 | awk '{print $NF}')" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -f build/coverage/state-graph.md ]; then cat build/coverage/state-graph.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: build/coverage/

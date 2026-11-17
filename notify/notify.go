@@ -2,10 +2,33 @@ package notify
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"os"
 
 	"github.com/gen2brain/beeep"
 )
+
+// ModeEnv names the environment variable that redirects notifications.
+// When it is set to ModeLog, notifications are written to stderr instead of
+// being shown by the OS — used by the e2e suite, which runs the daemon and
+// must not pop up (or block on) real desktop alerts.
+const (
+	ModeEnv = "HDF_NOTIFY"
+	ModeLog = "log"
+)
+
+// logOnly reports whether notifications should go to stderr rather than the OS.
+func logOnly() bool { return os.Getenv(ModeEnv) == ModeLog }
+
+// stderr is where log-mode notifications are written; a var so tests can capture it.
+var stderr io.Writer = os.Stderr
+
+func writeNotification(kind, title, message string) error {
+	_, err := fmt.Fprintf(stderr, "hdf %s: %s: %s\n", kind, title, message)
+
+	return err
+}
 
 // Notifier is the interface for sending desktop notifications.
 type Notifier interface {
@@ -38,6 +61,10 @@ func (l NotifyLevel) String() string {
 type defaultNotifier struct{}
 
 func (defaultNotifier) Send(title, message string) error {
+	if logOnly() {
+		return writeNotification("notification", title, message)
+	}
+
 	return beeep.Notify(title, message, "")
 }
 
@@ -48,6 +75,10 @@ func (defaultNotifier) Send(title, message string) error {
 type criticalNotifier struct{}
 
 func (criticalNotifier) Send(title, message string) error {
+	if logOnly() {
+		return writeNotification("alert", title, message)
+	}
+
 	return beeep.Alert(title, message, "")
 }
 
