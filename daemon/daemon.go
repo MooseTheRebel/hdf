@@ -200,7 +200,7 @@ func syncWithHome(cfgPath, statePath string, n, cn notify.Notifier, homeDir stri
 	}
 
 	// 1. Check if main has advanced since the last sync cycle.
-	checkMainProgress(state, r, n)
+	checkMainProgress(state, r, n, statePath)
 
 	// 2. Read shared settings from origin/main (updated by Fetch above).
 	ss, err := loadSharedSettings(r)
@@ -270,7 +270,7 @@ func mergeSyncResults(loaded, computed *config.State) func(*config.State) error 
 // updates state.LastMainCommit. It reads origin/main (updated by Fetch) so that
 // remote-only advances are detected; falls back to local main when the remote
 // tracking ref is absent.
-func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
+func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier, statePath string) {
 	mainSHA, err := r.RemoteBranchSHA("origin", "main")
 	if err != nil {
 		mainSHA, err = r.BranchSHA("main")
@@ -280,11 +280,19 @@ func checkMainProgress(state *config.State, r *repo.Repo, n notify.Notifier) {
 		return
 	}
 
-	if state.LastMainCommit != "" && state.LastMainCommit != mainSHA {
+	if state.LastMainCommit != "" && state.LastMainCommit != mainSHA && !recordedOnDisk(statePath, mainSHA) {
 		_ = n.Send("hdf", "New commits on main — run 'hdf changes-pull' to review")
 	}
 
 	state.LastMainCommit = mainSHA
+}
+
+// recordedOnDisk reports whether the state file already records mainSHA as
+// seen — a CLI push recorded after this sync cycle loaded its state.
+func recordedOnDisk(statePath, mainSHA string) bool {
+	s, err := config.LoadState(statePath)
+
+	return err == nil && s.LastMainCommit == mainSHA
 }
 
 // loadSharedSettings reads SharedSettings from origin/main and returns the

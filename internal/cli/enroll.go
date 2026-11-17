@@ -152,10 +152,8 @@ func computeApplyEnroll(cfgPath, homeDir, statePath string, p pendingEnroll) (*E
 	}
 
 	if registryContains(reg, p.tildeFile, hash) {
-		if branchUnpushed(r, cfg.Branch) {
-			if err := pushBranches(r, cfg, statePath); err != nil {
-				return nil, err
-			}
+		if err := finishDeferredPush(r, cfg, statePath); err != nil {
+			return nil, err
 		}
 
 		return &EnrollResult{Message: p.tildeFile + " is already managed and unchanged"}, nil

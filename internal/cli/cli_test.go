@@ -1116,6 +1116,28 @@ func TestRunLinkHermetic(t *testing.T) {
 // Regression: re-enrolling an already-managed, unchanged file must not create
 // an empty commit. go-git's Commit() creates a commit unconditionally, so the
 // fix short-circuits before staging/committing when hash and path already match.
+func TestEnrollRetryPushesUnpushedMain(t *testing.T) {
+	cfgPath, statePath, homeDir := enrollPushingOnlyBranch(t)
+	cfg := mustLoadConfig(t, cfgPath)
+
+	if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+		t.Fatalf("runEnroll (retry): %v", err)
+	}
+
+	assertMainPushed(t, cfg)
+}
+
+func TestEnrollRetryRecordsLastCommit(t *testing.T) {
+	cfgPath, statePath, homeDir := enrollWithFailedPush(t)
+	cfg := mustLoadConfig(t, cfgPath)
+
+	if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+		t.Fatalf("runEnroll (retry): %v", err)
+	}
+
+	assertLastCommitIsBranchHead(t, cfg, statePath)
+}
+
 func TestEnrollIdempotentNoEmptyCommit(t *testing.T) {
 	workDir := t.TempDir()
 	bareDir := t.TempDir()
@@ -4613,6 +4635,38 @@ func TestPromptPendingCrash_UserAcceptsBuildsReportWithDetectedTrigger(t *testin
 
 	if gotOpts.Trigger != report.TriggerPanic || gotOpts.CrashDetail != "panic: boom" {
 		t.Errorf("buildReport called with %+v, want TriggerPanic/panic: boom", gotOpts)
+	}
+}
+
+func TestFirstEnrollAfterLocalInitRecordsOwnMainPush(t *testing.T) {
+	cfgPath, statePath, homeDir := setupEnrollTestConfig(t)
+	cfg := mustLoadConfig(t, cfgPath)
+
+	if err := os.WriteFile(filepath.Join(homeDir, ".testrc"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runEnroll(tildeTestRC, homeDir, cfg, statePath, strings.NewReader(""), true); err != nil {
+		t.Fatalf("runEnroll: %v", err)
+	}
+
+	r, err := repo.Open(cfg.LocalDotfilesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mainSHA, err := r.BranchSHA("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := config.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s.LastMainCommit != mainSHA {
+		t.Errorf("LastMainCommit = %q, want pushed main %q", s.LastMainCommit, mainSHA)
 	}
 }
 

@@ -981,7 +981,7 @@ func pushBranches(r *repo.Repo, cfg *config.Config, statePath string) error {
 		return fmt.Errorf("pushing hostname branch: %w", err)
 	}
 
-	seenMain, _ := r.RemoteBranchSHA("origin", "main")
+	seenMain, seenErr := r.RemoteBranchSHA("origin", "main")
 
 	err = r.Push("main")
 	if err != nil {
@@ -997,7 +997,14 @@ func pushBranches(r *repo.Repo, cfg *config.Config, statePath string) error {
 	}
 
 	if mainSHA, shaErr := r.BranchSHA("main"); shaErr == nil {
-		if stateErr := recordOwnMainPush(statePath, seenMain, mainSHA); stateErr != nil {
+		var stateErr error
+		if seenErr != nil {
+			stateErr = recordMainCommit(statePath, mainSHA)
+		} else {
+			stateErr = recordOwnMainPush(statePath, seenMain, mainSHA)
+		}
+
+		if stateErr != nil {
 			fmt.Printf("Warning: could not update state file: %v\n", stateErr)
 		}
 	}
@@ -1029,6 +1036,33 @@ func branchUnpushed(r *repo.Repo, branch string) bool {
 	remote, err := r.RemoteBranchSHA("origin", branch)
 
 	return err != nil || remote != local
+}
+
+// finishDeferredPush pushes an enrollment whose earlier push failed, and
+// records its commit as the last one, which the failed run couldn't.
+func finishDeferredPush(r *repo.Repo, cfg *config.Config, statePath string) error {
+	if !branchUnpushed(r, cfg.Branch) && !branchUnpushed(r, "main") {
+		return nil
+	}
+
+	if err := pushBranches(r, cfg, statePath); err != nil {
+		return err
+	}
+
+	sha, err := r.BranchSHA(cfg.Branch)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", cfg.Branch, err)
+	}
+
+	if err := config.UpdateState(statePath, func(s *config.State) error {
+		s.LastCommit = sha
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+
+	return nil
 }
 
 // showEnrollDiff prints the diff between committed and disk content and
@@ -1081,11 +1115,7 @@ func applyEnroll(r *repo.Repo, expanded, tildeFile, relName, filePath, homeDir s
 	if registryContains(reg, tildeFile, hash) {
 		fmt.Printf("%s is already managed and unchanged\n", filePath)
 
-		if branchUnpushed(r, cfg.Branch) {
-			return pushBranches(r, cfg, statePath)
-		}
-
-		return nil
+		return finishDeferredPush(r, cfg, statePath)
 	}
 
 	upsertRegistryEntry(reg, tildeFile, hash)
