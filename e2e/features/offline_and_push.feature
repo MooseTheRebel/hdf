@@ -30,10 +30,7 @@ Feature: Working while a machine can't reach the remote
     And "~/.bashrc" is Synced on "web1"
     And "~/.bashrc" is Promoted on "laptop"
 
-  @bug
   Scenario: Pushing again by hand after coming back online
-    # Bug: the retry stops at "already managed and unchanged" (runEnroll)
-    # before pushing, so the branch stays unpushed until the daemon runs.
     Given "laptop" is offline
     And "laptop" has a file "~/.vimrc" containing "set number"
     When I try to push "~/.vimrc" from "laptop"

@@ -3621,7 +3621,7 @@ func TestPushBranchesNotifiesOnSkippedMainPush(t *testing.T) {
 	var pushErr error
 
 	out := captureStdout(func() {
-		pushErr = pushBranches(r, cfg)
+		pushErr = pushBranches(r, cfg, filepath.Join(t.TempDir(), "state.toml"))
 	})
 
 	if pushErr != nil {
@@ -4613,5 +4613,38 @@ func TestPromptPendingCrash_UserAcceptsBuildsReportWithDetectedTrigger(t *testin
 
 	if gotOpts.Trigger != report.TriggerPanic || gotOpts.CrashDetail != "panic: boom" {
 		t.Errorf("buildReport called with %+v, want TriggerPanic/panic: boom", gotOpts)
+	}
+}
+
+func TestRecordOwnMainPush(t *testing.T) {
+	const seen, pushed = "seen-sha", "pushed-sha"
+
+	tests := []struct {
+		name, last, seen, want string
+	}{
+		{"daemon saw main before the push", seen, seen, pushed},
+		{"daemon hasn't seen another machine's commit", "older-sha", seen, "older-sha"},
+		{"first push to a fresh remote", "", "", pushed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statePath := filepath.Join(t.TempDir(), "state.toml")
+			if err := config.SaveState(statePath, &config.State{LastMainCommit: tt.last}); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := recordOwnMainPush(statePath, tt.seen, pushed); err != nil {
+				t.Fatal(err)
+			}
+
+			s, err := config.LoadState(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if s.LastMainCommit != tt.want {
+				t.Errorf("LastMainCommit = %q, want %q", s.LastMainCommit, tt.want)
+			}
+		})
 	}
 }

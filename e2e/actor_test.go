@@ -3,13 +3,13 @@
 package e2e
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +19,10 @@ import (
 // actor never saw (and so never answered) fails the step instead of hanging.
 const actorTimeout = 2 * time.Minute
 
-// promptRe matches the end of a line hdf is waiting on: "[y/N]: ", "[Y/n]: ",
-// "Choice [1]: ", "Remote repository URL: ", "Local repo path [...]: ".
-var promptRe = regexp.MustCompile(`: $`)
+// promptMarker is what hdf writes after each prompt when it's set as
+// HDF_PROMPT_MARKER: it ends the prompt's line, so a line ending in it is
+// exactly a prompt hdf is waiting on.
+const promptMarker = "\x1ehdf-prompt\x1e\n"
 
 // responder decides the reply to one prompt (the text of its line). ok=false
 // means the actor did not expect this prompt; the run then fails.
@@ -47,7 +48,7 @@ func runActor(node Node, extraEnv []string, respond responder, args ...string) (
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, hdfBin, args...)
-	cmd.Env = append(nodeEnv(node), extraEnv...)
+	cmd.Env = append(append(nodeEnv(node), "HDF_PROMPT_MARKER="+promptMarker), extraEnv...)
 
 	var stdin io.WriteCloser
 	if respond != nil {
@@ -74,22 +75,21 @@ func runActor(node Node, extraEnv []string, respond responder, args ...string) (
 		wg  sync.WaitGroup
 	)
 	// answer is called with each prompt watchPrompts finds.
-	answer := func(line string) bool {
+	answer := func(line string) {
 		mu.Lock()
 		defer mu.Unlock()
 		prompt := strings.TrimSpace(line)
 		run.prompts = append(run.prompts, prompt)
 		if respond == nil {
-			return true
+			return
 		}
 		reply, ok := respond(prompt)
 		if !ok {
 			run.unexpected = append(run.unexpected, prompt)
 			_ = stdin.Close() // EOF: hdf aborts instead of waiting forever
-			return true
+			return
 		}
 		_, _ = io.WriteString(stdin, reply+"\n")
-		return true
 	}
 	watch := func(r io.Reader, into *strings.Builder) {
 		defer wg.Done()
@@ -126,56 +126,20 @@ func runActor(node Node, extraEnv []string, respond responder, args ...string) (
 	return run, nil
 }
 
-// promptQuiet is how long a stream must stay silent after a line ending in
-// promptRe before that line counts as a prompt.
-const promptQuiet = 100 * time.Millisecond
-
-// watchPrompts copies r to out chunk by chunk and calls answer with the
-// stream's unfinished last line once it looks like a prompt: it ends in
-// promptRe and nothing more arrives for promptQuiet, since hdf writes each
-// prompt whole and then waits on stdin. A line that merely broke after a
-// colon ("Warning: ...") keeps coming and is never answered. answer returns
-// true when it took the line as a prompt. watchPrompts returns once r ends
-// and any answer in progress has finished.
-func watchPrompts(r io.Reader, out func(chunk string), answer func(line string) bool) {
-	var (
-		mu   sync.Mutex
-		line strings.Builder
-		gen  int // bumped on every read, so a stale quiet-timer knows it's stale
-		done bool
-	)
-	buf := make([]byte, 64*1024)
+// watchPrompts copies r to out line by line, without promptMarker, and calls
+// answer with the last line of each prompt (the text promptMarker ends). It
+// returns once r ends.
+func watchPrompts(r io.Reader, out func(text string), answer func(line string)) {
+	br := bufio.NewReader(r)
 	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			chunk := string(buf[:n])
-			out(chunk)
-			mu.Lock()
-			if i := strings.LastIndexByte(chunk, '\n'); i >= 0 {
-				line.Reset()
-				chunk = chunk[i+1:]
-			}
-			line.WriteString(chunk)
-			gen++
-			if promptRe.MatchString(line.String()) {
-				g := gen
-				time.AfterFunc(promptQuiet, func() {
-					mu.Lock()
-					defer mu.Unlock()
-					if done || g != gen {
-						return
-					}
-					if answer(line.String()) {
-						line.Reset()
-					}
-				})
-			}
-			mu.Unlock()
+		text, err := br.ReadString('\n')
+		if prompt, ok := strings.CutSuffix(text, promptMarker); ok {
+			out(prompt)
+			answer(prompt[strings.LastIndexByte(prompt, '\n')+1:])
+		} else if text != "" {
+			out(text)
 		}
 		if err != nil {
-			mu.Lock()
-			done = true
-			mu.Unlock()
 			return
 		}
 	}

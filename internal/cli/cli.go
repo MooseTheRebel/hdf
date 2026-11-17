@@ -179,7 +179,7 @@ func resolveAndConfirmPath(reader *bufio.Reader, raw string) (string, error) {
 	}
 
 	fmt.Printf("  → Resolved to: %s\n", abs)
-	fmt.Print("  Confirm? [y/N]: ")
+	ask(os.Stdout, "  Confirm? [y/N]: ")
 
 	answer, err := reader.ReadString('\n')
 	if err != nil {
@@ -196,7 +196,7 @@ func resolveAndConfirmPath(reader *bufio.Reader, raw string) (string, error) {
 func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 	home, _ := os.UserHomeDir()
 	defaultPath := filepath.Join(home, ".local", "share", "hdf", "repo")
-	fmt.Printf("Local repo path [%s]: ", defaultPath)
+	ask(os.Stdout, fmt.Sprintf("Local repo path [%s]: ", defaultPath))
 
 	pathStr, err := reader.ReadString('\n')
 	if err != nil {
@@ -213,7 +213,7 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 		return nil, "", "", err
 	}
 
-	fmt.Print("Push target path or remote URL (leave blank to skip): ")
+	ask(os.Stdout, "Push target path or remote URL (leave blank to skip): ")
 
 	pushStr, err := reader.ReadString('\n')
 	if err != nil {
@@ -252,7 +252,7 @@ func setupLocalRepo(reader *bufio.Reader) (*repo.Repo, string, string, error) {
 }
 
 func setupRemoteRepo(reader *bufio.Reader, cloneDir string) (*repo.Repo, string, string, error) {
-	fmt.Print("Remote repository URL: ")
+	ask(os.Stdout, "Remote repository URL: ")
 
 	urlStr, err := reader.ReadString('\n')
 	if err != nil {
@@ -315,7 +315,7 @@ func runInit(stdin io.Reader, cfgPath, statePath, cloneDir string) error {
 	fmt.Println("How do you want to store your dot files?")
 	fmt.Println("  1) Local directory  (create or open a git repo on this machine)")
 	fmt.Println("  2) Remote repository  (clone from GitHub, GitLab, etc.)")
-	fmt.Print("\nChoice [1]: ")
+	ask(os.Stdout, "\nChoice [1]: ")
 
 	choiceStr, err := reader.ReadString('\n')
 	if err != nil {
@@ -436,7 +436,7 @@ func resolveBranchCollision(reader *bufio.Reader, r *repo.Repo, branch string) (
 	fmt.Printf("A branch named %q already exists on the remote.\n", branch)
 	fmt.Println("  1) Reuse it (this machine was previously initialized)")
 	fmt.Println("  2) Create a unique branch name (a different machine uses this name)")
-	fmt.Print("Choice [1]: ")
+	ask(os.Stdout, "Choice [1]: ")
 
 	ans, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -870,7 +870,7 @@ func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader, stateP
 			fmt.Printf("  - %s (will be preserved by promote)\n", p.tildePath)
 		}
 
-		fmt.Print("Continue promoting? [y/N]: ")
+		ask(os.Stdout, "Continue promoting? [y/N]: ")
 
 		ans, err := readPromptAnswer(reader)
 		if err != nil || !isYes(ans) {
@@ -896,7 +896,7 @@ func reviewUnseenIncoming(pending []unseenIncoming, reader *bufio.Reader, stateP
 
 		fmt.Printf("\nmain has a newer version of %s that this machine has never had:\n", p.tildePath)
 		printDiff(daemon.GenerateUnifiedDiff(string(p.branchBytes), string(p.mainBytes)))
-		fmt.Printf("Overwrite main's newer version of %s with yours? [y/N]: ", p.tildePath)
+		ask(os.Stdout, fmt.Sprintf("Overwrite main's newer version of %s with yours? [y/N]: ", p.tildePath))
 
 		ans, err := readPromptAnswer(reader)
 		if err != nil {
@@ -960,12 +960,18 @@ func readPromptAnswer(reader *bufio.Reader) (string, error) {
 	return ans, nil
 }
 
+// ask prints prompt to w, followed by $HDF_PROMPT_MARKER so a program driving
+// hdf (the e2e suite) knows hdf is now waiting for an answer.
+func ask(w io.Writer, prompt string) {
+	_, _ = fmt.Fprint(w, prompt+os.Getenv("HDF_PROMPT_MARKER"))
+}
+
 // pushBranches pushes the hostname branch and main when a remote is configured.
 // A non-fast-forward rejection on main is tolerated: it means another node
 // promoted since our local main was last synced; the machine branch push still
 // lands, and the registry entry reaches main on the next promote. The user is
 // told, since until then other machines cannot see this enrollment.
-func pushBranches(r *repo.Repo, cfg *config.Config) error {
+func pushBranches(r *repo.Repo, cfg *config.Config, statePath string) error {
 	if cfg.GitPushTarget == "" {
 		return nil
 	}
@@ -974,6 +980,8 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("pushing hostname branch: %w", err)
 	}
+
+	seenMain, _ := r.RemoteBranchSHA("origin", "main")
 
 	err = r.Push("main")
 	if err != nil {
@@ -984,9 +992,43 @@ func pushBranches(r *repo.Repo, cfg *config.Config) error {
 		fmt.Println("Note: main has moved on the remote (another machine promoted); " +
 			"this enrollment will be registered on main when you next run 'hdf promote' " +
 			"(run 'hdf changes-pull' first to review the incoming changes).")
+
+		return nil
+	}
+
+	if mainSHA, shaErr := r.BranchSHA("main"); shaErr == nil {
+		if stateErr := recordOwnMainPush(statePath, seenMain, mainSHA); stateErr != nil {
+			fmt.Printf("Warning: could not update state file: %v\n", stateErr)
+		}
 	}
 
 	return nil
+}
+
+// recordOwnMainPush advances state.LastMainCommit from seen (origin/main before
+// the push) to pushed, so the daemon doesn't notify this machine about commits
+// it pushed itself. If the daemon hadn't caught up to seen, it's left alone, so
+// the daemon still reports the other machines' commits.
+func recordOwnMainPush(statePath, seen, pushed string) error {
+	return config.UpdateState(statePath, func(state *config.State) error {
+		if state.LastMainCommit == seen {
+			state.LastMainCommit = pushed
+		}
+
+		return nil
+	})
+}
+
+// branchUnpushed reports whether branch has commits origin hasn't received.
+func branchUnpushed(r *repo.Repo, branch string) bool {
+	local, err := r.BranchSHA(branch)
+	if err != nil {
+		return false
+	}
+
+	remote, err := r.RemoteBranchSHA("origin", branch)
+
+	return err != nil || remote != local
 }
 
 // showEnrollDiff prints the diff between committed and disk content and
@@ -1011,7 +1053,7 @@ func showEnrollDiff(committed, disk []byte, filePath string, reader *bufio.Reade
 		return nil
 	}
 
-	fmt.Print("Enroll these changes? [Y/n]: ")
+	ask(os.Stdout, "Enroll these changes? [Y/n]: ")
 
 	answer, _ := reader.ReadString('\n')
 
@@ -1039,6 +1081,10 @@ func applyEnroll(r *repo.Repo, expanded, tildeFile, relName, filePath, homeDir s
 	if registryContains(reg, tildeFile, hash) {
 		fmt.Printf("%s is already managed and unchanged\n", filePath)
 
+		if branchUnpushed(r, cfg.Branch) {
+			return pushBranches(r, cfg, statePath)
+		}
+
 		return nil
 	}
 
@@ -1057,7 +1103,7 @@ func applyEnroll(r *repo.Repo, expanded, tildeFile, relName, filePath, homeDir s
 		return err
 	}
 
-	if err := pushBranches(r, cfg); err != nil {
+	if err := pushBranches(r, cfg, statePath); err != nil {
 		return err
 	}
 
@@ -1301,7 +1347,7 @@ func fetchAndShowIncoming(r *repo.Repo, cfg *config.Config, reg *config.Registry
 func promptAndMaybeAccept(r *repo.Repo, cfg *config.Config, f config.ManagedFile, relPath string, mainBytes, branchBytes []byte, reader *bufio.Reader) error {
 	fmt.Printf("\n--- %s ---\n", f.Path)
 	printDiff(daemon.GenerateUnifiedDiff(string(branchBytes), string(mainBytes)))
-	fmt.Printf("Accept main's version of %s? [y/N]: ", f.Path)
+	ask(os.Stdout, fmt.Sprintf("Accept main's version of %s? [y/N]: ", f.Path))
 
 	ans, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -1680,7 +1726,7 @@ var reportIssueCmd = &cobra.Command{
 
 		reader := bufio.NewReader(os.Stdin)
 
-		fmt.Print("What was expected? What actually happened? (optional, press Enter to skip)\n> ")
+		ask(os.Stdout, "What was expected? What actually happened? (optional, press Enter to skip)\n> ")
 
 		text, _ := reader.ReadString('\n')
 
@@ -1878,7 +1924,7 @@ func promptPendingWarnings(statePath string, reader *bufio.Reader) error {
 		fmt.Fprintf(os.Stderr, "   * %s\n", w)
 	}
 
-	fmt.Fprint(os.Stderr, "Continue anyway? [y/N]: ")
+	ask(os.Stderr, "Continue anyway? [y/N]: ")
 
 	answer, _ := reader.ReadString('\n')
 	if !isYes(strings.TrimSpace(answer)) {
@@ -1924,7 +1970,7 @@ func promptPendingCrash(statePath string, reader *bufio.Reader) error {
 
 	fmt.Fprintln(os.Stderr, "Warning: an error occurred in hdf.")
 	fmt.Fprintln(os.Stderr, reportIssueWarning)
-	fmt.Fprint(os.Stderr, "Would you like to report an issue? [y/N]: ")
+	ask(os.Stderr, "Would you like to report an issue? [y/N]: ")
 
 	answer, _ := reader.ReadString('\n')
 	if !isYes(strings.TrimSpace(answer)) {

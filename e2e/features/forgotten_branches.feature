@@ -48,11 +48,7 @@ Feature: Machines and branches I forget about
     Then the daemon on "web1" warned me about "uncommitted"
     And "~/.bashrc" is Enrolled on "web1"
 
-  @bug
   Scenario: Nothing to warn about when everything is pushed
-    # Bug: changes-push commits the registry entry to main but, unlike
-    # promote, doesn't record main's new commit (recordMainCommit), so the
-    # daemon's next cycle reports my own push as "New commits on main".
     Given "web1" has a file "~/.bashrc" containing "one"
     When I push "~/.bashrc" from "web1"
     And the daemon on "web1" runs one sync cycle
